@@ -32,10 +32,12 @@ than left stuck at its last known state.
 
 ### Scene handoff
 
-Given a sensor or `input_select` and a naming prefix, activates `scene.<prefix>_<state>` instead of the adaptive
-curve whenever that scene exists — for example `scene.kitchen_night`. A scene only qualifies if every entity it
-touches is within the blueprint's own scope (the controlled lights, plus sibling entities on the same device,
-such as a light strip's effect selector); a scene reaching outside that scope is treated as not existing.
+An optional template returns the entity_id of a scene to activate instead of the adaptive curve — for example,
+`scene.kitchen_night` when a day-phase sensor reads `Night`. The template is written directly by whoever sets up
+the room, so the mapping is explicit rather than guessed from a naming convention. A scene only qualifies if
+every entity it touches is within the blueprint's own scope (the controlled lights, plus sibling entities on the
+same device, such as a light strip's effect selector); a scene reaching outside that scope, or one that doesn't
+exist (a typo, a renamed scene), is treated the same as the template returning nothing.
 
 ### Per-light brightness scaling
 
@@ -46,6 +48,13 @@ An optional template maps `entity_id` to a brightness multiplier:
 | a number | scales that light's brightness, floored at 1 |
 | `0` | turns the light off during the adaptive step |
 | `null` / `false` | skips the light entirely on power-on (for another automation or a fixed scene to own), but still includes it when the room turns off |
+
+### Additional triggers
+
+Both templates above are re-rendered fresh on every run, regardless of what triggered it — so an entity that
+one of them depends on (a TV, for a brightness multiplier that dims the room while it's on; whatever a scene
+template checks) can be added to Additional Triggers to take effect immediately, rather than waiting for the
+next adaptive tick.
 
 ### Two-step transitions
 
@@ -129,7 +138,8 @@ Add an automation using the "Adaptive Lighting (Unified)" blueprint per room, an
 | Light | yes | Entities, a device, or an area to control |
 | Adaptive Lighting Sensor | yes | Sensor providing brightness/colour temperature |
 | Motion Sensor | no | Enables motion-driven on/off |
-| Scene Sensor / Scene Name Prefix | no | Enables scene handoff |
+| Additional Triggers | no | Entities that trigger immediate re-evaluation (see [Additional triggers](#additional-triggers)) |
+| Scene Template | no | Template returning a scene entity_id to hand the room over to |
 | Brightness Multiplier Template | no | Per-light brightness scaling |
 | Wait time | no | Seconds to keep lights on after motion stops (default 120) |
 | Reconcile Interval | no | Self-healing check interval (default every 5 minutes) |

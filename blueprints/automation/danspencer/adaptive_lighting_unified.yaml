@@ -6,20 +6,24 @@ blueprint:
     after motion stops. A Motion Sensor (if set) governs occupancy -
     updates only apply while occupied, and a periodic check retries
     turning lights off if one didn't take. Already-correct lights are
-    skipped to avoid redundant network traffic. Can activate a matching
-    scene instead of the adaptive brightness/colour, and scale
-    individual lights' brightness. Self-contained - running it manually
-    (Run button, or automation.trigger from elsewhere) always turns
-    lights on correctly. Lights labelled `no_combined_transition` get
-    brightness and colour temperature sent as two sequential calls
-    instead of one, for bulbs that can't do both together.
+    skipped to avoid redundant network traffic. A Scene Template can
+    activate a matching scene instead of the adaptive brightness/colour;
+    a Brightness Multiplier Template can scale individual lights'
+    brightness. Both are re-rendered on every run, so add whatever
+    entities they depend on to Additional Triggers for an immediate
+    update instead of waiting for the next adaptive tick. Self-contained
+    - running it manually (Run button, or automation.trigger from
+    elsewhere) always turns lights on correctly. Lights labelled
+    `no_combined_transition` get brightness and colour temperature sent
+    as two sequential calls instead of one, for bulbs that can't do both
+    together.
   domain: automation
   source_url: https://github.com/danspencer
   author: Dan Spencer
   input:
     motion_entity:
       name: Motion Sensor (Optional)
-      description: Motion sensor that triggers the automation. Without one, it only reacts to adaptive/scene sensor changes.
+      description: Motion sensor that triggers the automation. Without one, it only reacts to the Adaptive Lighting Sensor and Additional Triggers.
       default: null
       selector:
         entity:
@@ -42,30 +46,34 @@ blueprint:
         target:
           entity:
             domain: light
-    scene_sensor:
-      name: Scene Sensor (Optional)
+    extra_triggers:
+      name: Additional Triggers (Optional)
       description: >
-        Sensor or input_select whose state names the scene to use (e.g.
-        'Night'). Pairs with Scene Name Prefix below; leave blank to skip
-        scenes.
-      default: sun.sun
+        Extra entities that should cause an immediate re-evaluation - e.g.
+        a TV entity for a Brightness Multiplier Template that dims this
+        room when it's on, or whatever a Scene Template depends on.
+        Everything is re-rendered fresh on every run regardless of what
+        triggered it, so adding an entity here is all that's needed for
+        it to take effect immediately instead of waiting for the next
+        adaptive tick.
+      default: []
       selector:
         entity:
-          domain:
-            - sensor
-            - input_select
-    scene_name_prefix:
-      name: Scene Name Prefix (Optional)
+          multiple: true
+    scene_template:
+      name: Scene Template (Optional)
       description: >
-        Combined with Scene Sensor's state to build
-        scene.<prefix>_<state> (case-insensitive). Only used if that scene
-        exists and covers just entities within this automation's scope
-        (lights being controlled, plus any other entities on the same
-        devices/area — e.g. a lightstrip's gradient-effect selector). Leave
-        blank to skip scenes.
+        Template returning the entity_id of a scene to activate instead
+        of the adaptive brightness/colour (e.g. based on a day-phase
+        sensor's state). Only used if that scene exists and covers just
+        entities within this automation's scope (lights being
+        controlled, plus any other entities on the same devices/area -
+        e.g. a lightstrip's gradient-effect selector); otherwise treated
+        as if no scene were returned. Leave blank, or have the template
+        return nothing, to skip scenes entirely.
       default: ""
       selector:
-        text: {}
+        template: {}
     brightness_multiplier_template:
       name: Brightness Multiplier Template (Optional)
       description: >
@@ -121,7 +129,7 @@ blueprint:
           unit_of_measurement: seconds
     adaptive_transition:
       name: Adaptive Transition
-      description: Transition duration when adaptive lighting or the scene sensor updates.
+      description: Transition duration when adaptive lighting, the scene template, or an Additional Trigger updates.
       default: 30
       selector:
         number:
@@ -138,7 +146,6 @@ max_exceeded: silent
 trigger_variables:
   motion_entity: !input motion_entity
   light_target: !input light_target
-  scene_name_prefix: !input scene_name_prefix
 
 trigger:
   # The live brightness/colour-temperature sensor; fires roughly once a minute
@@ -155,11 +162,11 @@ trigger:
       {% set old_attrs = trigger.from_state.attributes if trigger is defined and trigger.from_state else {} %}
       {% set new_attrs = trigger.to_state.attributes if trigger is defined and trigger.to_state else {} %}
       {{ old_attrs != new_attrs }}
-  # The sensor/input_select that names which scene to use (e.g. day phase)
-  - id: scene_change
+  # Anything named in Additional Triggers changed - e.g. a TV for a
+  # brightness multiplier, or whatever the scene template depends on
+  - id: extra
     platform: state
-    entity_id: !input scene_sensor
-    enabled: "{{ scene_name_prefix | string | length > 0 }}"
+    entity_id: !input extra_triggers
   # Motion sensor just reported occupied
   - id: motion_on
     platform: template
@@ -223,25 +230,28 @@ condition:
   # A human just turned on one of our lights directly - don't fight their choice
   - "{{ trigger.id != 'manual' }}"
   - or:
-      # Any trigger other than adaptive/scene_change/motion_on always
-      # passes here; motion_off/reconcile have their own gating logic
-      # in action: below, and manual is fully handled above
+      # Any trigger other than adaptive/extra/motion_on always passes
+      # here; motion_off/reconcile have their own gating logic in
+      # action: below, and manual is fully handled above
       - condition: not
         conditions:
           - condition: trigger
             id:
               - adaptive
-              - scene_change
+              - extra
               - motion_on
-      # adaptive/scene_change: only reapply while the room is occupied,
-      # and (for the per-minute adaptive tick specifically) only when no
-      # scene has taken over responsibility for these lights
+      # adaptive/extra: only reapply while the room is occupied, and
+      # (for the per-minute adaptive tick specifically) only when no
+      # scene has taken over responsibility for these lights - extra
+      # stays exempt from that suppression so a change in whatever it's
+      # watching (e.g. the scene template's own dependency, or one
+      # scene handing off to another) still gets applied
       - condition: and
         conditions:
           - condition: trigger
             id:
               - adaptive
-              - scene_change
+              - extra
           - condition: template
             value_template: "{{ occupied }}"
           - condition: or
@@ -263,13 +273,12 @@ condition:
 variables:
   light_target: !input light_target
   adaptive_sensor: !input adaptive_sensor
-  scene_sensor: !input scene_sensor
-  scene_name_prefix: !input scene_name_prefix
+  scene_template: !input scene_template
   adaptive_transition: !input adaptive_transition
   motion_on_transition: !input motion_on_transition
   script_transition: >
-    {# Slow transition for adaptive/scene updates; snappier for motion or a manual run #}
-    {% if trigger is defined and trigger.id is defined and trigger.id in ['adaptive', 'scene_change'] %}
+    {# Slow transition for adaptive/scene/extra-trigger updates; snappier for motion or a manual run #}
+    {% if trigger is defined and trigger.id is defined and trigger.id in ['adaptive', 'extra'] %}
       {{ adaptive_transition }}
     {% else %}
       {{ motion_on_transition }}
@@ -347,18 +356,12 @@ variables:
       {% endif %}
     {% endif %}
     {{ ns.entities | unique | list }}
-  # scene.<prefix>_<scene_sensor state>, if that scene exists
+  # Whatever scene_template returns, if it names a scene that actually
+  # exists - a typo or a scene that's been renamed/removed is treated
+  # the same as the template returning nothing, rather than erroring
   desired_scene: >
-    {% if scene_name_prefix | string | length > 0 %}
-      {% set candidate = ('scene.' ~ (scene_name_prefix | string) ~ '_' ~ (states(scene_sensor) | string)) | lower | replace(' ', '_') %}
-      {% if states[candidate] is not none %}
-        {{ candidate }}
-      {% else %}
-        {{ '' }}
-      {% endif %}
-    {% else %}
-      {{ '' }}
-    {% endif %}
+    {% set candidate = (scene_template | trim) %}
+    {{ candidate if candidate and states[candidate] is not none else '' }}
   scene_covered_entities: >
     {% if desired_scene | length > 0 %}
       {{ state_attr(desired_scene, 'entity_id') | default([], true) | list }}
