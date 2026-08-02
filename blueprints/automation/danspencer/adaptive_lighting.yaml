@@ -1,5 +1,5 @@
 blueprint:
-  name: Adaptive Lighting (Unified)
+  name: Adaptive Lighting
   description: >
     Adaptive lighting: sets brightness/colour temperature from a sensor,
     keeping lights updated as it changes, and turns them off a while

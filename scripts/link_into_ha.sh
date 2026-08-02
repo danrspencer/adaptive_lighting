@@ -6,22 +6,21 @@
 # that machine, not to Home Assistant. See CLAUDE.md for the full story.
 #
 # Existing regular files at the target paths are backed up (renamed
-# with a .bak-<timestamp> suffix) rather than deleted or overwritten -
-# blueprints/automation/danspencer/adaptive_lighting_unified.yaml in
-# particular almost certainly already exists as a real file the first
-# time this runs. An existing symlink pointing somewhere else is just
-# repointed; one already pointing at the right place is left alone.
+# with a .bak-<timestamp> suffix) rather than deleted or overwritten.
+# An existing symlink pointing somewhere else is just repointed; one
+# already pointing at the right place is left alone.
 #
 # Usage:
 #   ./scripts/link_into_ha.sh [--dry-run] [config_dir]
 #
 # config_dir defaults to /config.
 #
-# NOTE: the blueprint's inputs changed (scene_sensor/scene_name_prefix
-# -> scene_template/extra_triggers - see CLAUDE.md). Linking it in
-# will make every room automation using the old inputs show as
-# misconfigured until you update them. Consider updating one room at a
-# time rather than symlinking straight over all 15 in one go.
+# This blueprint is named adaptive_lighting.yaml specifically so it
+# can't collide with an existing adaptive_lighting_unified.yaml (or
+# any other differently-named blueprint) already in place - it shows
+# up as a separate "Adaptive Lighting" entry in the blueprint picker,
+# and existing room automations using something else are entirely
+# unaffected until you deliberately switch them over, room by room.
 
 set -eu
 
@@ -82,8 +81,8 @@ if [ "$DRY_RUN" = 1 ]; then
 fi
 echo
 
-link "blueprints/automation/danspencer/adaptive_lighting_unified.yaml" \
-     "blueprints/automation/danspencer/adaptive_lighting_unified.yaml"
+link "blueprints/automation/danspencer/adaptive_lighting.yaml" \
+     "blueprints/automation/danspencer/adaptive_lighting.yaml"
 link "pyscript/modules/adaptive_lighting" "pyscript/modules/adaptive_lighting"
 link "pyscript/apps/adaptive_lighting"    "pyscript/apps/adaptive_lighting"
 link "www/adaptive-lighting-curve-card.js" "www/adaptive-lighting-curve-card.js"

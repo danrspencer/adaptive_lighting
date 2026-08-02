@@ -76,9 +76,13 @@ recovers from dropped commands (a missed Zigbee message, for example) without ma
 ## Repository layout
 
 ```
-blueprints/automation/danspencer/adaptive_lighting_unified.yaml
+blueprints/automation/danspencer/adaptive_lighting.yaml
     The automation blueprint: triggers, conditions, target resolution,
     and the action sequence (which service to call, with what target).
+    Deliberately named differently from any prior "Adaptive Lighting
+    Unified" blueprint so the two can run side by side while rooms are
+    migrated over individually, rather than one replacing the other
+    in place.
 
 pyscript/modules/adaptive_lighting/
     curve.py     brightness/colour-temperature schedule
@@ -135,7 +139,7 @@ add the card config from `dashboard/house-settings-card.yaml` to a view.
 
 ## Configuration
 
-Add an automation using the "Adaptive Lighting (Unified)" blueprint per room, and set:
+Add an automation using the "Adaptive Lighting" blueprint per room, and set:
 
 | Input | Required | Description |
 |---|---|---|

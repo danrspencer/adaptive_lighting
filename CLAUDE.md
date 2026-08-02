@@ -6,15 +6,24 @@ and *why* it's shaped the way it is.
 
 ## Where this came from
 
-This started as a single Home Assistant blueprint
-(`blueprints/automation/danspencer/adaptive_lighting_unified.yaml`)
-that grew ~150 lines of namespace-loop Jinja for target resolution,
-reachability filtering, multiplier bucketing, tolerance-based
-"already correct" checks, and manufacturer-based two-step transition
-detection. It worked, but became unreadable and hard to change safely.
-This repo is the migration to pyscript for the parts that are
-genuinely computation (not triggers/conditions), while keeping the
-blueprint native for the parts HA already does well.
+This started as a single Home Assistant blueprint - still live, at
+`blueprints/automation/danspencer/adaptive_lighting_unified.yaml` on
+the actual HA instance - that grew ~150 lines of namespace-loop Jinja
+for target resolution, reachability filtering, multiplier bucketing,
+tolerance-based "already correct" checks, and manufacturer-based
+two-step transition detection. It worked, but became unreadable and
+hard to change safely. This repo is the migration to pyscript for the
+parts that are genuinely computation (not triggers/conditions), while
+keeping the blueprint native for the parts HA already does well.
+
+This repo's blueprint is deliberately named `adaptive_lighting.yaml`
+(blueprint name "Adaptive Lighting"), not `adaptive_lighting_unified`
+- different file, different in-UI name, so it can be installed and
+tested alongside the live `adaptive_lighting_unified.yaml` without
+touching it, and rooms migrated over individually. Linking the two
+blueprints to the same filename is exactly what caused the incident
+below (see "A same-named blueprint can take out every room at once") -
+don't reintroduce that collision.
 
 ## The architectural split (deliberate, not arbitrary)
 
@@ -124,6 +133,38 @@ custom_templates file and a packages/*.yaml you also need to copy".
    matching Jinja-only fix to the live blueprint ahead of the full
    pyscript rewiring was raised but not decided as of this writing -
    check before assuming either way.
+
+6. **A same-named blueprint can take out every room at once.** This
+   repo's blueprint used to be named `adaptive_lighting_unified.yaml`
+   - identical to the file already live on the real HA instance, which
+   every one of the 15 room automations references by that exact path.
+   Running `scripts/link_into_ha.sh` symlinked the repo's (materially
+   different - new `scene_template`/`extra_triggers` inputs) blueprint
+   directly over the live one. Every room automation broke at once.
+
+   Recovering it was messier than expected, too: the script's own
+   backup (`adaptive_lighting_unified.yaml.bak-<timestamp>`, left next
+   to the original) was the right fix, but restoring it through the
+   Samba mount failed in a confusing way - `ls` showed only the backup
+   file, but `mv`/`cp` targeting the original filename both failed
+   ("No such file", then "Permission denied" for the identical
+   operation), consistent with a symlink sitting there that Samba
+   wasn't surfacing in listings but was still enforcing underneath.
+   Attempting the fix through the network share was abandoned in favour
+   of doing it directly on the HA host, which is where it actually got
+   fixed. Lesson within the lesson: when a Samba-mounted view of
+   `/config` disagrees with itself (a file `ls` won't show but which
+   still blocks writes), stop trying to fix it through that mount -
+   don't trust it enough to keep operating blind, go to the host.
+
+   Fixed at the root by giving this repo's blueprint a different file
+   name *and* a different in-blueprint `name:` (`adaptive_lighting.yaml`
+   / "Adaptive Lighting", vs. the live `adaptive_lighting_unified.yaml`
+   / "Adaptive Lighting (Unified)") - see "Where this came from" above.
+   The two can now be installed side by side with zero interaction;
+   rooms move over to the new one individually, deliberately, not by
+   the symlink script silently replacing what 15 rooms already depend
+   on.
 
 ## Current status / what's not done
 
