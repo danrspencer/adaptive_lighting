@@ -1,172 +1,110 @@
 # Adaptive Lighting
 
-A Home Assistant automation blueprint (plus a bit of [pyscript](https://github.com/custom-components/pyscript)) for
-per-room lighting that:
-
-- follows a solar brightness/colour-temperature curve through the day
-- turns on with motion, off when it's been empty a while
-- backs off completely the moment a human touches a light directly
-- can hand a room over to a scene instead of the adaptive curve
-- fixes itself when a command doesn't land, instead of staying wrong until someone notices
-
-It started as a single blueprint that grew about 150 lines of nested Jinja for the
-part that decides *what* to actually send each light. That part is now plain,
-unit-tested Python; the blueprint keeps the triggers, conditions, and the
-list of `light.turn_on`/`light.turn_off` calls, because that's what Home
-Assistant's automation engine is actually good at.
+A Home Assistant blueprint (with a [pyscript](https://github.com/custom-components/pyscript) backend) for
+per-room lighting: brightness and colour temperature follow a solar schedule, motion controls on/off, scenes can
+take over entirely, manual changes are respected, and lights that don't reach their target get corrected
+automatically.
 
 ![Adaptive Lighting Curve card, showing brightness and colour temperature through the day](dashboard/curve-preview.svg)
-
-*Rendered by `dashboard/render_preview_svg.py` from synthetic data — the same curve math that drives the real
-sensors, with no Home Assistant instance required. See [Dashboard card](#dashboard-card).*
 
 ## Features
 
 ### Solar-driven brightness & colour temperature
 
-A sensor (you provide it — see [`pyscript/apps`](#pyscript) for the reference implementation) reports a target
-brightness and Kelvin value that changes through the day: full brightness and cool/blue-white during the day,
-warming and dimming through the evening, dim and warm at night, following your own morning/day/evening/night
-schedule (evening itself tracks sunset, clamped between an earliest and latest time you set). The blueprint
-re-applies this roughly once a minute while the room is occupied, so lights drift with the schedule instead of
-jumping.
+Tracks a target brightness and Kelvin value that changes through the day — full brightness and cool white during
+the day, warming and dimming through the evening, dim and warm at night — following a configurable
+morning/day/evening/night schedule (evening tracks sunset, clamped between an earliest and latest bound). Applied
+roughly once a minute while the room is occupied, so lights drift with the schedule instead of jumping.
 
-### Motion on, motion off
+### Motion-driven on/off
 
-Give it a motion or occupancy sensor and it turns the room on when motion starts, and off `no_motion_wait`
-seconds after motion stops. Without a motion sensor, it still works — it just won't turn anything on by itself,
-only keep already-on lights updated with the adaptive curve.
+Turns a room on when motion starts and off `no_motion_wait` seconds after it stops. A motion/occupancy sensor is
+optional — without one, the blueprint still keeps already-on lights updated with the adaptive curve, it just
+won't turn anything on by itself.
 
-### Manual override, respected properly
+### Manual override detection
 
-If you turn a light on or off yourself — wall switch, app, voice assistant — the automation notices and leaves
-it alone rather than fighting you a minute later on the next adaptive tick. This is detected via
-`context.user_id`: Home Assistant tags every state change with who or what caused it, and a real person's action
-via the UI always carries a user id, while automations and a bulb simply regaining power after an outage don't.
-That second case matters — a bulb reconnecting after a power blip isn't a person expressing a preference, so it's
-*not* treated as an override; it just gets caught up to the correct brightness on the next tick or reconcile pass
-(see below), typically within a minute or five rather than instantly, in exchange for not needing bespoke
-recovery-detection logic.
+A light changed directly — wall switch, app, voice assistant — is left alone rather than being overwritten on
+the next adaptive tick. Detected via `context.user_id`: a real person's action through the UI always carries a
+user id, while automations and a device regaining power after an outage don't. The latter case is not treated as
+an override, so a bulb reconnecting after a power or Zigbee blip is brought back in line automatically rather
+than left stuck at its last known state.
 
 ### Scene handoff
 
-Point it at a sensor or `input_select` (e.g. one that names a day-phase) and a naming prefix, and if a scene
-exists matching `scene.<prefix>_<state>` — say, `scene.kitchen_night` — it's activated instead of the adaptive
-curve, *but only if that scene stays within this automation's own scope*: every entity the scene touches has to
-be one of the lights (or a sibling entity on the same device, like a light strip's effect selector) this
-blueprint already controls. A scene that reaches outside that scope is treated as not existing, so it can never
-silently hand control of something unexpected to a scene.
+Given a sensor or `input_select` and a naming prefix, activates `scene.<prefix>_<state>` instead of the adaptive
+curve whenever that scene exists — for example `scene.kitchen_night`. A scene only qualifies if every entity it
+touches is within the blueprint's own scope (the controlled lights, plus sibling entities on the same device,
+such as a light strip's effect selector); a scene reaching outside that scope is treated as not existing.
 
 ### Per-light brightness scaling
 
-An optional template returns a dict of `entity_id: multiplier`, letting you scale specific lights differently
-from the rest of the room:
+An optional template maps `entity_id` to a brightness multiplier:
 
-- a number scales that light's brightness (floored at 1, so a small multiplier never accidentally turns it off)
-- `0` turns it off entirely during the adaptive step
-- `null` (or `false`) skips it completely on power-on — no command sent at all, so something else (another
-  automation, a fixed scene) can own that light — but it's *still* included when the room turns off, since this
-  blueprint remains the source of truth for that.
+| Value | Effect |
+|---|---|
+| a number | scales that light's brightness, floored at 1 |
+| `0` | turns the light off during the adaptive step |
+| `null` / `false` | skips the light entirely on power-on (for another automation or a fixed scene to own), but still includes it when the room turns off |
 
-### Bulbs that can't combine a transition
+### Two-step transitions
 
-Some bulbs (older IKEA TRÅDFRI ones, notably) can't transition brightness and colour temperature in the same
-call. Tag the affected light or device with a `no_combined_transition` label and it'll get sent as two
-sequential half-length transitions instead of one — brightness first, then colour. Everything else gets a single
-combined call.
+Bulbs that can't transition brightness and colour temperature together (some IKEA TRÅDFRI models) can be tagged
+with a `no_combined_transition` label and are sent as two sequential half-length transitions instead of one.
+Everything else gets a single combined call.
 
-### Only touches what's reachable, only sends what's needed
+### Reachability and redundancy filtering
 
-Before sending anything, every light is checked against Home Assistant's own state: anything `unavailable` or
-`unknown` is skipped outright (there's no point commanding something HA already knows it can't reach), and
-anything already within tolerance of the target brightness/colour-temperature (±2 brightness, ±10K — some bulbs
-round-trip these values slightly differently than what was sent) is left alone rather than recommanded on every
-single tick.
+Lights reported `unavailable` or `unknown` are skipped. Lights already within tolerance of the target
+brightness/colour-temperature (±2 brightness, ±10K, to absorb rounding differences some bulbs report back) are
+left alone rather than recommanded on every tick.
 
 ### Self-healing
 
-Every few minutes (configurable), if the room is unoccupied but something's still on, it retries turning just
-that off. This is what actually matters in practice: Zigbee networks drop the occasional command, and without
-this a light left on from one dropped message could stay on indefinitely.
+On a configurable interval, if the room is unoccupied but a light is still on, the off command is retried. This
+recovers from dropped commands (a missed Zigbee message, for example) without manual intervention.
 
-## Architecture
+## Repository layout
 
 ```
 blueprints/automation/danspencer/adaptive_lighting_unified.yaml
-    The blueprint. Owns triggers, conditions, target resolution, and the
-    action structure (which service to call, with what target) — native
-    Home Assistant automation, kept native because it's a good fit and
-    gets HA's own trace/debug tooling for free.
+    The automation blueprint: triggers, conditions, target resolution,
+    and the action sequence (which service to call, with what target).
 
 pyscript/modules/adaptive_lighting/
-    Pure Python, zero Home Assistant dependency.
-      curve.py     the brightness/colour-temperature schedule
-      grouping.py  reachability, multiplier bucketing, the tolerance
-                   check, and two-step-vs-combined routing — this is
-                   the part that used to be ~150 lines of Jinja
+    curve.py     brightness/colour-temperature schedule
+    grouping.py  reachability, multiplier bucketing, tolerance checks,
+                 and two-step/combined transition routing
+    Pure Python, no Home Assistant dependency.
 
 pyscript/apps/adaptive_lighting/
-    The thin pyscript service wrapper that gives the modules above real
-    Home Assistant state. The only part of this repo that touches `hass`.
+    Pyscript service wrapper exposing the modules above to Home
+    Assistant state.
 
 www/adaptive-lighting-curve-card.js
-    A custom Lovelace card rendering the day's curve as an actual
-    rendered-colour chart. Reads sensor state; computes nothing itself.
+    Custom Lovelace card rendering the day's curve as a rendered-colour
+    chart, with a live "now" marker.
 
 dashboard/
-    The card config snippet, plus generate_preview_data.py and
-    render_preview_svg.py — regenerate the screenshot above any time
-    with `python3 dashboard/generate_preview_data.py && python3
-    dashboard/render_preview_svg.py`. Also preview.html, which renders
-    the *actual* card (not a static image) in a browser against
-    synthetic data — see the comment at the top of that file.
+    house-settings-card.yaml   card config to add to a view
+    preview.html                renders the real card against synthetic
+                                 data, no Home Assistant instance needed
+    generate_preview_data.py    generates that synthetic data
+    render_preview_svg.py       renders the screenshot above as a
+                                 standalone SVG
 
 tests/
-    pytest, covering curve.py and grouping.py. No HA/pyscript
-    dependency required.
+    pytest suite for curve.py and grouping.py.
 ```
 
-### Why split it this way
+Triggers, conditions, and target resolution stay in the blueprint; Home Assistant `condition:` blocks can't call
+a service, so anything a condition depends on has to remain template-based. Multiplier bucketing, tolerance
+checks, and transition routing are implemented in `pyscript/modules` and unit tested. See `CLAUDE.md` for
+further implementation notes.
 
-Home Assistant `condition:` blocks can't call a service — only `action:` steps can — so anything a condition
-needs to gate on has to stay as a template, not a pyscript call. That's most of what stayed in the blueprint:
-target resolution, occupancy, scene-scope checking. What moved to pyscript is specifically the part that was
-Jinja only because there was nowhere better to put it: bucketing lights by multiplier, checking each one's
-current state against a tolerance, deciding which transition style to use. That logic benefits from being real
-Python — actual lists and dataclasses instead of namespace-loop tricks, and pytest instead of "reload and see
-what the trace says."
+## Installation
 
-More detail, including a couple of hard-won Home Assistant/pyscript gotchas worth knowing before changing
-anything here, is in `CLAUDE.md`.
-
-## Dashboard card
-
-`www/adaptive-lighting-curve-card.js` is a custom Lovelace card that reads the produced sensors and renders the
-day's curve, with a live "now" marker. It needs:
-
-1. Registering as a dashboard resource: Settings → Dashboards → Resources → Add Resource, URL
-   `/local/adaptive-lighting-curve-card.js`, type JavaScript Module.
-2. The card config from `dashboard/house-settings-card.yaml` added to a view.
-3. The sensors it reads to exist with the entity ids and attribute shapes documented at the top of that file —
-   produced by `pyscript/apps/adaptive_lighting` (or your own equivalent).
-
-To see the card itself without any of that — no Home Assistant instance, no dashboard — generate synthetic data,
-serve this repo over HTTP, and open `dashboard/preview.html`:
-
-```bash
-python3 dashboard/generate_preview_data.py
-python3 -m http.server 8934
-# then open http://localhost:8934/dashboard/preview.html
-```
-
-It loads the real card against synthetic data (`dashboard/preview_data.json`, generated by
-`generate_preview_data.py` using the actual `curve.py`), so what you see is the genuine component, not a
-lookalike.
-
-## Deploying
-
-On the Home Assistant host itself (not over a network share — see `CLAUDE.md` for why that matters), clone this
-repo somewhere under `/config` and symlink:
+On the Home Assistant host, clone this repository under `/config` and symlink:
 
 ```
 /config/blueprints/automation/danspencer/adaptive_lighting_unified.yaml
@@ -176,9 +114,36 @@ repo somewhere under `/config` and symlink:
 /config/www/adaptive-lighting-curve-card.js -> <checkout>/www/adaptive-lighting-curve-card.js
 ```
 
-Then, per room, add an automation using the blueprint and fill in: which lights (entities, a device, or an
-area), your adaptive sensor, optionally a motion sensor, optionally a scene sensor/prefix, and optionally a
-brightness-multiplier template.
+Symlinks should be created on the Home Assistant host itself, not via a network share — see `CLAUDE.md`.
+
+For the dashboard card, register `www/adaptive-lighting-curve-card.js` as a Lovelace resource (Settings →
+Dashboards → Resources → Add Resource, URL `/local/adaptive-lighting-curve-card.js`, type JavaScript Module) and
+add the card config from `dashboard/house-settings-card.yaml` to a view.
+
+## Configuration
+
+Add an automation using the "Adaptive Lighting (Unified)" blueprint per room, and set:
+
+| Input | Required | Description |
+|---|---|---|
+| Light | yes | Entities, a device, or an area to control |
+| Adaptive Lighting Sensor | yes | Sensor providing brightness/colour temperature |
+| Motion Sensor | no | Enables motion-driven on/off |
+| Scene Sensor / Scene Name Prefix | no | Enables scene handoff |
+| Brightness Multiplier Template | no | Per-light brightness scaling |
+| Wait time | no | Seconds to keep lights on after motion stops (default 120) |
+| Reconcile Interval | no | Self-healing check interval (default every 5 minutes) |
+| Motion On / Motion Off / Adaptive Transition | no | Transition durations for each trigger type |
+
+## Previewing the dashboard card
+
+```bash
+python3 dashboard/generate_preview_data.py
+python3 -m http.server 8934
+# open http://localhost:8934/dashboard/preview.html
+```
+
+Renders the actual card component against generated data, without a Home Assistant instance.
 
 ## Testing
 
@@ -187,13 +152,11 @@ pip install pytest
 pytest
 ```
 
-No Home Assistant or pyscript dependency — `tests/fakes.py` provides a fake state/registry lookup so
-`grouping.py` is exercised with plain dicts. CI (`.github/workflows/tests.yml`) runs this on every push and PR
-across Python 3.9 and 3.13.
+No Home Assistant or pyscript dependency; `tests/fakes.py` provides a fake state/registry lookup. CI
+(`.github/workflows/tests.yml`) runs the suite on push and PR across Python 3.9 and 3.13.
 
 ## Status
 
-Mid-migration. The pure-Python core (`curve.py`, `grouping.py`) is done and tested. The pyscript service wrapper
-(`pyscript/apps/`) is written but not yet validated against a real pyscript install, and the blueprint hasn't
-been rewired to call it yet — it's still the fully-Jinja version, kept as the migration's working baseline. See
-`CLAUDE.md` for exactly what's left and why.
+The pure-Python core (`curve.py`, `grouping.py`) is complete and tested. The pyscript service wrapper
+(`pyscript/apps/`) has not yet been validated against a live pyscript install, and the blueprint has not yet been
+updated to call it — see `CLAUDE.md` for details.
