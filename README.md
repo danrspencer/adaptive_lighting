@@ -2,7 +2,7 @@
 
 A Home Assistant blueprint (with a [pyscript](https://github.com/custom-components/pyscript) backend) for
 per-room lighting: brightness and colour temperature follow a solar schedule, motion controls on/off, scenes can
-take over entirely, manual changes are respected, and lights that don't reach their target get corrected
+take over partially or entirely, manual changes are respected, and lights that don't reach their target get corrected
 automatically.
 
 ![Adaptive Lighting Curve card, showing brightness and colour temperature through the day](dashboard/curve-preview.svg)
