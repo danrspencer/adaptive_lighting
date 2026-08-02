@@ -1,0 +1,11 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[project]
+name = "adaptive-lighting"
+version = "0.1.0"
+description = "Blueprint + pyscript adaptive lighting: a shareable, testable replacement for the Jinja-heavy version."
+requires-python = ">=3.9"
+
+[project.optional-dependencies]
+dev = ["pytest"]

@@ -1,0 +1,27 @@
+# Snippet to drop into a dashboard view (not auto-deployed - storage-mode
+# dashboards aren't files, so this is just the card config to paste in).
+#
+# Requires:
+#   1. www/adaptive-lighting-curve-card.js registered as a dashboard
+#      resource: Settings -> Dashboards -> Resources -> Add Resource
+#        URL:  /local/adaptive-lighting-curve-card.js
+#        Type: JavaScript Module
+#   2. The sensors it reads to exist with these exact entity_ids and
+#      attribute shapes (all produced by pyscript/apps/adaptive_lighting,
+#      see that app's docstring):
+#        sensor.morning_start / day_start / evening_start / night_start
+#          - attributes.timestamp (unix seconds)
+#        sensor.day_phase                          - state: Morning/Day/Evening/Night
+#        sensor.adaptive_lighting_curve             - attributes.points: [{t, brightness, kelvin}, ...]
+#        sensor.solar_adaptive_lighting_brightness  - state: int 0-255
+#        sensor.solar_adaptive_lighting_color_temperature - state: int Kelvin
+#        input_datetime.evening_earliest / evening_latest (optional - only
+#          used to explain *why* evening starts when it does)
+#        sun.sun (optional, same reason)
+
+type: heading
+heading: Adaptive Lighting Curve
+heading_style: title
+icon: mdi:chart-bell-curve
+---
+type: custom:adaptive-lighting-curve-card

@@ -1,0 +1,550 @@
+blueprint:
+  name: Adaptive Lighting (Unified)
+  description: >
+    Adaptive lighting: sets brightness/colour temperature from a sensor,
+    keeping lights updated as it changes, and turns them off a while
+    after motion stops. A Motion Sensor (if set) governs occupancy -
+    updates only apply while occupied, and a periodic check retries
+    turning lights off if one didn't take. Already-correct lights are
+    skipped to avoid redundant network traffic. Can activate a matching
+    scene instead of the adaptive brightness/colour, and scale
+    individual lights' brightness. Self-contained - running it manually
+    (Run button, or automation.trigger from elsewhere) always turns
+    lights on correctly. Lights labelled `no_combined_transition` get
+    brightness and colour temperature sent as two sequential calls
+    instead of one, for bulbs that can't do both together.
+  domain: automation
+  source_url: https://github.com/danspencer
+  author: Dan Spencer
+  input:
+    motion_entity:
+      name: Motion Sensor (Optional)
+      description: Motion sensor that triggers the automation. Without one, it only reacts to adaptive/scene sensor changes.
+      default: null
+      selector:
+        entity:
+          filter:
+            - device_class: occupancy
+              domain: binary_sensor
+            - device_class: motion
+              domain: binary_sensor
+    adaptive_sensor:
+      name: Adaptive Lighting Sensor
+      description: Sensor providing brightness and colour temperature to apply.
+      selector:
+        entity:
+          domain: sensor
+    light_target:
+      name: Light
+      description: Light entities, devices, or an area to control. Leave blank to control nothing.
+      default: null
+      selector:
+        target:
+          entity:
+            domain: light
+    scene_sensor:
+      name: Scene Sensor (Optional)
+      description: >
+        Sensor or input_select whose state names the scene to use (e.g.
+        'Night'). Pairs with Scene Name Prefix below; leave blank to skip
+        scenes.
+      default: sun.sun
+      selector:
+        entity:
+          domain:
+            - sensor
+            - input_select
+    scene_name_prefix:
+      name: Scene Name Prefix (Optional)
+      description: >
+        Combined with Scene Sensor's state to build
+        scene.<prefix>_<state> (case-insensitive). Only used if that scene
+        exists and covers just entities within this automation's scope
+        (lights being controlled, plus any other entities on the same
+        devices/area — e.g. a lightstrip's gradient-effect selector). Leave
+        blank to skip scenes.
+      default: ""
+      selector:
+        text: {}
+    brightness_multiplier_template:
+      name: Brightness Multiplier Template (Optional)
+      description: >
+        Template returning a dict of entity_id to brightness multiplier,
+        applied only during adaptive lighting (not to scene-covered lights).
+        0 turns a light off; other numbers scale its brightness, floored to
+        a minimum of 1. null (or false) skips the light entirely during
+        power-on — no command is sent at all, letting something else (e.g.
+        a dedicated automation) own it — but it is still included when this
+        automation turns lights off, since this automation remains the
+        source of truth for that. Lights not listed use full adaptive
+        brightness.
+      default: "{{ {} }}"
+      selector:
+        template: {}
+    no_motion_wait:
+      name: Wait time
+      description: Time to keep the light on after motion stops.
+      default: 120
+      selector:
+        number:
+          min: 0
+          max: 3600
+          unit_of_measurement: seconds
+    reconcile_interval:
+      name: Reconcile Interval (Optional)
+      description: >
+        How often to check for lights left on with no occupancy and retry
+        turning them off — a safety net for commands that don't land (e.g.
+        a dropped Zigbee message). time_pattern syntax, e.g. '/5' for every
+        5 minutes. Only relevant when a Motion Sensor is set; ignored
+        otherwise.
+      default: "/5"
+      selector:
+        text: {}
+    motion_on_transition:
+      name: Motion On Transition
+      description: Transition duration when turning on via motion or a manual run.
+      default: 1
+      selector:
+        number:
+          min: 0
+          max: 60
+          unit_of_measurement: seconds
+    motion_off_transition:
+      name: Motion Off Transition
+      description: Transition duration when turning off via motion.
+      default: 15
+      selector:
+        number:
+          min: 0
+          max: 60
+          unit_of_measurement: seconds
+    adaptive_transition:
+      name: Adaptive Transition
+      description: Transition duration when adaptive lighting or the scene sensor updates.
+      default: 30
+      selector:
+        number:
+          min: 0
+          max: 60
+          unit_of_measurement: seconds
+
+mode: restart
+max_exceeded: silent
+
+# Available to trigger definitions themselves (trigger: / condition:),
+# unlike the variables: block below which isn't computed until after a
+# trigger has fired.
+trigger_variables:
+  motion_entity: !input motion_entity
+  light_target: !input light_target
+  scene_name_prefix: !input scene_name_prefix
+
+trigger:
+  # The live brightness/colour-temperature sensor; fires roughly once a minute
+  - platform: state
+    entity_id: !input adaptive_sensor
+    id: adaptive
+  # Same sensor, but also catches attribute-only changes (no bare state-string change)
+  - id: adaptive_attr
+    platform: template
+    value_template: >
+      {# `trigger` doesn't exist yet during HA's initial dependency-check
+         render, so `trigger is defined` must short-circuit before any
+         attribute access on it. #}
+      {% set old_attrs = trigger.from_state.attributes if trigger is defined and trigger.from_state else {} %}
+      {% set new_attrs = trigger.to_state.attributes if trigger is defined and trigger.to_state else {} %}
+      {{ old_attrs != new_attrs }}
+  # The sensor/input_select that names which scene to use (e.g. day phase)
+  - id: scene_change
+    platform: state
+    entity_id: !input scene_sensor
+    enabled: "{{ scene_name_prefix | string | length > 0 }}"
+  # Motion sensor just reported occupied
+  - id: motion_on
+    platform: template
+    value_template: "{{ motion_entity != None and is_state(motion_entity,'on') }}"
+  # Motion sensor has been continuously unoccupied for no_motion_wait
+  - id: motion_off
+    platform: template
+    value_template: "{{ motion_entity != None and is_state(motion_entity,'off') }}"
+    for:
+      seconds: !input no_motion_wait
+  # Periodic safety net - see the `reconcile` branch in action: below
+  - id: reconcile
+    platform: time_pattern
+    minutes: !input reconcile_interval
+  - id: manual
+    platform: template
+    value_template: >
+      {#
+        Fires when a human turns on one of our lights directly via the
+        UI/app - not via this automation, another automation, or a
+        device simply regaining power. Used below to back off entirely
+        and leave a deliberate human choice alone.
+
+        A person's action is identified by context.user_id being set;
+        automations and device-originated changes (e.g. a bulb coming
+        back after a power/Zigbee outage) leave it null.
+      #}
+      {% set ns = namespace(entities=[]) %}
+      {% if light_target is not none %}
+        {% if light_target.entity_id is defined %}
+          {% set eids = light_target.entity_id if light_target.entity_id is iterable and light_target.entity_id is not string else [light_target.entity_id] %}
+          {% set ns.entities = ns.entities + eids %}
+        {% endif %}
+        {% if light_target.device_id is defined %}
+          {% set dids = light_target.device_id if light_target.device_id is iterable and light_target.device_id is not string else [light_target.device_id] %}
+          {% for d in dids %}
+            {% set ns.entities = ns.entities + (device_entities(d) | select('match', '^light\.') | list) %}
+          {% endfor %}
+        {% endif %}
+        {% if light_target.area_id is defined %}
+          {% set aids = light_target.area_id if light_target.area_id is iterable and light_target.area_id is not string else [light_target.area_id] %}
+          {% for a in aids %}
+            {% set ns.entities = ns.entities + (area_entities(a) | select('match', '^light\.') | list) %}
+          {% endfor %}
+        {% endif %}
+      {% endif %}
+      {% set light_entity_ids = ns.entities | unique | list %}
+      {% set watch = namespace(items=[]) %}
+      {% for light_id in light_entity_ids %}
+        {# Touching each entity's state here is what makes this
+           template trigger re-evaluate whenever any of them changes #}
+        {% set watch.items = watch.items + [states(light_id)] %}
+      {% endfor %}
+      {{ trigger is defined
+         and trigger.entity_id in light_entity_ids
+         and trigger.to_state is not none
+         and trigger.to_state.state == 'on'
+         and trigger.to_state.context.user_id is not none }}
+
+condition:
+  # A human just turned on one of our lights directly - don't fight their choice
+  - "{{ trigger.id != 'manual' }}"
+  - or:
+      # Any trigger other than adaptive/scene_change/motion_on always
+      # passes here; motion_off/reconcile have their own gating logic
+      # in action: below, and manual is fully handled above
+      - condition: not
+        conditions:
+          - condition: trigger
+            id:
+              - adaptive
+              - scene_change
+              - motion_on
+      # adaptive/scene_change: only reapply while the room is occupied,
+      # and (for the per-minute adaptive tick specifically) only when no
+      # scene has taken over responsibility for these lights
+      - condition: and
+        conditions:
+          - condition: trigger
+            id:
+              - adaptive
+              - scene_change
+          - condition: template
+            value_template: "{{ occupied }}"
+          - condition: or
+            conditions:
+              - condition: not
+                conditions:
+                  - condition: trigger
+                    id: adaptive
+              - condition: template
+                value_template: "{{ not scene_active }}"
+      # motion_on: only bother running if at least one light isn't already on
+      - condition: and
+        conditions:
+          - condition: trigger
+            id: motion_on
+          - condition: template
+            value_template: "{{ resolved_entities | map('states') | select('ne', 'on') | list | count > 0 }}"
+
+variables:
+  light_target: !input light_target
+  adaptive_sensor: !input adaptive_sensor
+  scene_sensor: !input scene_sensor
+  scene_name_prefix: !input scene_name_prefix
+  adaptive_transition: !input adaptive_transition
+  motion_on_transition: !input motion_on_transition
+  script_transition: >
+    {# Slow transition for adaptive/scene updates; snappier for motion or a manual run #}
+    {% if trigger is defined and trigger.id is defined and trigger.id in ['adaptive', 'scene_change'] %}
+      {{ adaptive_transition }}
+    {% else %}
+      {{ motion_on_transition }}
+    {% endif %}
+  half_transition: "{{ (script_transition / 2) | round(1) }}"
+  sensor_brightness: "{{ state_attr(adaptive_sensor, 'brightness') | int(0) }}"
+  # Already in Kelvin (not mireds) - passed straight into color_temp_kelvin everywhere below
+  sensor_color_temp_kelvin: "{{ state_attr(adaptive_sensor, 'color_temp') | int(3000) }}"
+  sensor_service: "{{ state_attr(adaptive_sensor, 'service') | default('light.turn_on', true) }}"
+  sensor_scene_id: "{{ state_attr(adaptive_sensor, 'scene_id') | default('', true) }}"
+  # Every light this automation is allowed to touch, resolved from light_target
+  resolved_entities: >
+    {% set ns = namespace(entities=[]) %}
+    {% if light_target is not none %}
+      {% if light_target.entity_id is defined %}
+        {% set eids = light_target.entity_id if light_target.entity_id is iterable and light_target.entity_id is not string else [light_target.entity_id] %}
+        {% set ns.entities = ns.entities + eids %}
+      {% endif %}
+      {% if light_target.device_id is defined %}
+        {% set dids = light_target.device_id if light_target.device_id is iterable and light_target.device_id is not string else [light_target.device_id] %}
+        {% for d in dids %}
+          {% set ns.entities = ns.entities + (device_entities(d) | select('match', '^light\.') | list) %}
+        {% endfor %}
+      {% endif %}
+      {% if light_target.area_id is defined %}
+        {% set aids = light_target.area_id if light_target.area_id is iterable and light_target.area_id is not string else [light_target.area_id] %}
+        {% for a in aids %}
+          {% set ns.entities = ns.entities + (area_entities(a) | select('match', '^light\.') | list) %}
+        {% endfor %}
+      {% endif %}
+    {% endif %}
+    {{ ns.entities | unique | list }}
+  # Entities HA already knows it can't reach right now - no point commanding them
+  reachable_entities: >
+    {{ resolved_entities | reject('is_state', 'unavailable') | reject('is_state', 'unknown') | list }}
+  occupied: >
+    {#
+      Is the room "in use" right now? With a motion sensor, trust it
+      directly - a light merely being on doesn't mean anyone's still
+      there (that's what caused the original bug this guard fixes).
+      Without a motion sensor, the only signal available is whether
+      we've already turned something on.
+    #}
+    {% if motion_entity is not none %}
+      {{ is_state(motion_entity, 'on') }}
+    {% else %}
+      {{ resolved_entities | map('states') | select('eq', 'on') | list | count > 0 }}
+    {% endif %}
+  # Used by the reconcile action branch below to retry turning off anything still on
+  entities_still_on: "{{ resolved_entities | select('is_state', 'on') | list }}"
+  # Same as resolved_entities, but widened to every entity on each light's
+  # device (not just the light itself) - lets scene-compatibility checking
+  # below account for sibling entities, e.g. a light strip's effect selector
+  scope_entities: >
+    {% set ns = namespace(entities=[]) %}
+    {% if light_target is not none %}
+      {% if light_target.entity_id is defined %}
+        {% set eids = light_target.entity_id if light_target.entity_id is iterable and light_target.entity_id is not string else [light_target.entity_id] %}
+        {% for e in eids %}
+          {% set did = device_id(e) %}
+          {% set ns.entities = ns.entities + (device_entities(did) if did else [e]) %}
+        {% endfor %}
+      {% endif %}
+      {% if light_target.device_id is defined %}
+        {% set dids = light_target.device_id if light_target.device_id is iterable and light_target.device_id is not string else [light_target.device_id] %}
+        {% for d in dids %}
+          {% set ns.entities = ns.entities + device_entities(d) %}
+        {% endfor %}
+      {% endif %}
+      {% if light_target.area_id is defined %}
+        {% set aids = light_target.area_id if light_target.area_id is iterable and light_target.area_id is not string else [light_target.area_id] %}
+        {% for a in aids %}
+          {% set ns.entities = ns.entities + area_entities(a) %}
+        {% endfor %}
+      {% endif %}
+    {% endif %}
+    {{ ns.entities | unique | list }}
+  # scene.<prefix>_<scene_sensor state>, if that scene exists
+  desired_scene: >
+    {% if scene_name_prefix | string | length > 0 %}
+      {% set candidate = ('scene.' ~ (scene_name_prefix | string) ~ '_' ~ (states(scene_sensor) | string)) | lower | replace(' ', '_') %}
+      {% if states[candidate] is not none %}
+        {{ candidate }}
+      {% else %}
+        {{ '' }}
+      {% endif %}
+    {% else %}
+      {{ '' }}
+    {% endif %}
+  scene_covered_entities: >
+    {% if desired_scene | length > 0 %}
+      {{ state_attr(desired_scene, 'entity_id') | default([], true) | list }}
+    {% else %}
+      {{ [] }}
+    {% endif %}
+  # The scene only counts as usable if every entity it covers is within our scope
+  scene_valid: "{{ scene_covered_entities | reject('in', scope_entities) | list | length == 0 }}"
+  scene_active: "{{ desired_scene | length > 0 and scene_valid }}"
+  # Lights the adaptive brightness/colour logic below should manage -
+  # everything except what the active scene already covers
+  adaptive_target_entities: >
+    {% if scene_active %}
+      {{ resolved_entities | reject('in', scene_covered_entities) | list }}
+    {% else %}
+      {{ resolved_entities }}
+    {% endif %}
+  brightness_multipliers: !input brightness_multiplier_template
+  # Entities whose multiplier isn't null/false - null/false means "don't
+  # touch this on power-on, something else owns it" (see the input's own description)
+  powerable_entities: >
+    {% set ns = namespace(items=[]) %}
+    {% for e in adaptive_target_entities %}
+      {% set m = brightness_multipliers.get(e, 1) %}
+      {% if not (m is none or m is sameas false) %}
+        {% set ns.items = ns.items + [e] %}
+      {% endif %}
+    {% endfor %}
+    {{ ns.items }}
+  # powerable_entities bucketed by multiplier value, so each bucket can be
+  # sent one shared brightness in a single call
+  multiplier_groups: >
+    {% set ns = namespace(groups={}) %}
+    {% for e in powerable_entities %}
+      {% set m = brightness_multipliers.get(e, 1) %}
+      {% set key = m | string %}
+      {% set existing = ns.groups[key].entities if key in ns.groups else [] %}
+      {% set ns.groups = dict(ns.groups, **{key: {'multiplier': m, 'entities': existing + [e]}}) %}
+    {% endfor %}
+    {{ ns.groups.values() | list }}
+
+action:
+  - choose:
+      # Motion timed out: turn everything reachable off
+      - conditions:
+          - condition: trigger
+            id: motion_off
+        sequence:
+          - alias: "Turn off the light(s)"
+            action: light.turn_off
+            target:
+              entity_id: "{{ reachable_entities }}"
+            data:
+              transition: !input motion_off_transition
+      # Periodic tick: if we're unoccupied but something's still on
+      # (e.g. an earlier turn-off command didn't land), retry just that
+      - conditions:
+          - condition: trigger
+            id: reconcile
+        sequence:
+          - if:
+              - condition: template
+                value_template: >
+                  {{ motion_entity is not none and not is_state(motion_entity, 'on')
+                     and entities_still_on | length > 0 }}
+            then:
+              - alias: "Reconcile: retry turning off lights left on with no occupancy"
+                action: light.turn_off
+                target:
+                  entity_id: "{{ entities_still_on }}"
+                data:
+                  transition: !input motion_off_transition
+    default:
+      - if:
+          - condition: template
+            value_template: "{{ scene_active }}"
+        then:
+          - alias: "Activate matching scene"
+            action: scene.turn_on
+            target:
+              entity_id: "{{ desired_scene }}"
+            data:
+              transition: "{{ script_transition }}"
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: "{{ sensor_service == 'scene.apply' }}"
+            sequence:
+              - alias: "Sensor is in scene mode - apply its scene"
+                action: scene.apply
+                data:
+                  scene_id: "{{ sensor_scene_id }}"
+                  transition: "{{ script_transition }}"
+                  activated_transition: "{{ script_transition }}"
+        default:
+          # One iteration per distinct brightness multiplier, so lights
+          # sharing a multiplier get a single combined command
+          - repeat:
+              for_each: "{{ multiplier_groups }}"
+              sequence:
+                - variables:
+                    group_brightness: >
+                      {# Floor at 1 so a non-zero multiplier never accidentally turns a light off #}
+                      {% set m = repeat.item.multiplier | float %}
+                      {{ 0 if m == 0 else ([((sensor_brightness * m) | round(0) | int), 1] | max) }}
+                    group_needing_off: >
+                      {# Multiplier is 0 for this group: only command lights that are reachable and not already off #}
+                      {{ repeat.item.entities | select('in', reachable_entities) | reject('is_state', 'off') | list }}
+                    group_needing_update: >
+                      {#
+                        Lights that need a fresh command: reachable, and
+                        not already within tolerance of the target
+                        brightness/colour-temperature. Tolerance (not
+                        exact match) because some bulbs round-trip these
+                        values a point or two off from what was sent.
+                      #}
+                      {% set ns = namespace(items=[]) %}
+                      {% for e in repeat.item.entities | select('in', reachable_entities) | list %}
+                        {% set brightness_close = (state_attr(e, 'brightness') | int(-999) - group_brightness) | abs <= 2 %}
+                        {% set color_temp_close = (state_attr(e, 'color_temp_kelvin') | int(-999) - sensor_color_temp_kelvin) | abs <= 10 %}
+                        {% set already_set = is_state(e, 'on') and brightness_close and color_temp_close %}
+                        {% if not already_set %}
+                          {% set ns.items = ns.items + [e] %}
+                        {% endif %}
+                      {% endfor %}
+                      {{ ns.items }}
+                    group_two_step: >
+                      {#
+                        Bulbs labelled no_combined_transition (checked on
+                        both the entity and its device) can't transition
+                        brightness and colour together, so they're sent
+                        as two sequential half-length transitions instead
+                        of one combined call.
+                      #}
+                      {% set ns = namespace(items=[]) %}
+                      {% for e in group_needing_update %}
+                        {% set did = device_id(e) %}
+                        {% set tags = labels(e) + (labels(did) if did else []) %}
+                        {% if 'no_combined_transition' in tags %}
+                          {% set ns.items = ns.items + [e] %}
+                        {% endif %}
+                      {% endfor %}
+                      {{ ns.items }}
+                    group_combined: "{{ group_needing_update | reject('in', group_two_step) | list }}"
+                - choose:
+                    - conditions:
+                        - condition: template
+                          value_template: "{{ group_brightness <= 0 }}"
+                      sequence:
+                        - alias: "Multiplier 0 - turn this group off"
+                          action: light.turn_off
+                          target:
+                            entity_id: "{{ group_needing_off }}"
+                          data:
+                            transition: "{{ script_transition }}"
+                  default:
+                    - parallel:
+                        - if:
+                            - condition: template
+                              value_template: "{{ group_combined | length > 0 }}"
+                          then:
+                            - alias: "Combined group: single call"
+                              action: light.turn_on
+                              target:
+                                entity_id: "{{ group_combined }}"
+                              data:
+                                transition: "{{ script_transition }}"
+                                brightness: "{{ group_brightness }}"
+                                color_temp_kelvin: "{{ sensor_color_temp_kelvin }}"
+                        - if:
+                            - condition: template
+                              value_template: "{{ group_two_step | length > 0 }}"
+                          then:
+                            - alias: "Two-step group, step 1: brightness only"
+                              action: light.turn_on
+                              target:
+                                entity_id: "{{ group_two_step }}"
+                              data:
+                                transition: "{{ half_transition }}"
+                                brightness: "{{ group_brightness }}"
+                            - delay: "{{ half_transition }}"
+                            - alias: "Two-step group, step 2: colour temp (brightness re-specified)"
+                              action: light.turn_on
+                              target:
+                                entity_id: "{{ group_two_step }}"
+                              data:
+                                transition: "{{ half_transition }}"
+                                brightness: "{{ group_brightness }}"
+                                color_temp_kelvin: "{{ sensor_color_temp_kelvin }}"
