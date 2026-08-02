@@ -27,6 +27,7 @@ class EntityLookup:
     state_attr: Callable[[str, str], object]
     device_id: Callable[[str], Optional[str]]
     labels: Callable[[str], list]
+    context_user_id: Callable[[str], Optional[str]]
 
     def reachable(self, entity_id: str) -> bool:
         """False for anything HA already knows it can't reach - no point commanding it."""
@@ -36,6 +37,17 @@ class EntityLookup:
         """Labels on the entity itself plus its device (if any)."""
         did = self.device_id(entity_id)
         return self.labels(entity_id) + (self.labels(did) if did else [])
+
+    def manually_set(self, entity_id: str) -> bool:
+        """True if the entity's *current* state was set by a real person
+        (context.user_id present) rather than this automation, another
+        automation, or a device simply regaining power - all of which
+        leave it null. Checked fresh against live state every call, so
+        there's nothing to remember or expire: once a light's state
+        changes again for any other reason (it's turned off, or a
+        device recovers from unavailable), this naturally stops being
+        true on its own."""
+        return self.is_state(entity_id, "on") and self.context_user_id(entity_id) is not None
 
 
 @dataclass
@@ -91,7 +103,9 @@ def build_groups(
 
         if brightness <= 0:
             group.needing_off = [
-                e for e in group_entities if lookup.reachable(e) and not lookup.is_state(e, "off")
+                e
+                for e in group_entities
+                if lookup.reachable(e) and not lookup.is_state(e, "off") and not lookup.manually_set(e)
             ]
             groups.append(group)
             continue
@@ -99,7 +113,9 @@ def build_groups(
         needing_update = [
             e
             for e in group_entities
-            if lookup.reachable(e) and not _already_set(e, brightness, sensor_color_temp_kelvin, lookup, brightness_tolerance, color_temp_tolerance)
+            if lookup.reachable(e)
+            and not lookup.manually_set(e)
+            and not _already_set(e, brightness, sensor_color_temp_kelvin, lookup, brightness_tolerance, color_temp_tolerance)
         ]
         group.two_step = [e for e in needing_update if two_step_label in lookup.tags(e)]
         group.combined = [e for e in needing_update if e not in group.two_step]

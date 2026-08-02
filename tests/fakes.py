@@ -9,7 +9,8 @@ from adaptive_lighting import EntityLookup
 
 def make_lookup(states: dict, device_of: Optional[dict] = None, labels_of: Optional[dict] = None) -> EntityLookup:
     """
-    states:    {entity_id: {"state": "on"/"off"/"unavailable"/..., "attributes": {...}}}
+    states:    {entity_id: {"state": "on"/"off"/"unavailable"/..., "attributes": {...}, "user_id": "..." or None}}
+               "user_id" is optional and defaults to None (not human-caused).
     device_of: {entity_id: device_id}
     labels_of: {entity_id_or_device_id: [label, ...]}
     """
@@ -28,4 +29,13 @@ def make_lookup(states: dict, device_of: Optional[dict] = None, labels_of: Optio
     def labels(target_id):
         return labels_of.get(target_id, [])
 
-    return EntityLookup(is_state=is_state, state_attr=state_attr, device_id=device_id, labels=labels)
+    def context_user_id(entity_id):
+        return states.get(entity_id, {}).get("user_id")
+
+    return EntityLookup(
+        is_state=is_state,
+        state_attr=state_attr,
+        device_id=device_id,
+        labels=labels,
+        context_user_id=context_user_id,
+    )

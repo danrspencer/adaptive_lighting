@@ -165,3 +165,86 @@ def test_multiplier_floors_at_one_never_accidentally_off():
         lookup=lookup,
     )
     assert groups[0].brightness == 1
+
+
+# Manual overrides: a light currently on whose latest state change was
+# made by a real person (context.user_id set) is left exactly alone,
+# even if it doesn't match the current adaptive target - checked fresh
+# against live state on every call, so nothing needs to be remembered
+# or explicitly expired.
+
+
+def test_manually_set_light_is_not_recommanded_even_when_mismatched():
+    lookup = make_lookup(
+        states={
+            "light.a": {
+                "state": "on",
+                "attributes": {"brightness": 40, "color_temp_kelvin": 6000},
+                "user_id": "person-1",
+            }
+        }
+    )
+    groups = build_groups(
+        entities=["light.a"],
+        brightness_multipliers={},
+        sensor_brightness=200,
+        sensor_color_temp_kelvin=3000,
+        lookup=lookup,
+    )
+    assert groups[0].combined == []
+    assert groups[0].two_step == []
+
+
+def test_manually_set_light_is_protected_from_being_turned_off_too():
+    # brightness_multiplier says this light should be off, but a human
+    # turned it on - the human's choice wins, it isn't forced off
+    lookup = make_lookup(
+        states={"light.a": {"state": "on", "attributes": {}, "user_id": "person-1"}}
+    )
+    groups = build_groups(
+        entities=["light.a"],
+        brightness_multipliers={"light.a": 0},
+        sensor_brightness=200,
+        sensor_color_temp_kelvin=3000,
+        lookup=lookup,
+    )
+    assert groups[0].needing_off == []
+
+
+def test_device_recovery_is_not_treated_as_a_manual_override():
+    # Same mismatched state as the protected case above, but no user_id
+    # (a device regaining power sets its own state, unattributed to a
+    # person) - this light gets corrected normally
+    lookup = make_lookup(
+        states={
+            "light.a": {
+                "state": "on",
+                "attributes": {"brightness": 40, "color_temp_kelvin": 6000},
+                "user_id": None,
+            }
+        }
+    )
+    groups = build_groups(
+        entities=["light.a"],
+        brightness_multipliers={},
+        sensor_brightness=200,
+        sensor_color_temp_kelvin=3000,
+        lookup=lookup,
+    )
+    assert groups[0].combined == ["light.a"]
+
+
+def test_turning_the_light_off_ends_the_protection():
+    # Same user_id as the protected case, but the light is now off -
+    # there's nothing to protect, and a later "on" is a fresh decision
+    lookup = make_lookup(
+        states={"light.a": {"state": "off", "attributes": {}, "user_id": "person-1"}}
+    )
+    groups = build_groups(
+        entities=["light.a"],
+        brightness_multipliers={},
+        sensor_brightness=200,
+        sensor_color_temp_kelvin=3000,
+        lookup=lookup,
+    )
+    assert groups[0].combined == ["light.a"]

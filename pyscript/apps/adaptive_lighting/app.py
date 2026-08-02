@@ -20,9 +20,21 @@ confirm:
     and confirm whether it comes back as dict-style or attribute-style
     access in templates (plan assumes `{{ plan.groups }}` works; may
     need `{{ plan['groups'] }}` instead).
+  - _context_user_id below is a guess at how to reach an arbitrary
+    entity's current state context from pyscript - unlike the other
+    four lookups, this one doesn't obviously mirror an existing Jinja
+    global (Jinja gets it via `states[entity_id].context.user_id`, the
+    full state object). Confirm `hass` is reachable this way, or find
+    the pyscript-native equivalent.
 """
 
 from adaptive_lighting import EntityLookup, build_groups
+
+
+def _context_user_id(entity_id):
+    state_obj = hass.states.get(entity_id)
+    context = getattr(state_obj, "context", None)
+    return getattr(context, "user_id", None)
 
 
 def _lookup() -> EntityLookup:
@@ -31,6 +43,7 @@ def _lookup() -> EntityLookup:
         state_attr=state_attr,
         device_id=device_id,
         labels=labels,
+        context_user_id=_context_user_id,
     )
 
 
