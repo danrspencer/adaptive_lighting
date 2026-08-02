@@ -113,17 +113,21 @@ further implementation notes.
 
 ## Installation
 
-On the Home Assistant host, clone this repository under `/config` and symlink:
+On the Home Assistant host itself (not via a network share — see `CLAUDE.md` for why), clone this repository
+under `/config` (e.g. via the Advanced SSH & Web Terminal add-on) and run:
 
-```
-/config/blueprints/automation/danspencer/adaptive_lighting_unified.yaml
-    -> <checkout>/blueprints/automation/danspencer/adaptive_lighting_unified.yaml
-/config/pyscript/modules/adaptive_lighting  -> <checkout>/pyscript/modules/adaptive_lighting
-/config/pyscript/apps/adaptive_lighting     -> <checkout>/pyscript/apps/adaptive_lighting
-/config/www/adaptive-lighting-curve-card.js -> <checkout>/www/adaptive-lighting-curve-card.js
+```bash
+./scripts/link_into_ha.sh          # symlinks everything into /config
+./scripts/link_into_ha.sh --dry-run   # preview first, if you'd rather
 ```
 
-Symlinks should be created on the Home Assistant host itself, not via a network share — see `CLAUDE.md`.
+This links the blueprint, both `pyscript/` directories, and the dashboard card into place; backs up anything
+already at those paths (renamed with a `.bak-<timestamp>` suffix) rather than overwriting it; and is safe to
+re-run. Pass a directory as an argument to target something other than `/config`.
+
+Note: the blueprint's inputs have changed (`scene_sensor`/`scene_name_prefix` → `scene_template`/
+`extra_triggers`) — every room automation using the old inputs will show as misconfigured once this is linked
+in, until updated. Worth doing deliberately, room by room, rather than all at once.
 
 For the dashboard card, register `www/adaptive-lighting-curve-card.js` as a Lovelace resource (Settings →
 Dashboards → Resources → Add Resource, URL `/local/adaptive-lighting-curve-card.js`, type JavaScript Module) and
