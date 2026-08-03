@@ -115,6 +115,40 @@ own automation, not just to the blueprint in this repo. The blueprint
 is one consumer of them (and only of two of the three, currently), not
 their reason for existing.
 
+**Considered and explicitly rejected: extracting target resolution**
+(`resolved_entities`/`scope_entities`, duplicated three times in the
+blueprint - once more in the `manual` trigger, structurally unfixable
+since triggers can't call services either). Two blockers, either of
+which alone would kill it: (1) `condition:` reads `resolved_entities`
+directly and `scene_active` transitively via `scope_entities`, and
+`condition:` runs *before* `action:` - a service call's response isn't
+available yet at that point, so adopting one would mean moving those
+`condition:` checks into an early `action:` bail-out instead, which
+changes `mode: restart` behaviour (a trigger that used to be cleanly
+rejected by `condition:` would instead interrupt an in-flight two-step
+transition before its own bail-out stops it) and erodes the trace-
+visibility benefit lesson upfront in "The architectural split" already
+cites as *why* this stuff stays in `condition:`. (2) A Jinja-macro
+alternative (viable in `trigger:`/`condition:`/`variables:` where a
+service categorically isn't, via the `to_json`/`from_json` round-trip
+lesson 1 describes) would still mean adding a new required manual
+install step (`custom_templates/*.jinja`, restart needed per lesson 2)
+to a blueprint that's currently fully self-contained. (3) A third
+option was also raised and rejected: registering a genuine Python-
+backed global Jinja function (callable bare, like `is_state()`, no
+`{% import %}` and no `to_json` round-trip needed, since it'd return a
+real list directly). Confirmed technically possible - a real published
+integration (PiotrMachowski's Custom Templates) does exactly this -
+but its own README warns it "tampers with internal code of Home
+Assistant which *might* cause some unforeseen issues (especially after
+HA updates)"; there's no documented/supported HA extension point for
+this, unlike `hass.services.async_register` or the `custom_templates/`
+convention. Monkey-patching the one shared template engine every
+automation/sensor/script on the instance depends on was judged not
+worth it for this. Decided not worth any of the three costs - the
+blueprint's inline copies stay as they are. Don't re-propose without
+new information changing this trade-off.
+
 `curve.py`'s math is also available as sensors (`sensor.py`), not just
 the `compute_curve` service - optional, only set up if the integration
 is configured with schedule `input_datetime` entities. This is a
