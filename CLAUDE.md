@@ -231,16 +231,15 @@ custom_templates file and a packages/*.yaml you also need to copy".
   card are still symlinked. Re-running `scripts/link_into_ha.sh` on
   the host is what actually gets pyscript's files in place for the
   spike above - they were never deployed before now.
-- **The dev/test sync loop is now automated**: `scripts/sync_and_link.sh`
-  + `packages/adaptive_lighting_sync.yaml` poll this repo every 15
-  minutes (`shell_command` + `time_pattern` automation) and re-run
-  `link_into_ha.sh` on new commits - see README's "Staying up to date
-  automatically". Chosen over a GitHub Actions webhook specifically to
-  avoid exposing this HA instance to the internet; the user picked
-  polling over a webhook when asked. Not yet exercised live - the
-  first `link_into_ha.sh` run (to deploy the sync package itself) and
-  the restart it needs are both still manual, same bootstrapping
-  problem the mechanism has for itself.
+- **The dev/test sync loop** (polling this repo for new commits and
+  re-running `link_into_ha.sh` automatically) is set up directly on
+  the live HA instance - a `shell_command` + `time_pattern` automation,
+  not committed here. It's specific to this user's instance and this
+  repo's checkout path (`/config/repos/adaptive_lighting`), not
+  something worth publishing - don't re-add it to the repo without
+  checking first (see git history around the "Rewire blueprint to
+  pyscript, add git auto-sync..." commit for what that looked like and
+  why it was reverted).
 - `dashboard/preview.html` + `generate_preview_data.py` let you see the
   actual Lovelace card rendered with synthetic data, without a running
   HA instance - regenerate data with

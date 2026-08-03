@@ -131,7 +131,6 @@ echo
 
 copy "blueprints/automation/danspencer/adaptive_lighting.yaml" \
      "blueprints/automation/danspencer/adaptive_lighting.yaml"
-copy "packages/adaptive_lighting_sync.yaml" "packages/adaptive_lighting_sync.yaml"
 link "pyscript/modules/adaptive_lighting" "pyscript/modules/adaptive_lighting"
 link "pyscript/apps/adaptive_lighting"    "pyscript/apps/adaptive_lighting"
 link "www/adaptive-lighting-curve-card.js" "www/adaptive-lighting-curve-card.js"

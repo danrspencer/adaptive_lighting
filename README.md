@@ -102,11 +102,6 @@ www/adaptive-lighting-curve-card.js
     Custom Lovelace card rendering the day's curve as a rendered-colour
     chart, with a live "now" marker.
 
-packages/adaptive_lighting_sync.yaml
-    shell_command + automation that polls this repo for new commits
-    and redeploys automatically. See "Staying up to date automatically"
-    below.
-
 dashboard/
     house-settings-card.yaml   card config to add to a view
     preview.html                renders the real card against synthetic
@@ -130,13 +125,14 @@ On the Home Assistant host itself (not via a network share — see `CLAUDE.md` f
 under `/config` (e.g. via the Advanced SSH & Web Terminal add-on) and run:
 
 ```bash
-./scripts/link_into_ha.sh          # symlinks everything into /config
+./scripts/link_into_ha.sh          # deploys everything into /config
 ./scripts/link_into_ha.sh --dry-run   # preview first, if you'd rather
 ```
 
-This links the blueprint, both `pyscript/` directories, and the dashboard card into place; backs up anything
-already at those paths (renamed with a `.bak-<timestamp>` suffix) rather than overwriting it; and is safe to
-re-run. Pass a directory as an argument to target something other than `/config`.
+This copies the blueprint into place (Home Assistant's blueprint loader doesn't reliably read a symlinked one —
+see `CLAUDE.md`) and symlinks both `pyscript/` directories and the dashboard card; backs up anything already at
+those paths (renamed with a `.bak-<timestamp>` suffix) rather than overwriting it; and is safe to re-run. Pass a
+directory as an argument to target something other than `/config`.
 
 Note: the blueprint's inputs have changed (`scene_sensor`/`scene_name_prefix` → `scene_template`/
 `extra_triggers`) — every room automation using the old inputs will show as misconfigured once this is linked
@@ -145,24 +141,6 @@ in, until updated. Worth doing deliberately, room by room, rather than all at on
 For the dashboard card, register `www/adaptive-lighting-curve-card.js` as a Lovelace resource (Settings →
 Dashboards → Resources → Add Resource, URL `/local/adaptive-lighting-curve-card.js`, type JavaScript Module) and
 add the card config from `dashboard/house-settings-card.yaml` to a view.
-
-### Staying up to date automatically
-
-`packages/adaptive_lighting_sync.yaml` (linked in by the step above, since `packages/` is part of `/config`)
-adds a `shell_command` and a `time_pattern` automation that runs `git pull` in the repo every 15 minutes and
-re-runs `link_into_ha.sh` if anything changed — so a `git push` to this repo shows up in Home Assistant on its
-own, no manual re-run needed after the first install. It polls rather than reacting to a webhook, so there's no
-need to expose Home Assistant to the internet.
-
-Two things this can't do for itself:
-- **Bootstrapping**: the automation can't deploy itself before it exists, so the first `link_into_ha.sh` run has
-  to be manual (the step above).
-- **New `shell_command` entries need a full HA restart**, not just a config/automation reload, before the
-  sync automation can actually run.
-
-`shell_command` runs inside whichever container hosts Home Assistant Core, which may not have `git` installed
-depending on your setup — if the sync automation's traces show a failure, check `ha_get_logs` for the actual
-error before assuming something else is wrong.
 
 ## Configuration
 
