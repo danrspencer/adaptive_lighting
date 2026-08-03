@@ -7,25 +7,17 @@ needs to command, instead of computing them in ~150 lines of Jinja.
 All the actual logic lives in pyscript/modules/adaptive_lighting - this
 file is just the thin adapter to real Home Assistant state.
 
-NOT YET VALIDATED against a running pyscript install - this is Phase 1
-of the plan, written before the Phase 0 spike. Before trusting it,
-confirm:
-  - is_state / state_attr / device_id / labels are available as plain
-    pyscript globals with these names/signatures (they're assumed to
-    mirror the same-named Jinja template functions).
-  - `import adaptive_lighting` resolves to pyscript/modules/adaptive_lighting
-    from an app under pyscript/apps/.
-  - supports_response="only" makes the dict below available via
-    response_variable in the calling automation's next action step,
-    and confirm whether it comes back as dict-style or attribute-style
-    access in templates (plan assumes `{{ plan.groups }}` works; may
-    need `{{ plan['groups'] }}` instead).
-  - _context_user_id below is a guess at how to reach an arbitrary
-    entity's current state context from pyscript - unlike the other
-    four lookups, this one doesn't obviously mirror an existing Jinja
-    global (Jinja gets it via `states[entity_id].context.user_id`, the
-    full state object). Confirm `hass` is reachable this way, or find
-    the pyscript-native equivalent.
+Must be named __init__.py, not app.py - pyscript only autoloads a
+folder-based app from exactly `pyscript/apps/<name>/__init__.py`;
+anything else in the folder is silently ignored (no error, no log
+line). Cost a fair amount of confused debugging to find - see
+CLAUDE.md lesson 8.
+
+_context_user_id below is still the one unverified part of the
+original Phase 0 spike - states[entity_id].context.user_id is how
+Jinja gets it; there's no obviously-equivalent pyscript global, so
+this guesses hass.states.get(entity_id).context.user_id instead. Not
+yet exercised by a real manual-override scenario.
 """
 
 from adaptive_lighting import EntityLookup, build_groups
