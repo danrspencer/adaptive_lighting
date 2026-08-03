@@ -93,6 +93,13 @@ Both services are deliberately written and documented (see
 own lighting automation, not just to the blueprint in this repo. The
 blueprint is one consumer of them, not their reason for existing.
 
+`curve.py`'s math is also available as sensors (`sensor.py`), not just
+the `compute_curve` service - optional, only set up if the integration
+is configured with schedule `input_datetime` entities. This is a
+genuine replacement for a Jinja `packages/*.yaml` day-phase setup, not
+just a service wrapper - see "Current status" below for what it covers
+and what it deliberately leaves out.
+
 ## Hard-won lessons (don't repeat these)
 
 Lessons 7-9 are about pyscript specifically, from when that was this
@@ -335,11 +342,28 @@ not just proposed.
   `adaptive_lighting_helpers.compute_lighting_groups` instead of
   `pyscript.compute_lighting_groups` - a one-line change, same
   `response_variable`-based flow as before.
+- **`sensor.py` - optional day-phase/curve sensors**, a native
+  replacement for the live `packages/adaptive_lighting.yaml` Jinja
+  setup (ported faithfully from reading that actual file - same
+  boundary logic, same sunset clamp, same entity IDs). Only set up if
+  the config entry has schedule `input_datetime` entities configured
+  (see `config_flow.py` - all five fields are optional, so the two
+  services still work with zero config). Deliberately left out the two
+  household-specific parts of the live package that don't belong in a
+  reusable integration: the nightlight/sleep-mode brightness override
+  (referenced a specific `input_select` entity) and the IKEA-label
+  diagnostic sensor. One coordinator (`DataUpdateCoordinator`, 60s
+  interval, plus immediate refresh on the tracked entities'/`sun.sun`'s
+  state changes) recomputes everything in one pass each time rather
+  than staggering cadences the way the Jinja version did - `curve.py`'s
+  functions are cheap enough that recomputing the 289-point curve every
+  60 seconds is a non-issue. **Also untested live** - same caveat as
+  the adapter functions below.
 - **Not yet deployed or tested against a live Home Assistant instance
   at all.** Everything above is written, unit-tested (`pytest`, 20/20
   passing), and committed - but this session ran out before actually
   installing the new integration on the live instance and confirming
-  the services register. Next steps, in order:
+  the services (or the sensors) register. Next steps, in order:
   1. Get `custom_components/adaptive_lighting_helpers/` onto the live
      host - either `scripts/link_into_ha.sh` (proven to work this way
      for the blueprint and, before it was removed, pyscript) or
@@ -348,11 +372,18 @@ not just proposed.
      since it's what end users would actually do).
   2. Full restart (new `custom_components` aren't discovered by a
      reload), then add via Settings → Devices & Services → Add
-     Integration → "Adaptive Lighting Helpers".
+     Integration → "Adaptive Lighting Helpers" - filling in the five
+     schedule fields with this instance's actual `input_datetime.morning`/
+     `day`/`evening_earliest`/`evening_latest`/`night` entities if the
+     sensors are wanted too.
   3. Check `ha_list_services(domain="adaptive_lighting_helpers")` for
      both services, then actually call `compute_lighting_groups`
      against a real light before trusting the `__init__.py` adapter
-     guesses above.
+     guesses above. If sensors were configured, check they actually
+     appear at the forced entity_ids (`sensor.morning_start` etc.) -
+     if the live `packages/adaptive_lighting.yaml` sensors of the same
+     name are still active at that point, expect a `_2` suffix instead;
+     see the note in `sensor.py`'s docstring.
   4. **Clean up the live instance's pyscript-era leftovers**, all of
      which are now dead weight: the old `/config/pyscript/apps/adaptive_lighting_app`
      and `/config/pyscript/modules/adaptive_lighting` directories, and
@@ -361,6 +392,12 @@ not just proposed.
      config). Whether to also uninstall the pyscript HACS integration
      itself depends on whether anything else on that instance still
      uses it - check first.
+  5. **Once the new sensors are confirmed working, retire the live
+     `packages/adaptive_lighting.yaml`** (or at least its generic
+     boundary/phase/brightness/curve parts - the household-specific
+     nightlight and IKEA-diagnostic sensors have no replacement here
+     and would need to move somewhere else first, or just stay as a
+     much smaller leftover package).
 - **The dev/test sync loop** (polling this repo for new commits and
   re-running `link_into_ha.sh` automatically) is set up directly on
   the live HA instance - a `shell_command` + `time_pattern` automation

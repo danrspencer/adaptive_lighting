@@ -5,6 +5,9 @@ Standalone Home Assistant services for adaptive-lighting computation:
 brightness/colour-temperature curve math (curve.py) and per-light
 grouping - reachability, multiplier bucketing, tolerance checks,
 manual-override protection, two-step transition routing (grouping.py).
+Optionally also sets up day-phase/curve sensors (sensor.py) as a
+native replacement for a Jinja packages/*.yaml setup, if the config
+entry has schedule entities configured - see config_flow.py.
 
 Designed to work with the adaptive_lighting blueprint in this repo,
 but not coupled to it: call adaptive_lighting_helpers.compute_lighting_groups
@@ -14,8 +17,9 @@ services.yaml (visible in Developer Tools -> Actions) for the full
 contract of each service on its own terms.
 
 curve.py and grouping.py have no Home Assistant dependency - this file
-is the only place that touches `hass`, translating between real HA
-state/registries and the plain functions those modules expose.
+(and sensor.py) are the only places that touch `hass`, translating
+between real HA state/registries and the plain functions those modules
+expose.
 """
 
 from __future__ import annotations
@@ -25,6 +29,7 @@ from typing import Any
 
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
@@ -33,6 +38,18 @@ from homeassistant.helpers import entity_registry as er
 from .const import DOMAIN
 from .curve import brightness_for_phase, kelvin_for_phase, phase_at
 from .grouping import EntityLookup, build_groups
+
+SCHEDULE_ENTITY_KEYS = (
+    "morning_entity",
+    "day_entity",
+    "evening_earliest_entity",
+    "evening_latest_entity",
+    "night_entity",
+)
+
+
+def _has_schedule_config(entry: ConfigEntry) -> bool:
+    return any(entry.data.get(key) for key in SCHEDULE_ENTITY_KEYS)
 
 COMPUTE_LIGHTING_GROUPS_SCHEMA = vol.Schema(
     {
@@ -165,10 +182,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         schema=COMPUTE_CURVE_SCHEMA,
         supports_response=SupportsResponse.ONLY,
     )
+
+    if _has_schedule_config(entry):
+        await hass.config_entries.async_forward_entry_setups(entry, [Platform.SENSOR])
+
     return True
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.services.async_remove(DOMAIN, "compute_lighting_groups")
     hass.services.async_remove(DOMAIN, "compute_curve")
+
+    if _has_schedule_config(entry):
+        return await hass.config_entries.async_unload_platforms(entry, [Platform.SENSOR])
+
     return True

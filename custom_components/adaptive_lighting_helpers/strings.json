@@ -3,7 +3,14 @@
     "step": {
       "user": {
         "title": "Adaptive Lighting Helpers",
-        "description": "Registers the adaptive_lighting_helpers.compute_lighting_groups and adaptive_lighting_helpers.compute_curve services. Nothing to configure - just confirm to set up."
+        "description": "Registers the adaptive_lighting_helpers.compute_lighting_groups and adaptive_lighting_helpers.compute_curve services - nothing below is required for those. Optionally, fill in these five input_datetime helpers to also get day-phase/curve sensors (morning_start, day_start, evening_start, night_start, day_phase, adaptive_lighting_curve, solar_adaptive_lighting_brightness, solar_adaptive_lighting_color_temperature) computed the same way, no separate YAML package needed. Leave them blank to set up just the services.",
+        "data": {
+          "morning_entity": "Morning start time",
+          "day_entity": "Day start time",
+          "evening_earliest_entity": "Evening earliest start time",
+          "evening_latest_entity": "Evening latest start time",
+          "night_entity": "Night start time"
+        }
       }
     },
     "abort": {

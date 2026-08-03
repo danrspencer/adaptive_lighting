@@ -51,6 +51,27 @@ response_variable: now
 # now.phase / now.brightness / now.kelvin
 ```
 
+### Optional: day-phase/curve sensors
+
+If you'd rather have this running continuously as sensors than call `compute_curve` yourself, fill in the five
+`input_datetime` fields when setting up the integration (Settings → Devices & Services → Adaptive Lighting
+Helpers → Configure) — morning/day/night start times, and evening's earliest/latest bound (evening itself tracks
+sunset, clamped between those two). Leave them blank and you just get the two services above with nothing else.
+
+Filling them in adds, computed the same way `compute_curve` computes them, refreshed every 60 seconds:
+
+| Entity | What it is |
+|---|---|
+| `sensor.morning_start` / `day_start` / `evening_start` / `night_start` | Today's boundary, state + `attributes.timestamp` |
+| `sensor.day_phase` | Morning / Day / Evening / Night |
+| `sensor.solar_adaptive_lighting_brightness` | Target brightness right now (0-255) |
+| `sensor.solar_adaptive_lighting_color_temperature` | Target colour temperature right now (Kelvin) |
+| `sensor.adaptive_lighting_curve` | `attributes.points`: the full day as 289 `{t, brightness, kelvin}` samples — what the [dashboard card](#previewing-the-dashboard-card) reads |
+
+These entity IDs are forced to match what a Jinja `packages/*.yaml` day-phase setup would typically use (rather
+than the usual integration-prefixed auto-generated ones), so this is meant as a drop-in replacement for one — if
+you're migrating from your own version of that, remove it first or these will get suffixed `_2`.
+
 ## The blueprint
 
 Built on the services above, but the two are only loosely coupled — the blueprint just calls
@@ -129,8 +150,10 @@ recovers from dropped commands (a missed Zigbee message, for example) without ma
 
 ```
 custom_components/adaptive_lighting_helpers/
-    __init__.py    registers the two services against real HA state -
-                    the only file in this package with an HA dependency
+    __init__.py    registers the two services against real HA state
+    sensor.py      optional day-phase/curve sensors (see "Optional:
+                   day-phase/curve sensors" above) - only set up if the
+                   config entry has schedule entities configured
     curve.py       brightness/colour-temperature schedule
     grouping.py    reachability, multiplier bucketing, tolerance checks,
                    manual-override protection, two-step/combined routing
@@ -138,7 +161,8 @@ custom_components/adaptive_lighting_helpers/
     translations/  standard HA integration/HACS scaffolding
     curve.py and grouping.py are pure Python, no Home Assistant
     dependency - testable directly, and usable from anywhere that
-    wants the math without the HA service wrapper around it.
+    wants the math without the HA service/sensor wrapper around it.
+    __init__.py and sensor.py are the only files that touch `hass`.
 
 hacs.json
     HACS repository metadata for the integration.
@@ -180,8 +204,9 @@ at all.
 Not yet published to the HACS default store. Add this repository as a HACS custom repository (HACS → the "⋮"
 menu → Custom repositories → this repo's URL, category "Integration"), install, restart Home Assistant (a brand
 new `custom_components` entry needs a restart to be discovered, not just a reload), then add it once via
-Settings → Devices & Services → Add Integration → "Adaptive Lighting Helpers". There's nothing to configure — it
-just registers the two services above.
+Settings → Devices & Services → Add Integration → "Adaptive Lighting Helpers". The setup form is entirely
+optional — leave every field blank to just get the two services above, or fill in the five `input_datetime`
+fields for the day-phase/curve sensors too (see "Optional: day-phase/curve sensors" above).
 
 For local testing before it's on HACS at all, `scripts/link_into_ha.sh` copies
 `custom_components/adaptive_lighting_helpers/` directly onto an HA host over SSH — see the script's own header
