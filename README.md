@@ -13,7 +13,7 @@ Two independent pieces, designed to work together but not coupled to each other:
 
 ## Adaptive Lighting Helpers (the integration)
 
-Two services, each documented in full in `services.yaml` (visible in Home Assistant's Developer Tools → Actions
+Three services, each documented in full in `services.yaml` (visible in Home Assistant's Developer Tools → Actions
 once installed) — call them directly from your own automations or scripts, no blueprint required.
 
 ### `adaptive_lighting_helpers.compute_lighting_groups`
@@ -51,12 +51,30 @@ response_variable: now
 # now.phase / now.brightness / now.kelvin
 ```
 
+### `adaptive_lighting_helpers.compute_scene_coverage`
+
+Given a candidate scene and the entities you want a default behaviour applied to, works out which of those
+entities the scene actually covers — hand covered ones to the scene, apply your default (adaptive lighting or
+anything else) to whatever's left. A scene only counts if it exists and everything it covers is within
+`scope_entities`; a scene reaching outside that scope, or one that doesn't exist, is treated the same as no scene
+at all. Nothing here is specific to adaptive lighting, or even to lighting.
+
+```yaml
+action: adaptive_lighting_helpers.compute_scene_coverage
+data:
+  scene_entity_id: scene.kitchen_night
+  scope_entities: [light.kitchen_1, light.kitchen_2, light.kitchen_strip_effect]
+  target_entities: [light.kitchen_1, light.kitchen_2]
+response_variable: coverage
+# coverage.scene_active / scene_valid / covered_entities / uncovered_entities
+```
+
 ### Optional: day-phase/curve sensors
 
 If you'd rather have this running continuously as sensors than call `compute_curve` yourself, fill in the five
 `input_datetime` fields when setting up the integration (Settings → Devices & Services → Adaptive Lighting
 Helpers → Configure) — morning/day/night start times, and evening's earliest/latest bound (evening itself tracks
-sunset, clamped between those two). Leave them blank and you just get the two services above with nothing else.
+sunset, clamped between those two). Leave them blank and you just get the three services above with nothing else.
 
 Filling them in adds, computed the same way `compute_curve` computes them, refreshed every 60 seconds:
 
@@ -150,19 +168,21 @@ recovers from dropped commands (a missed Zigbee message, for example) without ma
 
 ```
 custom_components/adaptive_lighting_helpers/
-    __init__.py    registers the two services against real HA state
+    __init__.py    registers the three services against real HA state
     sensor.py      optional day-phase/curve sensors (see "Optional:
                    day-phase/curve sensors" above) - only set up if the
                    config entry has schedule entities configured
     curve.py       brightness/colour-temperature schedule
     grouping.py    reachability, multiplier bucketing, tolerance checks,
                    manual-override protection, two-step/combined routing
+    scenes.py      scene-coverage gap filling (apply a scene, then a
+                   default for whatever it doesn't cover)
     manifest.json, config_flow.py, services.yaml, strings.json,
     translations/  standard HA integration/HACS scaffolding
-    curve.py and grouping.py are pure Python, no Home Assistant
-    dependency - testable directly, and usable from anywhere that
-    wants the math without the HA service/sensor wrapper around it.
-    __init__.py and sensor.py are the only files that touch `hass`.
+    curve.py, grouping.py, and scenes.py are pure Python, no Home
+    Assistant dependency - testable directly, and usable from anywhere
+    that wants the math without the HA service/sensor wrapper around
+    it. __init__.py and sensor.py are the only files that touch `hass`.
 
 hacs.json
     HACS repository metadata for the integration.
@@ -205,7 +225,7 @@ Not yet published to the HACS default store. Add this repository as a HACS custo
 menu → Custom repositories → this repo's URL, category "Integration"), install, restart Home Assistant (a brand
 new `custom_components` entry needs a restart to be discovered, not just a reload), then add it once via
 Settings → Devices & Services → Add Integration → "Adaptive Lighting Helpers". The setup form is entirely
-optional — leave every field blank to just get the two services above, or fill in the five `input_datetime`
+optional — leave every field blank to just get the three services above, or fill in the five `input_datetime`
 fields for the day-phase/curve sensors too (see "Optional: day-phase/curve sensors" above).
 
 For local testing before it's on HACS at all, `scripts/link_into_ha.sh` copies

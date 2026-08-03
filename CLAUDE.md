@@ -51,9 +51,19 @@ don't reintroduce that collision.
 
 **Stays in the blueprint (Jinja/YAML):**
 - All triggers, conditions, target resolution (`resolved_entities`),
-  occupancy detection (`occupied`), scene compatibility checking
-  (`scene_active`/`scene_valid`), and the action *structure* (which
+  occupancy detection (`occupied`), and the action *structure* (which
   service to call, on what target).
+- Scene compatibility checking (`scene_active`/`scene_valid`) is a
+  partial exception - the *logic* now also exists as a standalone
+  service (`compute_scene_coverage`, see below), but the blueprint's
+  own inline Jinja version was deliberately left in place rather than
+  rewired to call it. Two reasons: it's used by a `condition:` block
+  (see lesson 4 - conditions can't call services at all), and this
+  repo's two existing services hadn't even been confirmed working
+  against a live instance yet when this one was added - not the moment
+  to add a second live dependency to the blueprint on top of an
+  unconfirmed first one. Revisit once `compute_lighting_groups` is
+  actually confirmed working live.
 - The blueprint's `manual` trigger (context.user_id on the *triggering*
   state change) only ever blocks the one automation run where it fires
   - it has no memory, so it does NOT stop a later `adaptive` tick from
@@ -88,10 +98,22 @@ belongs as a documented service in its own right, not duplicated
 Jinja someone has to copy into `custom_templates/` and a
 `packages/*.yaml`.
 
-Both services are deliberately written and documented (see
+**Also moved there, as of the most recent session:** scene-coverage
+gap filling (`scenes.py`, exposed as `compute_scene_coverage`) - "does
+this scene exist, is it within scope, and which of my target entities
+does it leave uncovered" - ported from what used to be the blueprint's
+own `desired_scene`/`scene_covered_entities`/`scene_valid`/
+`scene_active`/`adaptive_target_entities` variables. Explicitly generic:
+nothing about it is specific to adaptive lighting, or lighting at all -
+"apply a scene, then a default for whatever it doesn't cover" is a
+reusable pattern on its own. **The blueprint was NOT rewired to call
+it** - see the note under "Stays in the blueprint" above for why.
+
+All three services are deliberately written and documented (see
 `services.yaml`) as standalone tools - useful to anyone building their
-own lighting automation, not just to the blueprint in this repo. The
-blueprint is one consumer of them, not their reason for existing.
+own automation, not just to the blueprint in this repo. The blueprint
+is one consumer of them (and only of two of the three, currently), not
+their reason for existing.
 
 `curve.py`'s math is also available as sensors (`sensor.py`), not just
 the `compute_curve` service - optional, only set up if the integration
@@ -322,13 +344,17 @@ some other context - not because pyscript is still part of this repo.
 as an "Integration" category repo, `hacs.json` at repo root). `pyscript/`
 no longer exists in this repo at all. This resolves the "open question"
 that used to be documented in this section - decided and implemented,
-not just proposed.
+not just proposed. A third service, `compute_scene_coverage` (see
+`scenes.py`), was added in the same push once the pattern was
+established - the integration now covers all three genuinely reusable
+pieces that used to be blueprint-only Jinja: grouping, curve math, and
+scene-coverage gap filling.
 
-- `curve.py` and `grouping.py` - unchanged pure Python, just relocated
-  into the integration package. Same tests, same behaviour, still no
-  Home Assistant dependency (see `tests/conftest.py`'s comment for how
-  tests import them without triggering the integration's own
-  `__init__.py`, which does need `homeassistant`).
+- `curve.py`, `grouping.py`, and `scenes.py` - unchanged/new pure
+  Python, no Home Assistant dependency, unit-tested (`pytest`, 26/26
+  passing). `tests/conftest.py`'s comment explains how tests import
+  them without triggering the integration's own `__init__.py`, which
+  does need `homeassistant`.
 - `custom_components/adaptive_lighting_helpers/__init__.py` - the thin
   HA adapter (equivalent to the old pyscript app), built from what was
   actually confirmed during the pyscript attempt: `is_state`/`state_attr`
@@ -360,7 +386,7 @@ not just proposed.
   60 seconds is a non-issue. **Also untested live** - same caveat as
   the adapter functions below.
 - **Not yet deployed or tested against a live Home Assistant instance
-  at all.** Everything above is written, unit-tested (`pytest`, 20/20
+  at all.** Everything above is written, unit-tested (`pytest`, 26/26
   passing), and committed - but this session ran out before actually
   installing the new integration on the live instance and confirming
   the services (or the sensors) register. Next steps, in order:
@@ -377,7 +403,7 @@ not just proposed.
      `day`/`evening_earliest`/`evening_latest`/`night` entities if the
      sensors are wanted too.
   3. Check `ha_list_services(domain="adaptive_lighting_helpers")` for
-     both services, then actually call `compute_lighting_groups`
+     all three services, then actually call `compute_lighting_groups`
      against a real light before trusting the `__init__.py` adapter
      guesses above. If sensors were configured, check they actually
      appear at the forced entity_ids (`sensor.morning_start` etc.) -

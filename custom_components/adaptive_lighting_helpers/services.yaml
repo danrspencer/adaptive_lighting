@@ -116,3 +116,47 @@ compute_curve:
       description: Instant to evaluate, as a unix timestamp. Defaults to now.
       selector:
         number:
+
+compute_scene_coverage:
+  name: Compute scene coverage
+  description: >-
+    Given a candidate scene and the entities you want a "default"
+    behaviour applied to, works out which of those entities the scene
+    actually covers - hand covered ones to the scene and apply your
+    default (adaptive lighting, or anything else) only to what's left.
+    A scene only counts if it exists and everything it covers is within
+    scope_entities; a scene reaching outside that scope, or one that
+    doesn't exist (a typo, a renamed scene), is treated the same as no
+    scene at all. Standalone - nothing here is specific to adaptive
+    lighting, or even to lighting.
+  fields:
+    scene_entity_id:
+      name: Scene
+      description: >-
+        The scene to check, if any. Leave blank to always get "no
+        scene" behaviour (everything in target_entities comes back
+        uncovered).
+      selector:
+        entity:
+          domain: scene
+    scope_entities:
+      name: Scope entities
+      description: >-
+        Every entity the scene is allowed to touch - typically the
+        entities you're controlling, plus sibling entities on the same
+        devices (e.g. a light strip's effect selector). A scene
+        covering anything outside this list is treated as invalid.
+      required: true
+      selector:
+        entity:
+          multiple: true
+    target_entities:
+      name: Target entities
+      description: >-
+        The entities you want a default behaviour applied to - the
+        response's uncovered_entities is this list minus whatever the
+        scene covers.
+      required: true
+      selector:
+        entity:
+          multiple: true

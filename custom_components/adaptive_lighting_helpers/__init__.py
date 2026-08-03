@@ -2,24 +2,25 @@
 Adaptive Lighting Helpers.
 
 Standalone Home Assistant services for adaptive-lighting computation:
-brightness/colour-temperature curve math (curve.py) and per-light
+brightness/colour-temperature curve math (curve.py), per-light
 grouping - reachability, multiplier bucketing, tolerance checks,
-manual-override protection, two-step transition routing (grouping.py).
-Optionally also sets up day-phase/curve sensors (sensor.py) as a
-native replacement for a Jinja packages/*.yaml setup, if the config
-entry has schedule entities configured - see config_flow.py.
+manual-override protection, two-step transition routing (grouping.py) -
+and scene-coverage gap filling, for "apply a scene, then a default for
+whatever it doesn't cover" (scenes.py). Optionally also sets up
+day-phase/curve sensors (sensor.py) as a native replacement for a
+Jinja packages/*.yaml setup, if the config entry has schedule entities
+configured - see config_flow.py.
 
 Designed to work with the adaptive_lighting blueprint in this repo,
-but not coupled to it: call adaptive_lighting_helpers.compute_lighting_groups
-or adaptive_lighting_helpers.compute_curve directly from your own
+but not coupled to it: call any of the services directly from your own
 automations/scripts if that's more useful to you. See README.md and
 services.yaml (visible in Developer Tools -> Actions) for the full
 contract of each service on its own terms.
 
-curve.py and grouping.py have no Home Assistant dependency - this file
-(and sensor.py) are the only places that touch `hass`, translating
-between real HA state/registries and the plain functions those modules
-expose.
+curve.py, grouping.py, and scenes.py have no Home Assistant
+dependency - this file (and sensor.py) are the only places that touch
+`hass`, translating between real HA state/registries and the plain
+functions those modules expose.
 """
 
 from __future__ import annotations
@@ -38,6 +39,7 @@ from homeassistant.helpers import entity_registry as er
 from .const import DOMAIN
 from .curve import brightness_for_phase, kelvin_for_phase, phase_at
 from .grouping import EntityLookup, build_groups
+from .scenes import SceneLookup, compute_scene_coverage
 
 SCHEDULE_ENTITY_KEYS = (
     "morning_entity",
@@ -50,6 +52,7 @@ SCHEDULE_ENTITY_KEYS = (
 
 def _has_schedule_config(entry: ConfigEntry) -> bool:
     return any(entry.data.get(key) for key in SCHEDULE_ENTITY_KEYS)
+
 
 COMPUTE_LIGHTING_GROUPS_SCHEMA = vol.Schema(
     {
@@ -70,6 +73,14 @@ COMPUTE_CURVE_SCHEMA = vol.Schema(
         vol.Required("evening"): vol.Coerce(float),
         vol.Required("night"): vol.Coerce(float),
         vol.Optional("at"): vol.Coerce(float),
+    }
+)
+
+COMPUTE_SCENE_COVERAGE_SCHEMA = vol.Schema(
+    {
+        vol.Optional("scene_entity_id"): cv.entity_id,
+        vol.Required("scope_entities"): [cv.entity_id],
+        vol.Required("target_entities"): [cv.entity_id],
     }
 )
 
@@ -116,6 +127,17 @@ def _build_lookup(hass: HomeAssistant) -> EntityLookup:
         labels=labels,
         context_user_id=context_user_id,
     )
+
+
+def _build_scene_lookup(hass: HomeAssistant) -> SceneLookup:
+    def exists(scene_entity_id: str) -> bool:
+        return hass.states.get(scene_entity_id) is not None
+
+    def covered_entities(scene_entity_id: str) -> list:
+        s = hass.states.get(scene_entity_id)
+        return list(s.attributes.get("entity_id", [])) if s else []
+
+    return SceneLookup(exists=exists, covered_entities=covered_entities)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -168,6 +190,25 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "kelvin": kelvin_for_phase(phase, at, evening, day, night),
         }
 
+    async def compute_scene_coverage_service(call: ServiceCall) -> ServiceResponse:
+        """adaptive_lighting_helpers.compute_scene_coverage
+
+        Returns: {"scene_active", "scene_valid", "covered_entities",
+        "uncovered_entities"} - see services.yaml for field docs.
+        """
+        result = compute_scene_coverage(
+            scene_entity_id=call.data.get("scene_entity_id"),
+            scope_entities=call.data["scope_entities"],
+            target_entities=call.data["target_entities"],
+            lookup=_build_scene_lookup(hass),
+        )
+        return {
+            "scene_active": result.scene_active,
+            "scene_valid": result.scene_valid,
+            "covered_entities": result.covered_entities,
+            "uncovered_entities": result.uncovered_entities,
+        }
+
     hass.services.async_register(
         DOMAIN,
         "compute_lighting_groups",
@@ -182,6 +223,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         schema=COMPUTE_CURVE_SCHEMA,
         supports_response=SupportsResponse.ONLY,
     )
+    hass.services.async_register(
+        DOMAIN,
+        "compute_scene_coverage",
+        compute_scene_coverage_service,
+        schema=COMPUTE_SCENE_COVERAGE_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
 
     if _has_schedule_config(entry):
         await hass.config_entries.async_forward_entry_setups(entry, [Platform.SENSOR])
@@ -192,6 +240,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.services.async_remove(DOMAIN, "compute_lighting_groups")
     hass.services.async_remove(DOMAIN, "compute_curve")
+    hass.services.async_remove(DOMAIN, "compute_scene_coverage")
 
     if _has_schedule_config(entry):
         return await hass.config_entries.async_unload_platforms(entry, [Platform.SENSOR])

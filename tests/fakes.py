@@ -1,10 +1,11 @@
-"""Fake EntityLookup for tests - a plain dict-backed stand-in for real
-Home Assistant state, so grouping.py can be exercised without a
+"""Fake lookups for tests - plain dict-backed stand-ins for real Home
+Assistant state, so grouping.py/scenes.py can be exercised without a
 running HA instance."""
 
 from typing import Optional
 
 from grouping import EntityLookup
+from scenes import SceneLookup
 
 
 def make_lookup(states: dict, device_of: Optional[dict] = None, labels_of: Optional[dict] = None) -> EntityLookup:
@@ -39,3 +40,17 @@ def make_lookup(states: dict, device_of: Optional[dict] = None, labels_of: Optio
         labels=labels,
         context_user_id=context_user_id,
     )
+
+
+def make_scene_lookup(scenes: dict) -> SceneLookup:
+    """scenes: {scene_entity_id: [covered_entity_id, ...]} - a scene
+    entity_id present as a key exists (even with an empty list); one
+    absent from the dict doesn't exist at all."""
+
+    def exists(scene_entity_id):
+        return scene_entity_id in scenes
+
+    def covered_entities(scene_entity_id):
+        return scenes.get(scene_entity_id, [])
+
+    return SceneLookup(exists=exists, covered_entities=covered_entities)
