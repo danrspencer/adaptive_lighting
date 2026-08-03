@@ -5,22 +5,20 @@
 # another machine over a network share points at a path meaningful to
 # that machine, not to Home Assistant. See CLAUDE.md for the full story.
 #
-# The blueprint is COPIED, not symlinked: Home Assistant's blueprint
-# loader failed to read a symlinked blueprint on this setup (returned
-# "Blueprint body could not be read or parsed", even though the file
-# was listed) - plausibly an AppArmor/container-boundary issue between
-# whatever add-on container created the symlink and the core
-# homeassistant container that reads it. A plain copy fixed it
-# immediately. See CLAUDE.md lesson 7.
+# The blueprint and pyscript are both COPIED, not symlinked: Home
+# Assistant's blueprint loader failed to read a symlinked blueprint on
+# this setup (returned "Blueprint body could not be read or parsed",
+# even though the file was listed), and pyscript showed the same
+# symptom - no pyscript.compute_lighting_groups service, no error, no
+# log line of any kind, even after pyscript.reload - plausibly an
+# AppArmor/container-boundary issue between whatever add-on container
+# created the symlink and the core homeassistant container that reads
+# it. A plain copy fixed the blueprint immediately; pyscript gets the
+# same treatment now. See CLAUDE.md lesson 7.
 #
-# pyscript and the dashboard card are still SYMLINKED, deliberately -
-# pyscript's Python import machinery and Lovelace's static-file serving
-# may not hit the same restriction the blueprint loader did (different
-# component, different container). This script now doubles as the test
-# of that: if pyscript.compute_lighting_groups works after linking,
-# symlinks are fine for it; if it silently fails to import or the
-# service never registers, switch pyscript to `copy` too, the same way
-# the blueprint was.
+# The dashboard card is still SYMLINKED - untested so far, but if it
+# turns out to have the same problem (a stale/missing card in the
+# Lovelace resource that doesn't update), switch it to `copy` too.
 #
 # Existing regular files at a copied path are backed up (renamed with
 # a .bak-<timestamp> suffix) rather than overwritten, but only if their
@@ -102,9 +100,16 @@ copy() {
     return
   fi
 
-  if [ -e "$dest" ] && [ ! -L "$dest" ] && cmp -s "$src" "$dest"; then
-    echo "OK      $2 (already up to date)"
-    return
+  if [ -d "$src" ]; then
+    if [ -e "$dest" ] && [ ! -L "$dest" ] && diff -rq "$src" "$dest" >/dev/null 2>&1; then
+      echo "OK      $2 (already up to date)"
+      return
+    fi
+  else
+    if [ -e "$dest" ] && [ ! -L "$dest" ] && cmp -s "$src" "$dest"; then
+      echo "OK      $2 (already up to date)"
+      return
+    fi
   fi
 
   if [ -e "$dest" ]; then
@@ -118,7 +123,7 @@ copy() {
   echo "COPY    $2"
   if [ "$DRY_RUN" = 0 ]; then
     mkdir -p "$(dirname "$dest")"
-    cp "$src" "$dest"
+    cp -r "$src" "$dest"
   fi
 }
 
@@ -131,8 +136,8 @@ echo
 
 copy "blueprints/automation/danspencer/adaptive_lighting.yaml" \
      "blueprints/automation/danspencer/adaptive_lighting.yaml"
-link "pyscript/modules/adaptive_lighting" "pyscript/modules/adaptive_lighting"
-link "pyscript/apps/adaptive_lighting"    "pyscript/apps/adaptive_lighting"
+copy "pyscript/modules/adaptive_lighting" "pyscript/modules/adaptive_lighting"
+copy "pyscript/apps/adaptive_lighting"    "pyscript/apps/adaptive_lighting"
 link "www/adaptive-lighting-curve-card.js" "www/adaptive-lighting-curve-card.js"
 
 echo

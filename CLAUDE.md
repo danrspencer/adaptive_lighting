@@ -182,16 +182,31 @@ custom_templates file and a packages/*.yaml you also need to copy".
    symlink the same way the SSH add-on's separate container (which
    created it) does, even though both nominally bind-mount `/config`.
    `scripts/link_into_ha.sh` now copies the blueprint instead of
-   symlinking it (see the `copy()` function) - re-copied automatically
-   whenever the source changes, same backup behaviour as `link()`.
-   pyscript and the dashboard card are still symlinked, deliberately,
-   as the live test of whether *they* hit the same restriction - it's
-   a different HA component (pyscript's Python import machinery /
-   Lovelace's static-file serving) in a different container, so there's
-   no reason to assume the failure mode is the same before it's
-   actually been tried. If `pyscript.compute_lighting_groups` fails to
-   register or import cleanly after linking, switch those two `link`
-   calls to `copy` as well and drop this paragraph's "deliberately".
+   symlinking it (see the `copy()` function, which handles both files
+   and directories via `cp -r`) - re-copied automatically whenever the
+   source changes, same backup behaviour as `link()`.
+
+   pyscript hit the exact same wall. It was kept symlinked initially,
+   deliberately, as a live test of whether the restriction was
+   blueprint-specific - different HA component (Python import
+   machinery vs. YAML blueprint loading), plausibly a different
+   container. It wasn't: after symlinking `pyscript/modules/
+   adaptive_lighting` and `pyscript/apps/adaptive_lighting` in and
+   even calling `pyscript.reload`, `pyscript.compute_lighting_groups`
+   never appeared - and unlike the blueprint case, not even an error.
+   No log line at all, at any level, mentioning the app or the
+   service. Switched to `copy` and confirmed working (see "Current
+   status" below). So the restriction isn't blueprint-specific - it's
+   at least blueprint YAML *and* pyscript's file scanning, most likely
+   the container/AppArmor boundary itself rather than anything
+   component-specific.
+
+   The dashboard card (`www/adaptive-lighting-curve-card.js`) is the
+   only thing still symlinked, untested. If it turns out to have the
+   same problem - a stale or missing card, or Lovelace failing to find
+   the resource - switch it to `copy` too and treat the restriction as
+   universal for anything under `/config` rather than component-by-
+   component.
 
 ## Current status / what's not done
 

@@ -129,10 +129,10 @@ under `/config` (e.g. via the Advanced SSH & Web Terminal add-on) and run:
 ./scripts/link_into_ha.sh --dry-run   # preview first, if you'd rather
 ```
 
-This copies the blueprint into place (Home Assistant's blueprint loader doesn't reliably read a symlinked one —
-see `CLAUDE.md`) and symlinks both `pyscript/` directories and the dashboard card; backs up anything already at
-those paths (renamed with a `.bak-<timestamp>` suffix) rather than overwriting it; and is safe to re-run. Pass a
-directory as an argument to target something other than `/config`.
+This copies the blueprint and both `pyscript/` directories into place (Home Assistant doesn't reliably read a
+symlink for either — see `CLAUDE.md`) and symlinks the dashboard card; backs up anything already at those paths
+(renamed with a `.bak-<timestamp>` suffix) rather than overwriting it; and is safe to re-run. Pass a directory as
+an argument to target something other than `/config`.
 
 Note: the blueprint's inputs have changed (`scene_sensor`/`scene_name_prefix` → `scene_template`/
 `extra_triggers`) — every room automation using the old inputs will show as misconfigured once this is linked
