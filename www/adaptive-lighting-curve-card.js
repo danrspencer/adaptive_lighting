@@ -85,6 +85,19 @@ function fmtTime(tSec) {
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
+// sun.sun's next_rising/next_setting are exactly that - "next" - so
+// whichever of the two already happened today has rolled over to
+// tomorrow's occurrence by the time we read it. The chart only ever
+// shows one calendar day, so shift by the one day that lands the
+// timestamp back inside today's window rather than trusting it as-is.
+function sunTimeInWindow(isoString, dayStart, dayEnd) {
+  if (!isoString) return null;
+  let t = new Date(isoString).getTime() / 1000;
+  if (t < dayStart) t += 86400;
+  else if (t >= dayEnd) t -= 86400;
+  return t;
+}
+
 class AdaptiveLightingCurveCard extends HTMLElement {
   static getStubConfig() {
     return { title: 'Adaptive Lighting Curve' };
@@ -153,6 +166,7 @@ class AdaptiveLightingCurveCard extends HTMLElement {
       eveningEarliest && eveningEarliest.state,
       eveningLatest && eveningLatest.state,
       sun && sun.attributes.next_setting,
+      sun && sun.attributes.next_rising,
       pointsRaw,
       brightnessNow && brightnessNow.state,
       kelvinNow && kelvinNow.state,
@@ -293,6 +307,28 @@ class AdaptiveLightingCurveCard extends HTMLElement {
       })
       .join('');
 
+    const sunriseTs = this._sun && sunTimeInWindow(this._sun.attributes.next_rising, dayStart, dayEnd);
+    const sunsetTs = this._sun && sunTimeInWindow(this._sun.attributes.next_setting, dayStart, dayEnd);
+    const sunMarkers = [
+      sunriseTs != null ? ['Sunrise', sunriseTs] : null,
+      sunsetTs != null ? ['Sunset', sunsetTs] : null,
+    ]
+      .filter(Boolean)
+      .map(([, t]) => {
+        const x = xOf(t).toFixed(1);
+        return `
+          <line x1="${x}" y1="${PAD_TOP}" x2="${x}" y2="${BASELINE_Y}" class="sun-line" />
+          <circle cx="${x}" cy="${PAD_TOP}" r="3" class="sun-dot" />
+        `;
+      })
+      .join('');
+    const sunLabel = [
+      sunriseTs != null ? `Sunrise ${fmtTime(sunriseTs)}` : null,
+      sunsetTs != null ? `Sunset ${fmtTime(sunsetTs)}` : null,
+    ]
+      .filter(Boolean)
+      .join(' · ');
+
     const now = Date.now() / 1000;
     const nowInWindow = now >= dayStart && now <= dayEnd;
     const haveNow = nowInWindow && Number.isFinite(this._brightnessNow) && Number.isFinite(this._kelvinNow);
@@ -313,6 +349,7 @@ class AdaptiveLightingCurveCard extends HTMLElement {
         ${bars}
         ${boundaryLines}
         ${hourTicks.join('')}
+        ${sunMarkers}
         ${nowMarker}
         <line x1="${PAD_L}" y1="${BASELINE_Y}" x2="${VB_W - PAD_R}" y2="${BASELINE_Y}" class="axis-line" />
       </svg>
@@ -347,6 +384,9 @@ class AdaptiveLightingCurveCard extends HTMLElement {
         .boundary-label { fill: var(--primary-text-color); font-size: 11px; }
         .now-line { stroke: var(--primary-text-color); stroke-width: 1.5; }
         .now-dot { stroke: var(--card-background-color); stroke-width: 1.5; }
+        .sun-line { stroke: #f5a623; stroke-width: 1.5; opacity: 0.85; }
+        .sun-dot { fill: #f5a623; }
+        .sun-label { font-size: 0.78em; color: var(--secondary-text-color); margin-bottom: 2px; }
         .footnote {
           font-size: 0.78em;
           color: var(--secondary-text-color);
@@ -370,6 +410,7 @@ class AdaptiveLightingCurveCard extends HTMLElement {
       <ha-card header="${this._config.title || 'Adaptive Lighting Curve'}">
         <div class="card-content">
           <div class="now-label">${nowLabel}</div>
+          ${sunLabel ? `<div class="sun-label">${sunLabel}</div>` : ''}
           ${svg}
           <div class="tooltip"></div>
           <div class="footnote">${footnote}</div>

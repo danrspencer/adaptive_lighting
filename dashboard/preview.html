@@ -84,7 +84,8 @@
         'input_datetime.evening_earliest': state('17:00:00'),
         'input_datetime.evening_latest': state('20:00:00'),
         'sun.sun': state('above_horizon', {
-          next_setting: new Date(data.boundaries.evening * 1000).toISOString(),
+          next_rising: new Date(data.sun.sunrise * 1000).toISOString(),
+          next_setting: new Date(data.sun.sunset * 1000).toISOString(),
         }),
         'sensor.adaptive_lighting_curve': state(new Date().toISOString(), { points: data.points }),
         'sensor.solar_adaptive_lighting_brightness': state(data.now_brightness),

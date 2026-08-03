@@ -166,6 +166,33 @@ custom_templates file and a packages/*.yaml you also need to copy".
    the symlink script silently replacing what 15 rooms already depend
    on.
 
+7. **Home Assistant's blueprint loader couldn't read a symlinked
+   blueprint, even after the naming collision above was fixed.**
+   `danspencer/adaptive_lighting.yaml` was correctly symlinked (right
+   name, no collision) and showed up in `ha_get_blueprint`'s listing,
+   but creating an automation from it failed every time with `"Unable
+   to find danspencer/adaptive_lighting.yaml"`, and querying that
+   specific path returned `"warnings":["Blueprint body could not be
+   read or parsed by the ha_mcp_tools component; returning metadata
+   only"]` - the directory entry existed but nothing could read through
+   it. Replacing the symlink with a plain `cp` of the same file fixed
+   it immediately, same content, only the deployment mechanism changed.
+   Most likely cause: HAOS runs the core `homeassistant` container with
+   AppArmor hardening, and it doesn't necessarily resolve/read a
+   symlink the same way the SSH add-on's separate container (which
+   created it) does, even though both nominally bind-mount `/config`.
+   `scripts/link_into_ha.sh` now copies the blueprint instead of
+   symlinking it (see the `copy()` function) - re-copied automatically
+   whenever the source changes, same backup behaviour as `link()`.
+   pyscript and the dashboard card are still symlinked, deliberately,
+   as the live test of whether *they* hit the same restriction - it's
+   a different HA component (pyscript's Python import machinery /
+   Lovelace's static-file serving) in a different container, so there's
+   no reason to assume the failure mode is the same before it's
+   actually been tried. If `pyscript.compute_lighting_groups` fails to
+   register or import cleanly after linking, switch those two `link`
+   calls to `copy` as well and drop this paragraph's "deliberately".
+
 ## Current status / what's not done
 
 - `pyscript/modules/adaptive_lighting/` (curve.py, grouping.py) - pure
@@ -174,24 +201,46 @@ custom_templates file and a packages/*.yaml you also need to copy".
   before the port (same expected outputs). Also now includes
   persistent manual-override protection (`manually_set()`) that the
   live blueprint doesn't have - see lesson 5 above.
-- `pyscript/apps/adaptive_lighting/app.py` - written but **not yet
-  validated against a real pyscript install**. Its docstring lists
-  exactly what to confirm first (a "Phase 0 spike"):
-  - `is_state`/`state_attr`/`device_id`/`labels` available as plain
-    pyscript globals with these names/signatures.
-  - `import adaptive_lighting` resolves correctly from
-    `pyscript/apps/` to `pyscript/modules/`.
-  - `@service(supports_response="only")` + `response_variable` in the
-    calling automation actually makes the returned dict usable in a
-    later action step's templates, and whether that's dict-style
-    (`plan['groups']`) or attribute-style (`plan.groups`) access.
-- The blueprint itself has **not yet been rewired** to call
-  `pyscript.compute_lighting_groups` - it's still the full-Jinja
-  version, copied in as the migration's starting baseline. That
-  rewiring is blocked on the Phase 0 spike above.
-- The **dev/test sync loop was never finalized** with the user - i.e.
-  how code in this repo gets from "written" to "running on the real HA
-  instance for testing". Ask before assuming.
+- `pyscript/apps/adaptive_lighting/app.py` - written, but **still not
+  validated against a real pyscript install** as of this writing. Its
+  docstring lists exactly what to confirm (the "Phase 0 spike"):
+  `is_state`/`state_attr`/`device_id`/`labels` as plain pyscript
+  globals; `import adaptive_lighting` resolving from `pyscript/apps/`
+  to `pyscript/modules/`; `supports_response="only"` +
+  `response_variable` making the dict usable in a later action step
+  (dict-style vs. attribute-style access); and how to reach an
+  entity's `context.user_id` from pyscript. The blueprint below is
+  already wired to call it, so the *next* live test (reload +
+  trigger `automation.living_room_lights_new`) is exactly this spike -
+  check `ha_get_logs` for import/attribute errors if it doesn't work
+  first try.
+- The blueprint's action: block **has been rewired** to call
+  `pyscript.compute_lighting_groups` (with `response_variable:
+  lighting_plan`) instead of the ~90-line namespace-loop Jinja that
+  used to compute multiplier bucketing/tolerance/two-step routing
+  inline. The blueprint still owns turning the returned groups into
+  actual `light.turn_on`/`light.turn_off` calls. Untested until the
+  Phase 0 spike above passes - if `pyscript.compute_lighting_groups`
+  errors or the service doesn't exist, every non-motion_off/reconcile
+  trigger on any automation using this blueprint will fail silently
+  past that point (no lights commanded). Only `automation.
+  living_room_lights_new` uses this blueprint right now, so blast
+  radius is one room.
+- **Deployment now splits blueprint vs. pyscript deliberately** (see
+  lesson 7 below): the blueprint is copied, pyscript and the dashboard
+  card are still symlinked. Re-running `scripts/link_into_ha.sh` on
+  the host is what actually gets pyscript's files in place for the
+  spike above - they were never deployed before now.
+- **The dev/test sync loop is now automated**: `scripts/sync_and_link.sh`
+  + `packages/adaptive_lighting_sync.yaml` poll this repo every 15
+  minutes (`shell_command` + `time_pattern` automation) and re-run
+  `link_into_ha.sh` on new commits - see README's "Staying up to date
+  automatically". Chosen over a GitHub Actions webhook specifically to
+  avoid exposing this HA instance to the internet; the user picked
+  polling over a webhook when asked. Not yet exercised live - the
+  first `link_into_ha.sh` run (to deploy the sync package itself) and
+  the restart it needs are both still manual, same bootstrapping
+  problem the mechanism has for itself.
 - `dashboard/preview.html` + `generate_preview_data.py` let you see the
   actual Lovelace card rendered with synthetic data, without a running
   HA instance - regenerate data with

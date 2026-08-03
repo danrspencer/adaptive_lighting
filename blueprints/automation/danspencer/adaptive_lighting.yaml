@@ -380,28 +380,6 @@ variables:
       {{ resolved_entities }}
     {% endif %}
   brightness_multipliers: !input brightness_multiplier_template
-  # Entities whose multiplier isn't null/false - null/false means "don't
-  # touch this on power-on, something else owns it" (see the input's own description)
-  powerable_entities: >
-    {% set ns = namespace(items=[]) %}
-    {% for e in adaptive_target_entities %}
-      {% set m = brightness_multipliers.get(e, 1) %}
-      {% if not (m is none or m is sameas false) %}
-        {% set ns.items = ns.items + [e] %}
-      {% endif %}
-    {% endfor %}
-    {{ ns.items }}
-  # powerable_entities bucketed by multiplier value, so each bucket can be
-  # sent one shared brightness in a single call
-  multiplier_groups: >
-    {% set ns = namespace(groups={}) %}
-    {% for e in powerable_entities %}
-      {% set m = brightness_multipliers.get(e, 1) %}
-      {% set key = m | string %}
-      {% set existing = ns.groups[key].entities if key in ns.groups else [] %}
-      {% set ns.groups = dict(ns.groups, **{key: {'multiplier': m, 'entities': existing + [e]}}) %}
-    {% endfor %}
-    {{ ns.groups.values() | list }}
 
 action:
   - choose:
@@ -457,97 +435,66 @@ action:
                   transition: "{{ script_transition }}"
                   activated_transition: "{{ script_transition }}"
         default:
-          # One iteration per distinct brightness multiplier, so lights
-          # sharing a multiplier get a single combined command
+          # Reachability, multiplier bucketing, tolerance-based
+          # "already correct" checks, manual-override protection, and
+          # two-step/combined routing are all computed in pyscript
+          # (pyscript/modules/adaptive_lighting/grouping.py) - this
+          # used to be ~90 lines of namespace-loop Jinja here. What's
+          # left is just turning each returned group into the actual
+          # light.turn_on/turn_off calls.
+          - alias: "Compute lighting groups (pyscript)"
+            action: pyscript.compute_lighting_groups
+            data:
+              entities: "{{ adaptive_target_entities }}"
+              brightness_multipliers: "{{ brightness_multipliers }}"
+              sensor_brightness: "{{ sensor_brightness }}"
+              sensor_color_temp_kelvin: "{{ sensor_color_temp_kelvin }}"
+            response_variable: lighting_plan
           - repeat:
-              for_each: "{{ multiplier_groups }}"
+              for_each: "{{ lighting_plan.groups }}"
               sequence:
-                - variables:
-                    group_brightness: >
-                      {# Floor at 1 so a non-zero multiplier never accidentally turns a light off #}
-                      {% set m = repeat.item.multiplier | float %}
-                      {{ 0 if m == 0 else ([((sensor_brightness * m) | round(0) | int), 1] | max) }}
-                    group_needing_off: >
-                      {# Multiplier is 0 for this group: only command lights that are reachable and not already off #}
-                      {{ repeat.item.entities | select('in', reachable_entities) | reject('is_state', 'off') | list }}
-                    group_needing_update: >
-                      {#
-                        Lights that need a fresh command: reachable, and
-                        not already within tolerance of the target
-                        brightness/colour-temperature. Tolerance (not
-                        exact match) because some bulbs round-trip these
-                        values a point or two off from what was sent.
-                      #}
-                      {% set ns = namespace(items=[]) %}
-                      {% for e in repeat.item.entities | select('in', reachable_entities) | list %}
-                        {% set brightness_close = (state_attr(e, 'brightness') | int(-999) - group_brightness) | abs <= 2 %}
-                        {% set color_temp_close = (state_attr(e, 'color_temp_kelvin') | int(-999) - sensor_color_temp_kelvin) | abs <= 10 %}
-                        {% set already_set = is_state(e, 'on') and brightness_close and color_temp_close %}
-                        {% if not already_set %}
-                          {% set ns.items = ns.items + [e] %}
-                        {% endif %}
-                      {% endfor %}
-                      {{ ns.items }}
-                    group_two_step: >
-                      {#
-                        Bulbs labelled no_combined_transition (checked on
-                        both the entity and its device) can't transition
-                        brightness and colour together, so they're sent
-                        as two sequential half-length transitions instead
-                        of one combined call.
-                      #}
-                      {% set ns = namespace(items=[]) %}
-                      {% for e in group_needing_update %}
-                        {% set did = device_id(e) %}
-                        {% set tags = labels(e) + (labels(did) if did else []) %}
-                        {% if 'no_combined_transition' in tags %}
-                          {% set ns.items = ns.items + [e] %}
-                        {% endif %}
-                      {% endfor %}
-                      {{ ns.items }}
-                    group_combined: "{{ group_needing_update | reject('in', group_two_step) | list }}"
                 - choose:
                     - conditions:
                         - condition: template
-                          value_template: "{{ group_brightness <= 0 }}"
+                          value_template: "{{ repeat.item.brightness <= 0 }}"
                       sequence:
                         - alias: "Multiplier 0 - turn this group off"
                           action: light.turn_off
                           target:
-                            entity_id: "{{ group_needing_off }}"
+                            entity_id: "{{ repeat.item.needing_off }}"
                           data:
                             transition: "{{ script_transition }}"
                   default:
                     - parallel:
                         - if:
                             - condition: template
-                              value_template: "{{ group_combined | length > 0 }}"
+                              value_template: "{{ repeat.item.combined | length > 0 }}"
                           then:
                             - alias: "Combined group: single call"
                               action: light.turn_on
                               target:
-                                entity_id: "{{ group_combined }}"
+                                entity_id: "{{ repeat.item.combined }}"
                               data:
                                 transition: "{{ script_transition }}"
-                                brightness: "{{ group_brightness }}"
+                                brightness: "{{ repeat.item.brightness }}"
                                 color_temp_kelvin: "{{ sensor_color_temp_kelvin }}"
                         - if:
                             - condition: template
-                              value_template: "{{ group_two_step | length > 0 }}"
+                              value_template: "{{ repeat.item.two_step | length > 0 }}"
                           then:
                             - alias: "Two-step group, step 1: brightness only"
                               action: light.turn_on
                               target:
-                                entity_id: "{{ group_two_step }}"
+                                entity_id: "{{ repeat.item.two_step }}"
                               data:
                                 transition: "{{ half_transition }}"
-                                brightness: "{{ group_brightness }}"
+                                brightness: "{{ repeat.item.brightness }}"
                             - delay: "{{ half_transition }}"
                             - alias: "Two-step group, step 2: colour temp (brightness re-specified)"
                               action: light.turn_on
                               target:
-                                entity_id: "{{ group_two_step }}"
+                                entity_id: "{{ repeat.item.two_step }}"
                               data:
                                 transition: "{{ half_transition }}"
-                                brightness: "{{ group_brightness }}"
+                                brightness: "{{ repeat.item.brightness }}"
                                 color_temp_kelvin: "{{ sensor_color_temp_kelvin }}"

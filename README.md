@@ -16,6 +16,10 @@ the day, warming and dimming through the evening, dim and warm at night — foll
 morning/day/evening/night schedule (evening tracks sunset, clamped between an earliest and latest bound). Applied
 roughly once a minute while the room is occupied, so lights drift with the schedule instead of jumping.
 
+The [dashboard curve card](#previewing-the-dashboard-card) also plots today's actual sunrise/sunset (from
+`sun.sun`) against the schedule, so it's easy to see at a glance how far the configured boundaries and earliest/
+latest clamps are actually tracking the sun.
+
 ### Motion-driven on/off
 
 Turns a room on when motion starts and off `no_motion_wait` seconds after it stops. A motion/occupancy sensor is
@@ -98,6 +102,11 @@ www/adaptive-lighting-curve-card.js
     Custom Lovelace card rendering the day's curve as a rendered-colour
     chart, with a live "now" marker.
 
+packages/adaptive_lighting_sync.yaml
+    shell_command + automation that polls this repo for new commits
+    and redeploys automatically. See "Staying up to date automatically"
+    below.
+
 dashboard/
     house-settings-card.yaml   card config to add to a view
     preview.html                renders the real card against synthetic
@@ -136,6 +145,24 @@ in, until updated. Worth doing deliberately, room by room, rather than all at on
 For the dashboard card, register `www/adaptive-lighting-curve-card.js` as a Lovelace resource (Settings →
 Dashboards → Resources → Add Resource, URL `/local/adaptive-lighting-curve-card.js`, type JavaScript Module) and
 add the card config from `dashboard/house-settings-card.yaml` to a view.
+
+### Staying up to date automatically
+
+`packages/adaptive_lighting_sync.yaml` (linked in by the step above, since `packages/` is part of `/config`)
+adds a `shell_command` and a `time_pattern` automation that runs `git pull` in the repo every 15 minutes and
+re-runs `link_into_ha.sh` if anything changed — so a `git push` to this repo shows up in Home Assistant on its
+own, no manual re-run needed after the first install. It polls rather than reacting to a webhook, so there's no
+need to expose Home Assistant to the internet.
+
+Two things this can't do for itself:
+- **Bootstrapping**: the automation can't deploy itself before it exists, so the first `link_into_ha.sh` run has
+  to be manual (the step above).
+- **New `shell_command` entries need a full HA restart**, not just a config/automation reload, before the
+  sync automation can actually run.
+
+`shell_command` runs inside whichever container hosts Home Assistant Core, which may not have `git` installed
+depending on your setup — if the sync automation's traces show a failure, check `ha_get_logs` for the actual
+error before assuming something else is wrong.
 
 ## Configuration
 

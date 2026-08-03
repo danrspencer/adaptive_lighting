@@ -28,10 +28,11 @@ BASELINE_Y = VB_H - PAD_BOTTOM
 
 TITLE_H = 40
 NOW_LABEL_H = 26
+SUN_LABEL_H = 18
 FOOTNOTE_H = 24
 CARD_PAD = 16
 CARD_W = VB_W + CARD_PAD * 2
-CARD_H = TITLE_H + NOW_LABEL_H + VB_H + FOOTNOTE_H + CARD_PAD
+CARD_H = TITLE_H + NOW_LABEL_H + SUN_LABEL_H + VB_H + FOOTNOTE_H + CARD_PAD
 
 
 def clamp(v, lo, hi):
@@ -113,6 +114,16 @@ def main():
             f'<text x="{x:.1f}" y="{label_y}" class="boundary-label" text-anchor="{anchor}">{label} {fmt_time(t)}</text>'
         )
 
+    sunrise_x = x_of(data["sun"]["sunrise"])
+    sunset_x = x_of(data["sun"]["sunset"])
+    sun_markers = (
+        f'<line x1="{sunrise_x:.1f}" y1="{PAD_TOP}" x2="{sunrise_x:.1f}" y2="{BASELINE_Y}" class="sun-line" />'
+        f'<circle cx="{sunrise_x:.1f}" cy="{PAD_TOP}" r="3" class="sun-dot" />'
+        f'<line x1="{sunset_x:.1f}" y1="{PAD_TOP}" x2="{sunset_x:.1f}" y2="{BASELINE_Y}" class="sun-line" />'
+        f'<circle cx="{sunset_x:.1f}" cy="{PAD_TOP}" r="3" class="sun-dot" />'
+    )
+    sun_label = f"Sunrise {fmt_time(data['sun']['sunrise'])} · Sunset {fmt_time(data['sun']['sunset'])}"
+
     now_x = x_of(data["_now_ts"])
     now_hex = rgb_to_hex(kelvin_to_rgb(data["now_kelvin"]))
     now_marker = (
@@ -136,19 +147,24 @@ def main():
     .boundary-label {{ fill: #212121; font-size: 11px; }}
     .now-line {{ stroke: #212121; stroke-width: 1.5; }}
     .now-dot {{ stroke: #ffffff; stroke-width: 1.5; }}
+    .sun-line {{ stroke: #f5a623; stroke-width: 1.5; opacity: 0.85; }}
+    .sun-dot {{ fill: #f5a623; }}
+    .sun-label {{ fill: #6f6f6f; font-size: 12px; }}
     .footnote {{ fill: #6f6f6f; font-size: 12px; }}
   </style>
   <rect x="0" y="0" width="{CARD_W}" height="{CARD_H}" rx="12" fill="#ffffff" stroke="#e0e0e0" />
   <text x="{CARD_PAD}" y="28" class="title">Adaptive Lighting Curve</text>
   <text x="{CARD_PAD}" y="{TITLE_H + 18}" class="now-label">{now_label}</text>
-  <g transform="translate({CARD_PAD}, {TITLE_H + NOW_LABEL_H})">
+  <text x="{CARD_PAD}" y="{TITLE_H + NOW_LABEL_H + 14}" class="sun-label">{sun_label}</text>
+  <g transform="translate({CARD_PAD}, {TITLE_H + NOW_LABEL_H + SUN_LABEL_H})">
     {"".join(bars)}
     {"".join(boundary_lines)}
     {"".join(hour_ticks)}
+    {sun_markers}
     {now_marker}
     <line x1="{PAD_L}" y1="{BASELINE_Y}" x2="{VB_W - PAD_R}" y2="{BASELINE_Y}" class="axis-line" />
   </g>
-  <text x="{CARD_PAD}" y="{TITLE_H + NOW_LABEL_H + VB_H + 18}" class="footnote">Evening starts at {fmt_time(boundaries["evening"])}, following tonight's sunset.</text>
+  <text x="{CARD_PAD}" y="{TITLE_H + NOW_LABEL_H + SUN_LABEL_H + VB_H + 18}" class="footnote">Evening starts at {fmt_time(boundaries["evening"])}, following tonight's sunset.</text>
 </svg>
 '''
 

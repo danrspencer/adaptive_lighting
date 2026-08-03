@@ -28,6 +28,14 @@ DAY_HOUR = 8
 EVENING_HOUR = 18
 NIGHT_HOUR = 22
 
+# Representative sunrise/sunset for the preview, deliberately offset from
+# the schedule boundaries above - sunrise doesn't track Morning at all in
+# the real automation, and Evening tracks sunset only approximately (it's
+# clamped between an earliest/latest bound), so the two shouldn't usually
+# line up exactly.
+SUNRISE_HOUR = 6.4
+SUNSET_HOUR = 19.75
+
 
 def main():
     midnight = datetime.datetime.combine(datetime.date.today(), datetime.time(0, 0, 0)).timestamp()
@@ -57,6 +65,10 @@ def main():
             "day": day_start_ts,
             "evening": evening_ts,
             "night": night_ts,
+        },
+        "sun": {
+            "sunrise": midnight + SUNRISE_HOUR * 3600,
+            "sunset": midnight + SUNSET_HOUR * 3600,
         },
         "points": points,
         "now_phase": now_phase,
