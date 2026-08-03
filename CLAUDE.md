@@ -166,47 +166,106 @@ custom_templates file and a packages/*.yaml you also need to copy".
    the symlink script silently replacing what 15 rooms already depend
    on.
 
-7. **Home Assistant's blueprint loader couldn't read a symlinked
-   blueprint, even after the naming collision above was fixed.**
-   `danspencer/adaptive_lighting.yaml` was correctly symlinked (right
-   name, no collision) and showed up in `ha_get_blueprint`'s listing,
-   but creating an automation from it failed every time with `"Unable
-   to find danspencer/adaptive_lighting.yaml"`, and querying that
-   specific path returned `"warnings":["Blueprint body could not be
-   read or parsed by the ha_mcp_tools component; returning metadata
-   only"]` - the directory entry existed but nothing could read through
-   it. Replacing the symlink with a plain `cp` of the same file fixed
-   it immediately, same content, only the deployment mechanism changed.
-   Most likely cause: HAOS runs the core `homeassistant` container with
-   AppArmor hardening, and it doesn't necessarily resolve/read a
-   symlink the same way the SSH add-on's separate container (which
-   created it) does, even though both nominally bind-mount `/config`.
-   `scripts/link_into_ha.sh` now copies the blueprint instead of
-   symlinking it (see the `copy()` function, which handles both files
-   and directories via `cp -r`) - re-copied automatically whenever the
-   source changes, same backup behaviour as `link()`.
+7. **A symlink's target is only meaningful from the shell session that
+   created it - and the failure this caused looked nothing like a path
+   bug at first.** `danspencer/adaptive_lighting.yaml` was symlinked
+   (right name, no collision with lesson 6) and showed up in
+   `ha_get_blueprint`'s listing, but creating an automation from it
+   failed every time with `"Unable to find
+   danspencer/adaptive_lighting.yaml"`, and querying that path returned
+   `"warnings":["Blueprint body could not be read or parsed ...
+   returning metadata only"]` - the directory entry existed but nothing
+   could read through it. The initial hypothesis was an AppArmor/
+   container-boundary restriction on following symlinks at all - wrong,
+   but plausible enough to run with for a while. Switching the
+   blueprint to a plain `cp` fixed it, which looked like it confirmed
+   the theory.
 
-   pyscript hit the exact same wall. It was kept symlinked initially,
-   deliberately, as a live test of whether the restriction was
-   blueprint-specific - different HA component (Python import
-   machinery vs. YAML blueprint loading), plausibly a different
-   container. It wasn't: after symlinking `pyscript/modules/
-   adaptive_lighting` and `pyscript/apps/adaptive_lighting` in and
-   even calling `pyscript.reload`, `pyscript.compute_lighting_groups`
-   never appeared - and unlike the blueprint case, not even an error.
-   No log line at all, at any level, mentioning the app or the
-   service. Switched to `copy` and confirmed working (see "Current
-   status" below). So the restriction isn't blueprint-specific - it's
-   at least blueprint YAML *and* pyscript's file scanning, most likely
-   the container/AppArmor boundary itself rather than anything
-   component-specific.
+   pyscript then hit what looked like the exact same wall - symlinked
+   deliberately, as a test of whether the restriction was blueprint-
+   specific. It wasn't: `pyscript.compute_lighting_groups` never
+   appeared after symlinking `pyscript/modules/adaptive_lighting` and
+   `pyscript/apps/adaptive_lighting` in, not even an error anywhere in
+   the logs. Copying pyscript's files too "fixed" it (actually just
+   moved the failure further down the stack - see lesson 9), which
+   looked like further confirmation of a blanket "symlinks don't
+   resolve here" restriction.
 
-   The dashboard card (`www/adaptive-lighting-curve-card.js`) is the
-   only thing still symlinked, untested. If it turns out to have the
-   same problem - a stale or missing card, or Lovelace failing to find
-   the resource - switch it to `copy` too and treat the restriction as
-   universal for anything under `/config` rather than component-by-
-   component.
+   The AppArmor theory was wrong. Re-copying the dashboard card's
+   symlink later surfaced a `RELINK ... (was ->
+   /root/config/repos/adaptive_lighting/www/...)` line - the *old*
+   symlink's target was `/root/config/...`, not `/config/...`.
+   Whichever shell session first ran the deploy script had `/root/config`
+   as its own path to the same files (plausibly a convenience alias in
+   that SSH session), and `dirname "$0"` + `pwd` baked that session-
+   specific path into the symlink as a literal string. A symlink's
+   target is just text; a path that resolves fine in the writing
+   shell can be completely meaningless to whatever process reads the
+   symlink back later, even on "the same host". No AppArmor or
+   container boundary needed to explain any of this - it's a plain
+   path bug that happened to be very difficult to see from the
+   symptoms alone (a missing file *reads* a lot like a permissions/
+   sandboxing problem).
+
+   `scripts/link_into_ha.sh` copies the blueprint and pyscript instead
+   of symlinking them (see the `copy()` function, which handles both
+   files and directories via `cp -r`) not because symlinks are
+   fundamentally broken here, but because copying sidesteps the whole
+   path-aliasing problem rather than requiring every future shell
+   session to get the absolute path right. The dashboard card is still
+   symlinked and untested; if it turns out to have a stale/wrong
+   target too, the same fix applies.
+
+8. **pyscript only autoloads a folder-based app from a file named
+   exactly `__init__.py`.** `pyscript/apps/<name>/app.py` (or any other
+   filename) is silently skipped - no error, no log line, at any log
+   level, even with debug logging on. Cost a lot of confused debugging
+   before finding it, because it's indistinguishable from the file just
+   not being deployed at all. If a pyscript app "isn't showing up" with
+   zero evidence why, check the filename before anything else.
+
+9. **A pyscript app can't share its name with a module package it
+   imports from - it recurses forever instead of raising a normal
+   import error.** `pyscript/apps/adaptive_lighting/__init__.py` doing
+   `from adaptive_lighting import ...` to reach
+   `pyscript/modules/adaptive_lighting/` - identical names - sent
+   pyscript's import resolution in circles (`module_import -> load_file
+   -> module_import -> ...`) until Python's recursion limit hit and
+   raised `RecursionError: maximum recursion depth exceeded`. Renamed
+   the app folder to `adaptive_lighting_app` to break the collision;
+   the module package keeps the plain name since tests import it
+   directly (`from adaptive_lighting import build_groups`) and aren't
+   affected by what the pyscript app folder is called.
+
+   Separately, and easy to conflate with lesson 8's symptom because
+   both present as "nothing happens, no error": **a pyscript app also
+   needs an explicit entry (even empty) under `pyscript: apps:` in
+   YAML config.** A folder existing under `pyscript/apps/` is not
+   enough by itself - with debug logging on, pyscript logs `load_scripts:
+   skipping .../__init__.py (app_name=...) because config not present`
+   and does nothing otherwise, at debug level only (invisible at the
+   default WARNING level, which is exactly why this and lesson 8 both
+   went unnoticed for so long). `packages/adaptive_lighting_pyscript.yaml`
+   ships this config - genuinely required by anyone deploying this
+   repo's pyscript half, not instance-specific, so (unlike the git-sync
+   automation) it belongs in the repo and is linked in by
+   `scripts/link_into_ha.sh` like everything else.
+
+   Diagnostic notes for next time this class of thing happens: `pyscript.reload`
+   does NOT re-scan for brand-new apps/files, only reloads ones already
+   known - use `homeassistant.reload_config_entry` (with the pyscript
+   config entry's `entry_id`) to force a full re-scan without a full HA
+   restart. It's flaky though - has returned a "dispatched but timed
+   out" partial response and then not actually completed the reload
+   more than once this session; a full restart has been 100% reliable
+   every time by contrast, at the cost of briefly dropping every
+   automation/device in the house. `logger.set_level` on
+   `custom_components.pyscript` to `debug` is what actually surfaces
+   the load_scripts skip messages and the real exception behind a
+   `module_import: failed to load module ...` line (the default
+   WARNING level shows neither) - but gets silently reset back to
+   WARNING by `homeassistant.reload_core_config`, so re-set it after
+   calling that, not before.
 
 ## Current status / what's not done
 
@@ -216,51 +275,102 @@ custom_templates file and a packages/*.yaml you also need to copy".
   before the port (same expected outputs). Also now includes
   persistent manual-override protection (`manually_set()`) that the
   live blueprint doesn't have - see lesson 5 above.
-- `pyscript/apps/adaptive_lighting/app.py` - written, but **still not
-  validated against a real pyscript install** as of this writing. Its
-  docstring lists exactly what to confirm (the "Phase 0 spike"):
-  `is_state`/`state_attr`/`device_id`/`labels` as plain pyscript
-  globals; `import adaptive_lighting` resolving from `pyscript/apps/`
-  to `pyscript/modules/`; `supports_response="only"` +
-  `response_variable` making the dict usable in a later action step
-  (dict-style vs. attribute-style access); and how to reach an
-  entity's `context.user_id` from pyscript. The blueprint below is
-  already wired to call it, so the *next* live test (reload +
-  trigger `automation.living_room_lights_new`) is exactly this spike -
-  check `ha_get_logs` for import/attribute errors if it doesn't work
-  first try.
+- `pyscript/apps/adaptive_lighting_app/__init__.py` - the original
+  Phase 0 spike's open questions are now resolved: `is_state`/
+  `state_attr`/`device_id`/`labels` work as plain pyscript globals as
+  assumed; `hass.states.get(entity_id).context.user_id` is confirmed
+  as the way to reach `context.user_id` (the one part that was a
+  guess). Getting it to actually *load* took three real fixes -
+  lessons 7, 8, and 9 above (path-aliased symlink, `__init__.py`
+  naming, app/module name collision causing infinite recursion) - each
+  looking like the others' symptom (nothing happens, no error) until
+  debug logging cut through it.
+- **Not yet confirmed end-to-end as of this writing.** All three fixes
+  above are committed and deployed (blueprint copied, pyscript app
+  copied under its new name, `packages/adaptive_lighting_pyscript.yaml`
+  shipped with the `apps:` config entry). The last live check before
+  writing this up showed `pyscript.compute_lighting_groups` still not
+  registered after a `homeassistant.reload_config_entry` call - which
+  has been flaky all session (dispatches, times out, sometimes doesn't
+  actually complete) - and a restart to get a clean, definitive test
+  hadn't happened yet when the conversation moved on to discussing the
+  HACS-integration question below instead. **Next step: restart HA and
+  check `ha_list_services(domain="pyscript")` for `compute_lighting_groups`
+  before trusting any of this works.**
 - The blueprint's action: block **has been rewired** to call
   `pyscript.compute_lighting_groups` (with `response_variable:
   lighting_plan`) instead of the ~90-line namespace-loop Jinja that
   used to compute multiplier bucketing/tolerance/two-step routing
   inline. The blueprint still owns turning the returned groups into
-  actual `light.turn_on`/`light.turn_off` calls. Untested until the
-  Phase 0 spike above passes - if `pyscript.compute_lighting_groups`
-  errors or the service doesn't exist, every non-motion_off/reconcile
-  trigger on any automation using this blueprint will fail silently
-  past that point (no lights commanded). Only `automation.
-  living_room_lights_new` uses this blueprint right now, so blast
-  radius is one room.
-- **Deployment now splits blueprint vs. pyscript deliberately** (see
-  lesson 7 below): the blueprint is copied, pyscript and the dashboard
-  card are still symlinked. Re-running `scripts/link_into_ha.sh` on
-  the host is what actually gets pyscript's files in place for the
-  spike above - they were never deployed before now.
+  actual `light.turn_on`/`light.turn_off` calls. Until the service is
+  confirmed registered (above), every non-motion_off/reconcile trigger
+  on any automation using this blueprint fails silently past that
+  point (no lights commanded, "Service not found" in the automation's
+  own error log/trace). Only `automation.living_room_lights_new` uses
+  this blueprint right now (old `automation.living_room_lights`,
+  original blueprint, is switched off for the duration of this test),
+  so blast radius is one room.
+- **Deployment splits blueprint vs. pyscript vs. dashboard card
+  deliberately** (see lesson 7): blueprint and pyscript are both
+  copied, the dashboard card is still symlinked and untested for the
+  same path-aliasing problem.
 - **The dev/test sync loop** (polling this repo for new commits and
   re-running `link_into_ha.sh` automatically) is set up directly on
-  the live HA instance - a `shell_command` + `time_pattern` automation,
-  not committed here. It's specific to this user's instance and this
-  repo's checkout path (`/config/repos/adaptive_lighting`), not
-  something worth publishing - don't re-add it to the repo without
-  checking first (see git history around the "Rewire blueprint to
-  pyscript, add git auto-sync..." commit for what that looked like and
-  why it was reverted).
+  the live HA instance - a `shell_command` + `time_pattern` automation
+  (`automation.adaptive_lighting_sync_from_git`), not committed here.
+  It's specific to this user's instance and this repo's checkout path
+  (`/config/repos/adaptive_lighting`), not something worth publishing -
+  don't re-add it to the repo without checking first (see git history
+  around the "Rewire blueprint to pyscript, add git auto-sync..."
+  commit for what that looked like and why it was reverted). It's also
+  currently running a temporary "always re-run link_into_ha.sh
+  regardless of git changes" variant of `scripts/adaptive_lighting_sync.sh`
+  on the live instance for this session's debugging - **revert it back
+  to the normal git-pull-gated version once the pyscript spike above is
+  confirmed working**, or every 15-minute tick will re-copy files
+  whether or not anything changed.
 - `dashboard/preview.html` + `generate_preview_data.py` let you see the
   actual Lovelace card rendered with synthetic data, without a running
   HA instance - regenerate data with
-  `python3 dashboard/generate_preview_data.py`, then serve `dashboard/`
-  over HTTP (not `file://` - the card's `fetch()` needs it) and open
-  `preview.html`.
+  `python3 dashboard/generate_preview_data.py`, then serve the repo
+  root over HTTP (not `file://` - the card's `fetch()` needs it, and
+  it must be the repo root, not `dashboard/`, since `preview.html`
+  imports `../www/adaptive-lighting-curve-card.js`) and open
+  `dashboard/preview.html`.
+
+## Open question: rebuild as a proper HACS integration?
+
+Raised but not decided or started. The pitch: replace
+`pyscript/apps/adaptive_lighting_app` with a real
+`custom_components/adaptive_lighting` package that registers
+`compute_lighting_groups` as a native HA service itself
+(`hass.services.async_register`) instead of going through pyscript at
+all - which would eliminate the entire class of bugs in lessons 7-9
+(pyscript's app-folder naming rules, the `apps:` config requirement,
+the name-collision recursion bug, `reload_config_entry`'s flakiness)
+since none of that machinery would exist anymore. `grouping.py`/
+`curve.py` port over basically unchanged - they're already decoupled
+from pyscript via `EntityLookup` dependency injection, that decision
+already paying off here. HACS would also handle install/update instead
+of `scripts/link_into_ha.sh` and the whole copy-vs-symlink saga (though
+the blueprint would likely still need separate handling - HACS's
+blueprint-distribution support is thinner than its integration
+support).
+
+The dashboard card is a much smaller, separate question: HACS's
+original/core use case is distributing custom Lovelace cards (a
+"plugin"/"frontend" repository category), and `www/adaptive-lighting-curve-card.js`
+already fits that shape as-is (single file, no build step, no external
+deps) - just needs a `hacs.json` at the repo root. Installing via HACS
+would also remove the manual "register as a Lovelace resource" step.
+
+Three HACS-installable pieces, in other words: a Lovelace plugin (the
+card), an integration (replacing the pyscript half), and the blueprint
+handled some other way. Nothing about this has been planned in detail
+or started - check with the user before assuming this is happening,
+since it's a real architecture change, not a small tweak, and the
+pyscript-based approach above may still be worth finishing/confirming
+first regardless of whether this happens later.
 
 ## Testing
 

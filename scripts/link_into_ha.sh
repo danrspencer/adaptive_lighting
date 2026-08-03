@@ -5,16 +5,12 @@
 # another machine over a network share points at a path meaningful to
 # that machine, not to Home Assistant. See CLAUDE.md for the full story.
 #
-# The blueprint and pyscript are both COPIED, not symlinked: Home
-# Assistant's blueprint loader failed to read a symlinked blueprint on
-# this setup (returned "Blueprint body could not be read or parsed",
-# even though the file was listed), and pyscript showed the same
-# symptom - no pyscript.compute_lighting_groups service, no error, no
-# log line of any kind, even after pyscript.reload - plausibly an
-# AppArmor/container-boundary issue between whatever add-on container
-# created the symlink and the core homeassistant container that reads
-# it. A plain copy fixed the blueprint immediately; pyscript gets the
-# same treatment now. See CLAUDE.md lesson 7.
+# The blueprint and pyscript are both COPIED, not symlinked: a symlink
+# created in one shell session had its target baked in as that
+# session's own path (e.g. /root/config/... from the SSH add-on's home
+# directory), not /config/... - meaningless from whatever container
+# actually reads it back. Copying sidesteps the whole class of problem
+# instead of trying to get the path right. See CLAUDE.md lesson 7.
 #
 # The dashboard card is still SYMLINKED - untested so far, but if it
 # turns out to have the same problem (a stale/missing card in the

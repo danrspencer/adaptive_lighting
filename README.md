@@ -94,9 +94,10 @@ pyscript/modules/adaptive_lighting/
                  and two-step/combined transition routing
     Pure Python, no Home Assistant dependency.
 
-pyscript/apps/adaptive_lighting/
+pyscript/apps/adaptive_lighting_app/
     Pyscript service wrapper exposing the modules above to Home
-    Assistant state.
+    Assistant state. Named differently from the module package above
+    deliberately - see CLAUDE.md lesson 9.
 
 www/adaptive-lighting-curve-card.js
     Custom Lovelace card rendering the day's curve as a rendered-colour
