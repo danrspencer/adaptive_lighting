@@ -7,11 +7,22 @@ needs to command, instead of computing them in ~150 lines of Jinja.
 All the actual logic lives in pyscript/modules/adaptive_lighting - this
 file is just the thin adapter to real Home Assistant state.
 
+This app folder is deliberately named adaptive_lighting_app, NOT
+adaptive_lighting - sharing the exact name with the module package it
+imports from (pyscript/modules/adaptive_lighting) sent pyscript's
+import resolution into infinite recursion (module_import -> load_file
+-> module_import -> ... until RecursionError), rather than resolving
+the sibling module. See CLAUDE.md lesson 9.
+
 Must be named __init__.py, not app.py - pyscript only autoloads a
 folder-based app from exactly `pyscript/apps/<name>/__init__.py`;
 anything else in the folder is silently ignored (no error, no log
-line). Cost a fair amount of confused debugging to find - see
-CLAUDE.md lesson 8.
+line). See CLAUDE.md lesson 8.
+
+This app also needs an explicit (even empty) entry under `pyscript:
+apps:` in YAML config - a folder in pyscript/apps/ existing on disk is
+not enough by itself, pyscript logs `skipping ... because config not
+present` and does nothing otherwise. See packages/adaptive_lighting_pyscript.yaml.
 
 _context_user_id below is still the one unverified part of the
 original Phase 0 spike - states[entity_id].context.user_id is how
