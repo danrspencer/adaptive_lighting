@@ -5,7 +5,7 @@ groupings) - the Python and the Jinja it replaced agree on every case
 here.
 """
 
-from adaptive_lighting import build_groups
+from grouping import build_groups
 from fakes import make_lookup
 
 

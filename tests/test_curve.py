@@ -1,4 +1,4 @@
-from adaptive_lighting import brightness_for_phase, kelvin_for_phase, phase_at
+from curve import brightness_for_phase, kelvin_for_phase, phase_at
 
 # A synthetic day used across every test in this file, expressed as
 # seconds-of-day for readability (these functions only ever care about

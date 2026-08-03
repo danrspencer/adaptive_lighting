@@ -1,10 +1,10 @@
 """Fake EntityLookup for tests - a plain dict-backed stand-in for real
-Home Assistant state, so grouping.py can be exercised without pyscript
-or a running HA instance."""
+Home Assistant state, so grouping.py can be exercised without a
+running HA instance."""
 
 from typing import Optional
 
-from adaptive_lighting import EntityLookup
+from grouping import EntityLookup
 
 
 def make_lookup(states: dict, device_of: Optional[dict] = None, labels_of: Optional[dict] = None) -> EntityLookup:

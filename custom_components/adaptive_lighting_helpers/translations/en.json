@@ -1,0 +1,13 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Adaptive Lighting Helpers",
+        "description": "Registers the adaptive_lighting_helpers.compute_lighting_groups and adaptive_lighting_helpers.compute_curve services. Nothing to configure - just confirm to set up."
+      }
+    },
+    "abort": {
+      "already_configured": "Already configured"
+    }
+  }
+}

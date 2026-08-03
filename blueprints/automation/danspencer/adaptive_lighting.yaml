@@ -437,13 +437,14 @@ action:
         default:
           # Reachability, multiplier bucketing, tolerance-based
           # "already correct" checks, manual-override protection, and
-          # two-step/combined routing are all computed in pyscript
-          # (pyscript/modules/adaptive_lighting/grouping.py) - this
-          # used to be ~90 lines of namespace-loop Jinja here. What's
-          # left is just turning each returned group into the actual
-          # light.turn_on/turn_off calls.
-          - alias: "Compute lighting groups (pyscript)"
-            action: pyscript.compute_lighting_groups
+          # two-step/combined routing are all computed by the
+          # Adaptive Lighting Helpers integration (a standalone HACS
+          # add-on, not specific to this blueprint - see its README)
+          # - this used to be ~90 lines of namespace-loop Jinja here.
+          # What's left is just turning each returned group into the
+          # actual light.turn_on/turn_off calls.
+          - alias: "Compute lighting groups (Adaptive Lighting Helpers)"
+            action: adaptive_lighting_helpers.compute_lighting_groups
             data:
               entities: "{{ adaptive_target_entities }}"
               brightness_multipliers: "{{ brightness_multipliers }}"

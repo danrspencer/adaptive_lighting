@@ -1,9 +1,0 @@
-# Required for pyscript to actually load pyscript/apps/adaptive_lighting_app/.
-# A folder existing under pyscript/apps/ is NOT enough by itself -
-# pyscript logs "skipping ... because config not present" and does
-# nothing otherwise. This has to be in configuration.yaml or a
-# packages file; see CLAUDE.md lesson 9 for how this was found.
-
-pyscript:
-  apps:
-    adaptive_lighting_app:

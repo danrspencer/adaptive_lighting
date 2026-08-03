@@ -1,13 +1,61 @@
 # Adaptive Lighting
 
-A Home Assistant blueprint (with a [pyscript](https://github.com/custom-components/pyscript) backend) for
-per-room lighting: brightness and colour temperature follow a solar schedule, motion controls on/off, scenes can
-take over partially or entirely, manual changes are respected, and lights that don't reach their target get corrected
-automatically.
+Two independent pieces, designed to work together but not coupled to each other:
+
+- **Adaptive Lighting Helpers** — a standalone Home Assistant integration exposing brightness/colour-temperature
+  curve math and per-light grouping (reachability, tolerance, manual-override protection, two-step transitions) as
+  plain HA services. Useful in your own automations even if you never touch the blueprint below.
+- **The Adaptive Lighting blueprint** — a per-room automation built on top of those services: brightness and
+  colour temperature follow a solar schedule, motion controls on/off, scenes can take over partially or entirely,
+  manual changes are respected, and lights that don't reach their target get corrected automatically.
 
 ![Adaptive Lighting Curve card, showing brightness and colour temperature through the day](dashboard/curve-preview.svg)
 
-## Features
+## Adaptive Lighting Helpers (the integration)
+
+Two services, each documented in full in `services.yaml` (visible in Home Assistant's Developer Tools → Actions
+once installed) — call them directly from your own automations or scripts, no blueprint required.
+
+### `adaptive_lighting_helpers.compute_lighting_groups`
+
+Given a set of light entities, a target brightness/colour-temperature, and optional per-light brightness
+multipliers, returns the minimal set of groups actually needing a `light.turn_on`/`light.turn_off` call: filters
+out unreachable lights, buckets by multiplier, skips anything already within tolerance of the target, leaves
+manually-set lights alone, and separates out lights tagged for two-step transitions.
+
+```yaml
+action: adaptive_lighting_helpers.compute_lighting_groups
+data:
+  entities: [light.kitchen_1, light.kitchen_2]
+  sensor_brightness: 200
+  sensor_color_temp_kelvin: 3200
+  brightness_multipliers: { light.kitchen_2: 0.5 }
+response_variable: plan
+# plan.groups -> [{multiplier, brightness, needing_off, combined, two_step}, ...]
+```
+
+### `adaptive_lighting_helpers.compute_curve`
+
+Given today's morning/day/evening/night phase-boundary timestamps, returns the target brightness, colour
+temperature, and phase name for a given instant (or now). Useful for building your own day-phase sensor without
+any of the rest of this project.
+
+```yaml
+action: adaptive_lighting_helpers.compute_curve
+data:
+  morning: "{{ today_at('06:00:00') | as_timestamp }}"
+  day: "{{ today_at('08:00:00') | as_timestamp }}"
+  evening: "{{ today_at('18:00:00') | as_timestamp }}"
+  night: "{{ today_at('22:00:00') | as_timestamp }}"
+response_variable: now
+# now.phase / now.brightness / now.kelvin
+```
+
+## The blueprint
+
+Built on the services above, but the two are only loosely coupled — the blueprint just calls
+`compute_lighting_groups` the same way it calls `light.turn_on`, and doesn't otherwise assume anything about how
+that service is implemented.
 
 ### Solar-driven brightness & colour temperature
 
@@ -80,6 +128,21 @@ recovers from dropped commands (a missed Zigbee message, for example) without ma
 ## Repository layout
 
 ```
+custom_components/adaptive_lighting_helpers/
+    __init__.py    registers the two services against real HA state -
+                    the only file in this package with an HA dependency
+    curve.py       brightness/colour-temperature schedule
+    grouping.py    reachability, multiplier bucketing, tolerance checks,
+                   manual-override protection, two-step/combined routing
+    manifest.json, config_flow.py, services.yaml, strings.json,
+    translations/  standard HA integration/HACS scaffolding
+    curve.py and grouping.py are pure Python, no Home Assistant
+    dependency - testable directly, and usable from anywhere that
+    wants the math without the HA service wrapper around it.
+
+hacs.json
+    HACS repository metadata for the integration.
+
 blueprints/automation/danspencer/adaptive_lighting.yaml
     The automation blueprint: triggers, conditions, target resolution,
     and the action sequence (which service to call, with what target).
@@ -87,17 +150,6 @@ blueprints/automation/danspencer/adaptive_lighting.yaml
     Unified" blueprint so the two can run side by side while rooms are
     migrated over individually, rather than one replacing the other
     in place.
-
-pyscript/modules/adaptive_lighting/
-    curve.py     brightness/colour-temperature schedule
-    grouping.py  reachability, multiplier bucketing, tolerance checks,
-                 and two-step/combined transition routing
-    Pure Python, no Home Assistant dependency.
-
-pyscript/apps/adaptive_lighting_app/
-    Pyscript service wrapper exposing the modules above to Home
-    Assistant state. Named differently from the module package above
-    deliberately - see CLAUDE.md lesson 9.
 
 www/adaptive-lighting-curve-card.js
     Custom Lovelace card rendering the day's curve as a rendered-colour
@@ -117,31 +169,42 @@ tests/
 
 Triggers, conditions, and target resolution stay in the blueprint; Home Assistant `condition:` blocks can't call
 a service, so anything a condition depends on has to remain template-based. Multiplier bucketing, tolerance
-checks, and transition routing are implemented in `pyscript/modules` and unit tested. See `CLAUDE.md` for
-further implementation notes.
+checks, and transition routing are implemented in the integration and unit tested. See `CLAUDE.md` for further
+implementation notes, including the (fairly involved) history of getting a custom integration to load correctly
+at all.
 
 ## Installation
 
-On the Home Assistant host itself (not via a network share — see `CLAUDE.md` for why), clone this repository
-under `/config` (e.g. via the Advanced SSH & Web Terminal add-on) and run:
+### Adaptive Lighting Helpers
 
-```bash
-./scripts/link_into_ha.sh          # deploys everything into /config
-./scripts/link_into_ha.sh --dry-run   # preview first, if you'd rather
-```
+Not yet published to the HACS default store. Add this repository as a HACS custom repository (HACS → the "⋮"
+menu → Custom repositories → this repo's URL, category "Integration"), install, restart Home Assistant (a brand
+new `custom_components` entry needs a restart to be discovered, not just a reload), then add it once via
+Settings → Devices & Services → Add Integration → "Adaptive Lighting Helpers". There's nothing to configure — it
+just registers the two services above.
 
-This copies the blueprint and both `pyscript/` directories into place (Home Assistant doesn't reliably read a
-symlink for either — see `CLAUDE.md`) and symlinks the dashboard card; backs up anything already at those paths
-(renamed with a `.bak-<timestamp>` suffix) rather than overwriting it; and is safe to re-run. Pass a directory as
-an argument to target something other than `/config`.
+For local testing before it's on HACS at all, `scripts/link_into_ha.sh` copies
+`custom_components/adaptive_lighting_helpers/` directly onto an HA host over SSH — see the script's own header
+comment for details and why it copies rather than symlinks.
 
-Note: the blueprint's inputs have changed (`scene_sensor`/`scene_name_prefix` → `scene_template`/
-`extra_triggers`) — every room automation using the old inputs will show as misconfigured once this is linked
-in, until updated. Worth doing deliberately, room by room, rather than all at once.
+### The blueprint
 
-For the dashboard card, register `www/adaptive-lighting-curve-card.js` as a Lovelace resource (Settings →
-Dashboards → Resources → Add Resource, URL `/local/adaptive-lighting-curve-card.js`, type JavaScript Module) and
-add the card config from `dashboard/house-settings-card.yaml` to a view.
+Import directly via Home Assistant's own blueprint importer (Settings → Automations & Scenes → Blueprints →
+Import Blueprint, paste this repo's raw URL to
+`blueprints/automation/danspencer/adaptive_lighting.yaml`) — this is a plain HA feature, not something HACS is
+involved in. Requires Adaptive Lighting Helpers to be installed first, since the blueprint calls its
+`compute_lighting_groups` service.
+
+Note: if migrating from an older, pre-rewrite version of this blueprint, the inputs have changed
+(`scene_sensor`/`scene_name_prefix` → `scene_template`/`extra_triggers`) — every room automation using the old
+inputs will show as misconfigured until updated. Worth doing deliberately, room by room, rather than all at once.
+
+### The dashboard card
+
+Register `www/adaptive-lighting-curve-card.js` as a Lovelace resource (Settings → Dashboards → Resources → Add
+Resource, URL `/local/adaptive-lighting-curve-card.js`, type JavaScript Module) and add the card config from
+`dashboard/house-settings-card.yaml` to a view. Not currently HACS-distributed either (see CLAUDE.md's "Open
+question" section for the plan to make it a proper HACS frontend plugin).
 
 ## Configuration
 
@@ -176,11 +239,13 @@ pip install pytest
 pytest
 ```
 
-No Home Assistant or pyscript dependency; `tests/fakes.py` provides a fake state/registry lookup. CI
-(`.github/workflows/tests.yml`) runs the suite on push and PR across Python 3.9 and 3.13.
+No Home Assistant dependency for `curve.py`/`grouping.py` themselves; `tests/fakes.py` provides a fake
+state/registry lookup, and `tests/conftest.py` imports them directly (bypassing the integration's `__init__.py`,
+which does need `homeassistant` — see its own comment for why). CI (`.github/workflows/tests.yml`) runs the
+suite on push and PR across Python 3.9 and 3.13.
 
 ## Status
 
-The pure-Python core (`curve.py`, `grouping.py`) is complete and tested. The pyscript service wrapper
-(`pyscript/apps/`) has not yet been validated against a live pyscript install, and the blueprint has not yet been
-updated to call it — see `CLAUDE.md` for details.
+The pure-Python core (`curve.py`, `grouping.py`) and the integration wrapping it as HA services are both
+written and unit tested, but **not yet confirmed working against a live Home Assistant instance** — see
+CLAUDE.md's "Current status" section before assuming otherwise.

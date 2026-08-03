@@ -4,8 +4,9 @@ the minimal set of light.turn_on/turn_off calls actually needed.
 
 Pure logic, no Home Assistant dependency - HA access (current state,
 attributes, device/label lookups) is injected via an EntityLookup so
-this is testable with plain pytest and fakes, and so the pyscript app
-wrapper (pyscript/apps/adaptive_lighting_app) stays a thin adapter.
+this is testable with plain pytest and fakes, and so the integration's
+__init__.py (custom_components/adaptive_lighting_helpers/__init__.py)
+stays a thin adapter registering this as a standalone HA service.
 
 This is a direct port of what used to be the blueprint's repeat-loop
 `variables:` block (powerable_entities / multiplier_groups /

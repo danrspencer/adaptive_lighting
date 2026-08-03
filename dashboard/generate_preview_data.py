@@ -2,10 +2,10 @@
 """
 Generates dashboard/preview_data.json - a day's worth of sample points
 plus a representative "now" reading, computed with the real
-pyscript/modules/adaptive_lighting/curve.py (the same module the
-production sensors use). preview.html loads this to render the actual
-Lovelace card with synthetic data, so you can see it without a running
-Home Assistant instance.
+custom_components/adaptive_lighting_helpers/curve.py (the same module
+the compute_curve service uses). preview.html loads this to render the
+actual Lovelace card with synthetic data, so you can see it without a
+running Home Assistant instance.
 
 Boundaries here (06:00 morning / 08:00 day / 18:00 evening / 22:00
 night) are just representative defaults for the preview - the real
@@ -20,8 +20,8 @@ import json
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "pyscript" / "modules"))
-from adaptive_lighting import brightness_for_phase, kelvin_for_phase, phase_at  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "custom_components" / "adaptive_lighting_helpers"))
+from curve import brightness_for_phase, kelvin_for_phase, phase_at  # noqa: E402
 
 MORNING_HOUR = 6
 DAY_HOUR = 8

@@ -1,12 +1,20 @@
 #!/bin/sh
-# Copies/symlinks this repo's blueprint/pyscript/dashboard files into a
-# Home Assistant config directory. Run this ON THE HA HOST ITSELF (e.g.
-# from the Advanced SSH & Web Terminal add-on) - a symlink created from
-# another machine over a network share points at a path meaningful to
-# that machine, not to Home Assistant. See CLAUDE.md for the full story.
+# Copies/symlinks this repo's blueprint/integration/dashboard files
+# into a Home Assistant config directory. Run this ON THE HA HOST
+# ITSELF (e.g. from the Advanced SSH & Web Terminal add-on) - a
+# symlink created from another machine over a network share points at
+# a path meaningful to that machine, not to Home Assistant. See
+# CLAUDE.md for the full story.
 #
-# The blueprint and pyscript are both COPIED, not symlinked: a symlink
-# created in one shell session had its target baked in as that
+# This is a stopgap for local testing before Adaptive Lighting Helpers
+# is actually published as a HACS repository - once it is, HACS
+# handles install/update for custom_components/adaptive_lighting_helpers
+# itself and this script's job shrinks to just the blueprint (and the
+# dashboard card, if that also ends up HACS-distributed - see CLAUDE.md's
+# "Open question" section).
+#
+# The blueprint and the integration are both COPIED, not symlinked: a
+# symlink created in one shell session had its target baked in as that
 # session's own path (e.g. /root/config/... from the SSH add-on's home
 # directory), not /config/... - meaningless from whatever container
 # actually reads it back. Copying sidesteps the whole class of problem
@@ -15,6 +23,12 @@
 # The dashboard card is still SYMLINKED - untested so far, but if it
 # turns out to have the same problem (a stale/missing card in the
 # Lovelace resource that doesn't update), switch it to `copy` too.
+#
+# A NEW custom_components/adaptive_lighting_helpers install needs a
+# full HA restart to be discovered at all, then adding once through
+# Settings -> Devices & Services -> Add Integration -> "Adaptive
+# Lighting Helpers" (there's nothing this script can do to automate
+# that UI step).
 #
 # Existing regular files at a copied path are backed up (renamed with
 # a .bak-<timestamp> suffix) rather than overwritten, but only if their
@@ -132,10 +146,10 @@ echo
 
 copy "blueprints/automation/danspencer/adaptive_lighting.yaml" \
      "blueprints/automation/danspencer/adaptive_lighting.yaml"
-copy "pyscript/modules/adaptive_lighting"     "pyscript/modules/adaptive_lighting"
-copy "pyscript/apps/adaptive_lighting_app"    "pyscript/apps/adaptive_lighting_app"
-copy "packages/adaptive_lighting_pyscript.yaml" "packages/adaptive_lighting_pyscript.yaml"
+copy "custom_components/adaptive_lighting_helpers" "custom_components/adaptive_lighting_helpers"
 link "www/adaptive-lighting-curve-card.js" "www/adaptive-lighting-curve-card.js"
 
 echo
-echo "Done. Reload automations (Developer Tools -> YAML -> Automations) or restart Home Assistant to pick up changes."
+echo "Done. Restart Home Assistant to pick up the integration (new custom_components"
+echo "aren't discovered by a plain reload), then add it once via Settings -> Devices"
+echo "& Services -> Add Integration -> \"Adaptive Lighting Helpers\" if not already added."

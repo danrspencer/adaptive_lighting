@@ -12,9 +12,31 @@ the actual HA instance - that grew ~150 lines of namespace-loop Jinja
 for target resolution, reachability filtering, multiplier bucketing,
 tolerance-based "already correct" checks, and manufacturer-based
 two-step transition detection. It worked, but became unreadable and
-hard to change safely. This repo is the migration to pyscript for the
-parts that are genuinely computation (not triggers/conditions), while
+hard to change safely. This repo is the migration of the genuinely
+computational parts (not triggers/conditions) out of Jinja, while
 keeping the blueprint native for the parts HA already does well.
+
+That migration went through two different backends. The first attempt
+moved the computation into pyscript - working, unit-tested Python, but
+getting it to actually *load* inside pyscript cost an entire session
+chasing three separate bugs (see lessons 7-9), each looking exactly
+like the others' symptom (nothing happens, no error). That experience
+is why the computation now lives in `custom_components/adaptive_lighting_helpers/`
+instead - a real Home Assistant integration that registers its own
+services directly, with no pyscript dependency and none of that
+machinery to go wrong. Lessons 7-9 are kept below as the reasoning for
+that decision and in case pyscript ever comes up again elsewhere, not
+because they're live concerns in this repo anymore.
+
+**This repo is now two independent, loosely-coupled pieces** (see "The
+architectural split" below): the `adaptive_lighting_helpers` HACS
+integration (curve math + grouping logic, exposed as plain HA services
+anyone can call from their own automation) and the `adaptive_lighting`
+blueprint (triggers/conditions/target-resolution, built on top of
+those services but not assuming anything about how they're
+implemented). Keep them decoupled - services should be documented and
+useful on their own merits, not written as if the blueprint is their
+only consumer.
 
 This repo's blueprint is deliberately named `adaptive_lighting.yaml`
 (blueprint name "Adaptive Lighting"), not `adaptive_lighting_unified`
@@ -46,22 +68,38 @@ don't reintroduce that collision.
   original bugs this rewrite fixes. Losing that observability wasn't
   worth it for logic that isn't actually that bad.
 
-**Moved to pyscript (`pyscript/modules/adaptive_lighting/grouping.py`):**
+**Moved to `custom_components/adaptive_lighting_helpers/` (a standalone
+HACS integration, `adaptive_lighting_helpers.compute_lighting_groups`
+service, backed by `grouping.py`):**
 - Reachability filtering, multiplier bucketing, the tolerance-based
-  "already at target" check, and two-step-vs-combined label routing.
+  "already at target" check, manual-override protection, and
+  two-step-vs-combined label routing.
 - Why: this was the genuinely gnarly part — nested namespace loops,
   nothing pytest-testable, and a real correctness gap (exact-match
   brightness/colour-temp comparisons that silently stopped skipping
   for any bulb with device-side rounding quirks).
 
-**Also moved to pyscript:** the day-phase brightness/Kelvin curve math
-(`pyscript/modules/adaptive_lighting/curve.py`), ported from
-`custom_templates/adaptive_lighting.jinja` in the live HA config - not
-because it was complicated, but because the whole point of this repo
-is "here's a blueprint and some pyscript", not "...and also a
-custom_templates file and a packages/*.yaml you also need to copy".
+**Also moved there:** the day-phase brightness/Kelvin curve math
+(`curve.py`, exposed as `adaptive_lighting_helpers.compute_curve`),
+ported from `custom_templates/adaptive_lighting.jinja` in the live HA
+config - not because it was complicated, but because it's exactly the
+kind of small, reusable, independently-useful piece of logic that
+belongs as a documented service in its own right, not duplicated
+Jinja someone has to copy into `custom_templates/` and a
+`packages/*.yaml`.
+
+Both services are deliberately written and documented (see
+`services.yaml`) as standalone tools - useful to anyone building their
+own lighting automation, not just to the blueprint in this repo. The
+blueprint is one consumer of them, not their reason for existing.
 
 ## Hard-won lessons (don't repeat these)
+
+Lessons 7-9 are about pyscript specifically, from when that was this
+repo's backend. They're kept because they're the actual reasoning
+behind abandoning pyscript for a native integration instead (see
+"Where this came from" above) and in case pyscript comes up again in
+some other context - not because pyscript is still part of this repo.
 
 1. **Jinja macros can only return rendered text, never a native Python
    list.** `{% macro x() %}{{ some_list }}{% endmacro %}` returns a
@@ -269,51 +307,60 @@ custom_templates file and a packages/*.yaml you also need to copy".
 
 ## Current status / what's not done
 
-- `pyscript/modules/adaptive_lighting/` (curve.py, grouping.py) - pure
-  Python, done, unit-tested (`pytest`), and cross-checked against the
-  exact scenarios validated live against the deployed Jinja blueprint
-  before the port (same expected outputs). Also now includes
-  persistent manual-override protection (`manually_set()`) that the
-  live blueprint doesn't have - see lesson 5 above.
-- `pyscript/apps/adaptive_lighting_app/__init__.py` - the original
-  Phase 0 spike's open questions are now resolved: `is_state`/
-  `state_attr`/`device_id`/`labels` work as plain pyscript globals as
-  assumed; `hass.states.get(entity_id).context.user_id` is confirmed
-  as the way to reach `context.user_id` (the one part that was a
-  guess). Getting it to actually *load* took three real fixes -
-  lessons 7, 8, and 9 above (path-aliased symlink, `__init__.py`
-  naming, app/module name collision causing infinite recursion) - each
-  looking like the others' symptom (nothing happens, no error) until
-  debug logging cut through it.
-- **Not yet confirmed end-to-end as of this writing.** All three fixes
-  above are committed and deployed (blueprint copied, pyscript app
-  copied under its new name, `packages/adaptive_lighting_pyscript.yaml`
-  shipped with the `apps:` config entry). The last live check before
-  writing this up showed `pyscript.compute_lighting_groups` still not
-  registered after a `homeassistant.reload_config_entry` call - which
-  has been flaky all session (dispatches, times out, sometimes doesn't
-  actually complete) - and a restart to get a clean, definitive test
-  hadn't happened yet when the conversation moved on to discussing the
-  HACS-integration question below instead. **Next step: restart HA and
-  check `ha_list_services(domain="pyscript")` for `compute_lighting_groups`
-  before trusting any of this works.**
-- The blueprint's action: block **has been rewired** to call
-  `pyscript.compute_lighting_groups` (with `response_variable:
-  lighting_plan`) instead of the ~90-line namespace-loop Jinja that
-  used to compute multiplier bucketing/tolerance/two-step routing
-  inline. The blueprint still owns turning the returned groups into
-  actual `light.turn_on`/`light.turn_off` calls. Until the service is
-  confirmed registered (above), every non-motion_off/reconcile trigger
-  on any automation using this blueprint fails silently past that
-  point (no lights commanded, "Service not found" in the automation's
-  own error log/trace). Only `automation.living_room_lights_new` uses
-  this blueprint right now (old `automation.living_room_lights`,
-  original blueprint, is switched off for the duration of this test),
-  so blast radius is one room.
-- **Deployment splits blueprint vs. pyscript vs. dashboard card
-  deliberately** (see lesson 7): blueprint and pyscript are both
-  copied, the dashboard card is still symlinked and untested for the
-  same path-aliasing problem.
+**The pyscript backend has been fully replaced by a native integration.**
+`custom_components/adaptive_lighting_helpers/` now registers
+`adaptive_lighting_helpers.compute_lighting_groups` and
+`adaptive_lighting_helpers.compute_curve` as real HA services
+(`hass.services.async_register`, `config_flow`-based, HACS-installable
+as an "Integration" category repo, `hacs.json` at repo root). `pyscript/`
+no longer exists in this repo at all. This resolves the "open question"
+that used to be documented in this section - decided and implemented,
+not just proposed.
+
+- `curve.py` and `grouping.py` - unchanged pure Python, just relocated
+  into the integration package. Same tests, same behaviour, still no
+  Home Assistant dependency (see `tests/conftest.py`'s comment for how
+  tests import them without triggering the integration's own
+  `__init__.py`, which does need `homeassistant`).
+- `custom_components/adaptive_lighting_helpers/__init__.py` - the thin
+  HA adapter (equivalent to the old pyscript app), built from what was
+  actually confirmed during the pyscript attempt: `is_state`/`state_attr`
+  work as expected against `hass.states`, `device_id`/`labels` go
+  through `entity_registry`/`device_registry` (`RegistryEntry.labels`),
+  and `context.user_id` comes from `hass.states.get(entity_id).context.user_id`.
+  These translations were never actually exercised against a running
+  integration (only against pyscript, a different runtime) - **treat
+  them as carried-over best guesses, not confirmed, until tested live.**
+- The blueprint's action: block now calls
+  `adaptive_lighting_helpers.compute_lighting_groups` instead of
+  `pyscript.compute_lighting_groups` - a one-line change, same
+  `response_variable`-based flow as before.
+- **Not yet deployed or tested against a live Home Assistant instance
+  at all.** Everything above is written, unit-tested (`pytest`, 20/20
+  passing), and committed - but this session ran out before actually
+  installing the new integration on the live instance and confirming
+  the services register. Next steps, in order:
+  1. Get `custom_components/adaptive_lighting_helpers/` onto the live
+     host - either `scripts/link_into_ha.sh` (proven to work this way
+     for the blueprint and, before it was removed, pyscript) or
+     actually trying the HACS custom-repository flow for the first
+     time (untested - if it works, that's the better long-term answer
+     since it's what end users would actually do).
+  2. Full restart (new `custom_components` aren't discovered by a
+     reload), then add via Settings → Devices & Services → Add
+     Integration → "Adaptive Lighting Helpers".
+  3. Check `ha_list_services(domain="adaptive_lighting_helpers")` for
+     both services, then actually call `compute_lighting_groups`
+     against a real light before trusting the `__init__.py` adapter
+     guesses above.
+  4. **Clean up the live instance's pyscript-era leftovers**, all of
+     which are now dead weight: the old `/config/pyscript/apps/adaptive_lighting_app`
+     and `/config/pyscript/modules/adaptive_lighting` directories, and
+     `packages/adaptive_lighting_pyscript.yaml` on the live host (not
+     in this repo - it shipped the now-obsolete `pyscript: apps:`
+     config). Whether to also uninstall the pyscript HACS integration
+     itself depends on whether anything else on that instance still
+     uses it - check first.
 - **The dev/test sync loop** (polling this repo for new commits and
   re-running `link_into_ha.sh` automatically) is set up directly on
   the live HA instance - a `shell_command` + `time_pattern` automation
@@ -325,10 +372,10 @@ custom_templates file and a packages/*.yaml you also need to copy".
   commit for what that looked like and why it was reverted). It's also
   currently running a temporary "always re-run link_into_ha.sh
   regardless of git changes" variant of `scripts/adaptive_lighting_sync.sh`
-  on the live instance for this session's debugging - **revert it back
-  to the normal git-pull-gated version once the pyscript spike above is
-  confirmed working**, or every 15-minute tick will re-copy files
-  whether or not anything changed.
+  on the live instance from earlier debugging - **revert it back to
+  the normal git-pull-gated version** once the new integration is
+  confirmed working end-to-end, or every 15-minute tick keeps re-copying
+  files whether or not anything actually changed.
 - `dashboard/preview.html` + `generate_preview_data.py` let you see the
   actual Lovelace card rendered with synthetic data, without a running
   HA instance - regenerate data with
@@ -338,44 +385,32 @@ custom_templates file and a packages/*.yaml you also need to copy".
   imports `../www/adaptive-lighting-curve-card.js`) and open
   `dashboard/preview.html`.
 
-## Open question: rebuild as a proper HACS integration?
+## Open question: dashboard card as a HACS plugin?
 
-Raised but not decided or started. The pitch: replace
-`pyscript/apps/adaptive_lighting_app` with a real
-`custom_components/adaptive_lighting` package that registers
-`compute_lighting_groups` as a native HA service itself
-(`hass.services.async_register`) instead of going through pyscript at
-all - which would eliminate the entire class of bugs in lessons 7-9
-(pyscript's app-folder naming rules, the `apps:` config requirement,
-the name-collision recursion bug, `reload_config_entry`'s flakiness)
-since none of that machinery would exist anymore. `grouping.py`/
-`curve.py` port over basically unchanged - they're already decoupled
-from pyscript via `EntityLookup` dependency injection, that decision
-already paying off here. HACS would also handle install/update instead
-of `scripts/link_into_ha.sh` and the whole copy-vs-symlink saga (though
-the blueprint would likely still need separate handling - HACS's
-blueprint-distribution support is thinner than its integration
-support).
-
-The dashboard card is a much smaller, separate question: HACS's
-original/core use case is distributing custom Lovelace cards (a
-"plugin"/"frontend" repository category), and `www/adaptive-lighting-curve-card.js`
-already fits that shape as-is (single file, no build step, no external
-deps) - just needs a `hacs.json` at the repo root. Installing via HACS
-would also remove the manual "register as a Lovelace resource" step.
-
-Three HACS-installable pieces, in other words: a Lovelace plugin (the
-card), an integration (replacing the pyscript half), and the blueprint
-handled some other way. Nothing about this has been planned in detail
-or started - check with the user before assuming this is happening,
-since it's a real architecture change, not a small tweak, and the
-pyscript-based approach above may still be worth finishing/confirming
-first regardless of whether this happens later.
+The integration half of this used to be an open question - now
+resolved (see above). What's left open is just the dashboard card:
+HACS's original/core use case is distributing custom Lovelace cards (a
+"plugin"/"frontend" repository category, separate from "Integration"),
+and `www/adaptive-lighting-curve-card.js` already fits that shape as-is
+(single file, no build step, no external deps) - would just need its
+own `hacs.json`-equivalent declaration. Confirmed (via a Home Assistant
+integration-embedding-a-card gist) that an *integration* can also
+bundle and self-register its own frontend resource at setup time
+(`manifest.json` depending on `frontend`+`http`, a small
+`JSModuleRegistration` class calling `lovelace.resources.async_create_item`)
+- so this doesn't have to be a second HACS repository/category if it's
+nicer to fold the card into `adaptive_lighting_helpers` directly.
+Neither approach has been started; the card still deploys the old way
+(manual Lovelace resource registration, see README's Installation
+section) until this is decided.
 
 ## Testing
 
-`pip install pytest && pytest` from the repo root. No HA/pyscript
-dependency for the test suite - `tests/fakes.py` provides a fake
-`EntityLookup` so `grouping.py` is exercised with plain dicts. CI runs
-this on push/PR (`.github/workflows/tests.yml`) across Python 3.9 and
-3.13.
+`pip install pytest && pytest` from the repo root. No Home Assistant
+dependency for the test suite - `tests/conftest.py` puts
+`custom_components/adaptive_lighting_helpers/` on `sys.path` and tests
+import `curve`/`grouping` as bare modules (not through the package,
+which would pull in `homeassistant` via `__init__.py`); `tests/fakes.py`
+provides a fake `EntityLookup` so `grouping.py` is exercised with plain
+dicts. CI runs this on push/PR (`.github/workflows/tests.yml`) across
+Python 3.9 and 3.13.

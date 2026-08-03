@@ -1,0 +1,118 @@
+compute_lighting_groups:
+  name: Compute lighting groups
+  description: >-
+    Given a set of light entities, a target brightness/colour-temperature,
+    and optional per-light brightness multipliers, works out the minimal
+    set of light.turn_on/light.turn_off calls actually needed: filters out
+    unreachable lights, groups by multiplier, skips anything already
+    within tolerance of the target, leaves manually-set lights alone (a
+    light a person turned on directly via context.user_id), and separates
+    out lights that need a two-step (brightness-then-colour) transition.
+    Standalone - call this from your own automation, it doesn't require
+    the adaptive_lighting blueprint in this repo.
+  fields:
+    entities:
+      name: Entities
+      description: Light entities to consider.
+      required: true
+      selector:
+        entity:
+          multiple: true
+          domain: light
+    brightness_multipliers:
+      name: Brightness multipliers
+      description: >-
+        Map of entity_id to multiplier. 0 turns that light off; other
+        numbers scale brightness (floored at 1); null/false skips the
+        light entirely (excluded from every group). Entities not listed
+        default to a multiplier of 1.
+      example: '{"light.lamp": 0.5, "light.strip": 0}'
+      selector:
+        object:
+    sensor_brightness:
+      name: Target brightness
+      description: Base brightness (0-255) before multipliers are applied.
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 255
+    sensor_color_temp_kelvin:
+      name: Target colour temperature
+      description: Target colour temperature in Kelvin.
+      required: true
+      selector:
+        number:
+          min: 1000
+          max: 10000
+          unit_of_measurement: K
+    brightness_tolerance:
+      name: Brightness tolerance
+      description: >-
+        A light already within this many brightness points of the target
+        is left alone instead of being recommanded.
+      default: 2
+      selector:
+        number:
+          min: 0
+          max: 50
+    color_temp_tolerance:
+      name: Colour temperature tolerance
+      description: >-
+        A light already within this many Kelvin of the target is left
+        alone instead of being recommanded.
+      default: 10
+      selector:
+        number:
+          min: 0
+          max: 500
+          unit_of_measurement: K
+    two_step_label:
+      name: Two-step label
+      description: >-
+        Entities or devices carrying this label are returned separately
+        (as "two_step") so you can send brightness and colour temperature
+        as two sequential calls instead of one combined call - for bulbs
+        that can't transition both together.
+      default: no_combined_transition
+      selector:
+        text:
+
+compute_curve:
+  name: Compute adaptive curve point
+  description: >-
+    Given today's morning/day/evening/night phase-boundary timestamps,
+    returns the target brightness, colour temperature, and phase name for
+    a given instant (or now, if not specified). Standalone - useful for
+    building your own day-phase sensor or automation without the
+    adaptive_lighting blueprint.
+  fields:
+    morning:
+      name: Morning boundary
+      description: Unix timestamp when the Morning phase starts today.
+      required: true
+      selector:
+        number:
+    day:
+      name: Day boundary
+      description: Unix timestamp when the Day phase starts today.
+      required: true
+      selector:
+        number:
+    evening:
+      name: Evening boundary
+      description: Unix timestamp when the Evening phase starts today.
+      required: true
+      selector:
+        number:
+    night:
+      name: Night boundary
+      description: Unix timestamp when the Night phase starts today.
+      required: true
+      selector:
+        number:
+    at:
+      name: At
+      description: Instant to evaluate, as a unix timestamp. Defaults to now.
+      selector:
+        number:

@@ -10,7 +10,7 @@ jobs:
     strategy:
       matrix:
         # 3.9 is the floor (requires-python in pyproject.toml); 3.13 is
-        # roughly what a current Home Assistant/pyscript install runs.
+        # roughly what a current Home Assistant install runs.
         python-version: ["3.9", "3.13"]
     steps:
       - uses: actions/checkout@v4
