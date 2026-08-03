@@ -112,7 +112,7 @@ copy() {
     fi
   fi
 
-  if [ -e "$dest" ]; then
+  if [ -e "$dest" ] || [ -L "$dest" ]; then
     backup="$dest.bak-$(date +%Y%m%d-%H%M%S)"
     echo "BACKUP  $2 -> $(basename "$backup")"
     if [ "$DRY_RUN" = 0 ]; then
