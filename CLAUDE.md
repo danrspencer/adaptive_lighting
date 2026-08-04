@@ -444,35 +444,40 @@ scene-coverage gap filling.
      if the live `packages/adaptive_lighting.yaml` sensors of the same
      name are still active at that point, expect a `_2` suffix instead;
      see the note in `sensor.py`'s docstring.
-  4. **Clean up the live instance's pyscript-era leftovers**, all of
-     which are now dead weight: the old `/config/pyscript/apps/adaptive_lighting_app`
-     and `/config/pyscript/modules/adaptive_lighting` directories, and
-     `packages/adaptive_lighting_pyscript.yaml` on the live host (not
-     in this repo - it shipped the now-obsolete `pyscript: apps:`
-     config). Whether to also uninstall the pyscript HACS integration
-     itself depends on whether anything else on that instance still
-     uses it - check first.
+  4. ~~Clean up the live instance's pyscript-era leftovers~~ **Done.**
+     `/config/pyscript` (both the app and module directories, plus the
+     dangling `.bak-*` symlinks from lesson 7's incident) and
+     `packages/adaptive_lighting_pyscript.yaml` were deleted from the
+     live host directly. The pyscript HACS integration itself was
+     deliberately left installed (harmless with nothing left to load;
+     cheap to remove later if wanted). Consequence: `automation.
+     living_room_lights_new` will show "Service not found:
+     pyscript.compute_lighting_groups" until step 1-3 above actually
+     happen - expected, not a regression (motion on/off and reconcile
+     turn-off are unaffected, only the adaptive brightness/colour step
+     no-ops). The dev/test git-sync automation was torn down the same
+     way at the same time - see the note about it further down this
+     list.
   5. **Once the new sensors are confirmed working, retire the live
      `packages/adaptive_lighting.yaml`** (or at least its generic
      boundary/phase/brightness/curve parts - the household-specific
      nightlight and IKEA-diagnostic sensors have no replacement here
      and would need to move somewhere else first, or just stay as a
      much smaller leftover package).
-- **The dev/test sync loop** (polling this repo for new commits and
-  re-running `link_into_ha.sh` automatically) is set up directly on
-  the live HA instance - a `shell_command` + `time_pattern` automation
-  (`automation.adaptive_lighting_sync_from_git`), not committed here.
-  It's specific to this user's instance and this repo's checkout path
-  (`/config/repos/adaptive_lighting`), not something worth publishing -
-  don't re-add it to the repo without checking first (see git history
-  around the "Rewire blueprint to pyscript, add git auto-sync..."
-  commit for what that looked like and why it was reverted). It's also
-  currently running a temporary "always re-run link_into_ha.sh
-  regardless of git changes" variant of `scripts/adaptive_lighting_sync.sh`
-  on the live instance from earlier debugging - **revert it back to
-  the normal git-pull-gated version** once the new integration is
-  confirmed working end-to-end, or every 15-minute tick keeps re-copying
-  files whether or not anything actually changed.
+- **The dev/test git-sync automation has been removed.** It used to
+  poll this repo for new commits and re-run `link_into_ha.sh`
+  automatically (a `shell_command` + `time_pattern` automation,
+  `automation.adaptive_lighting_sync_from_git`, plus
+  `packages/adaptive_lighting_sync.yaml` and
+  `scripts/adaptive_lighting_sync.sh` on the live host - never
+  committed to this repo, see git history around the "Rewire blueprint
+  to pyscript, add git auto-sync..." commit for why). Torn down at the
+  same time as the pyscript cleanup below, since the whole point of
+  moving to a real HACS integration is that HACS handles install/update
+  natively - a git-polling shell script doing the same job by hand is
+  exactly the thing this migration was meant to replace, not something
+  to keep running alongside it. Don't re-add it without checking
+  whether the HACS install actually covers everything it used to first.
 - `dashboard/preview.html` + `generate_preview_data.py` let you see the
   actual Lovelace card rendered with synthetic data, without a running
   HA instance - regenerate data with
