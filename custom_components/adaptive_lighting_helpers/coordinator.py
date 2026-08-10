@@ -43,7 +43,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 import homeassistant.util.dt as dt_util
 
 from .const import PHASE_OVERRIDE_ENTITY_ID
-from .curve import brightness_for_phase, kelvin_for_phase, phase_at
+from .curve import DEFAULT_NIGHT_FLOOR_KELVIN, phase_at, targets_for_phase
 
 UPDATE_INTERVAL = timedelta(seconds=60)
 
@@ -95,7 +95,14 @@ def _compute_boundaries(hass: HomeAssistant, config: dict[str, Any]) -> dict[str
     }
 
 
-def _compute_curve_points(boundaries: dict[str, float | None]) -> list[dict[str, Any]]:
+def _compute_curve_points(boundaries: dict[str, float | None], night_floor_kelvin: int) -> list[dict[str, Any]]:
+    """kelvin_rgb mirrors kelvin but with night_floor_kelvin applied -
+    identical to kelvin whenever night_floor_kelvin is left at the
+    default, diverging only in Evening's final hour + Night when it's
+    been set lower. Always computed (cheap pure arithmetic, same
+    reasoning as recomputing the whole 289-point curve every 60s) so the
+    dashboard card can show the divergence only when there actually is
+    one, without needing to know the configured floor itself."""
     morning_ts, day_ts, evening_ts, night_ts = (
         boundaries["morning_ts"],
         boundaries["day_ts"],
@@ -107,11 +114,13 @@ def _compute_curve_points(boundaries: dict[str, float | None]) -> list[dict[str,
     for i in range(289):
         t = midnight + i * 300
         phase = phase_at(t, morning_ts, day_ts, evening_ts, night_ts)
+        targets = targets_for_phase(phase, t, evening_ts, day_ts, night_ts, night_floor=night_floor_kelvin)
         points.append(
             {
                 "t": int(t),
-                "brightness": brightness_for_phase(phase, t, night_ts),
-                "kelvin": kelvin_for_phase(phase, t, evening_ts, day_ts, night_ts),
+                "brightness": targets["brightness"],
+                "kelvin": targets["kelvin"],
+                "kelvin_rgb": targets["kelvin_rgb"],
             }
         )
     return points
@@ -131,16 +140,19 @@ class ScheduleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     async def _async_update_data(self) -> dict[str, Any]:
         boundaries = _compute_boundaries(self.hass, self._config)
+        night_floor_kelvin = self._config.get("night_floor_kelvin") or DEFAULT_NIGHT_FLOOR_KELVIN
         now_ts = time.time()
         computed_phase = phase_at(now_ts, boundaries["morning_ts"], boundaries["day_ts"], boundaries["evening_ts"], boundaries["night_ts"])
         phase = _phase_override(self.hass) or computed_phase
-        brightness = brightness_for_phase(phase, now_ts, boundaries["night_ts"])
-        kelvin = kelvin_for_phase(phase, now_ts, boundaries["evening_ts"], boundaries["day_ts"], boundaries["night_ts"])
+        targets = targets_for_phase(
+            phase, now_ts, boundaries["evening_ts"], boundaries["day_ts"], boundaries["night_ts"], night_floor=night_floor_kelvin
+        )
         return {
             **boundaries,
             "phase": phase,
             "computed_phase": computed_phase,
-            "brightness": brightness,
-            "kelvin": kelvin,
-            "points": _compute_curve_points(boundaries),
+            "brightness": targets["brightness"],
+            "kelvin": targets["kelvin"],
+            "rgb_color": targets["rgb_color"],
+            "points": _compute_curve_points(boundaries, night_floor_kelvin),
         }

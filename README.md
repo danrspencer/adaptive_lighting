@@ -3,8 +3,9 @@
 Two independent pieces, designed to work together but not coupled to each other:
 
 - **Adaptive Lighting Helpers** — a standalone Home Assistant integration exposing brightness/colour-temperature
-  curve math and per-light grouping (reachability, tolerance, manual-override protection, two-step transitions) as
-  plain HA services. Useful in your own automations even if you never touch the blueprint below.
+  curve math and per-light grouping (reachability, tolerance, manual-override protection, two-step transitions,
+  optional RGB colour) as plain HA services. Useful in your own automations even if you never touch the blueprint
+  below.
 - **The Adaptive Lighting blueprint** — a per-room automation built on top of those services: brightness and
   colour temperature follow a four-phase daily schedule, motion controls on/off, scenes can take over partially
   or entirely, manual changes are respected, and lights that don't reach their target get corrected automatically.
@@ -35,20 +36,54 @@ terms, not just given its own numbers on a curve:
   asleep: dim and warm, the lighting you want on at 3am without waking yourself up further.
 
 Each boundary is independently configurable, and any phase can be pinned manually when you want to override the
-schedule for a while — see [docs/HELPERS.md](docs/HELPERS.md).
+schedule for a while — see [docs/HELPERS.md](docs/HELPERS.md). Evening and Night can also optionally go warmer
+than a bulb's native colour-temperature range allows, on lights that support RGB colour — see
+[docs/HELPERS.md](docs/HELPERS.md)'s `night_floor_kelvin`.
 
 ## Adaptive Lighting Helpers (the integration)
 
 Exposes the phase schedule above, plus per-light grouping (reachability, tolerance, manual-override protection,
-two-step transitions) and scene-coverage gap filling, as three plain HA services — `compute_lighting_groups`,
-`compute_curve`, `compute_scene_coverage` — usable from your own automations with no blueprint required. Can
-optionally run the schedule continuously as sensors instead of calling `compute_curve` yourself. Full service
-contracts, YAML examples, and the sensor/entity list: **[docs/HELPERS.md](docs/HELPERS.md)**.
+two-step transitions, optional RGB colour) and scene-coverage gap filling, as four plain HA services —
+`compute_lighting_groups` and `compute_curve` are pure planners that hand back data; `apply_lighting` wraps the
+same grouping logic and actually turns lights on/off for you; `compute_scene_coverage` is the scene-handoff
+helper. All usable from your own automations with no blueprint required. Can optionally run the schedule
+continuously as sensors instead of calling `compute_curve` yourself. Full service contracts, YAML examples, and
+the sensor/entity list: **[docs/HELPERS.md](docs/HELPERS.md)**.
+
+## Bring your own sensor
+
+`apply_lighting` and `compute_lighting_groups` don't require this integration's own `sensor.adaptive_lighting` —
+they'll read brightness/colour targets off any sensor entity that exposes the right attributes. That's the whole
+contract, and nothing else about the entity matters (its `state` is never read):
+
+| Attribute | Type | Required |
+|---|---|---|
+| `brightness` | 0-255 | yes |
+| `color_temp` | Kelvin | yes |
+| `rgb_color` | `[r, g, b]` | no — only needed if you're using `prefer_rgb_color` |
+
+A minimal hand-written template sensor satisfying that contract:
+
+```yaml
+template:
+  - sensor:
+      - name: "My Room's Adaptive Lighting"
+        state: "{{ 'Evening' if now().hour >= 18 else 'Day' }}" # anything - not read by these services
+        attributes:
+          brightness: "{{ 180 if now().hour >= 18 else 255 }}"
+          color_temp: "{{ 3200 if now().hour >= 18 else 5500 }}"
+          # Optional - only needed for prefer_rgb_color
+          rgb_color: "{{ [255, 200, 150] if now().hour >= 18 else [255, 255, 255] }}"
+```
+
+Point `apply_lighting`'s `sensor_entity_id` (or the blueprint's Adaptive Lighting Sensor input) at that entity
+and everything else — reachability, tolerance, manual-override protection, two-step transitions, RGB dispatch —
+works exactly the same as with this integration's own sensor.
 
 ## The blueprint
 
-A per-room automation built on the services above (loosely coupled — it calls `compute_lighting_groups` the same
-way it calls `light.turn_on`, without assuming anything about how that service is implemented). Brightness and
+A per-room automation built on the services above (loosely coupled — it calls `apply_lighting` the same way it
+calls `light.turn_on`, without assuming anything about how that service is implemented). Brightness and
 colour temperature follow the phase schedule, motion controls on/off, scenes can take over partially or entirely,
 manual changes are respected, and lights that don't reach their target get corrected automatically. Full
 feature-by-feature breakdown and the input reference: **[docs/BLUEPRINT.md](docs/BLUEPRINT.md)**.
@@ -57,16 +92,17 @@ feature-by-feature breakdown and the input reference: **[docs/BLUEPRINT.md](docs
 
 ```
 custom_components/adaptive_lighting_helpers/
-    __init__.py    registers the three services against real HA state
+    __init__.py    registers the four services against real HA state
     coordinator.py shared schedule computation behind the optional
                    sensors/select below - only set up if the config
                    entry has schedule times configured
     sensor.py      optional day-phase/curve sensors (see
                    docs/HELPERS.md)
     select.py      optional phase-override select (same doc)
-    curve.py       brightness/colour-temperature schedule
+    curve.py       brightness/colour-temperature schedule + Kelvin -> RGB
     grouping.py    reachability, multiplier bucketing, tolerance checks,
-                   manual-override protection, two-step/combined routing
+                   manual-override protection, two-step/combined and
+                   RGB-vs-colour-temp routing
     scenes.py      scene-coverage gap filling (apply a scene, then a
                    default for whatever it doesn't cover)
     manifest.json, config_flow.py, services.yaml, strings.json,
@@ -122,7 +158,7 @@ Not yet published to the HACS default store. Add this repository as a HACS custo
 menu → Custom repositories → this repo's URL, category "Integration"), install, restart Home Assistant (a brand
 new `custom_components` entry needs a restart to be discovered, not just a reload), then add it once via
 Settings → Devices & Services → Add Integration → "Adaptive Lighting Helpers". The setup form is entirely
-optional — leave every field blank to just get the three services above, or fill in the five schedule times for
+optional — leave every field blank to just get the services above, or fill in the five schedule times for
 the day-phase/curve sensors too (see [docs/HELPERS.md](docs/HELPERS.md)). Editable later from the same place
 (Configure), which re-runs the same form pre-filled with your current values.
 
@@ -136,7 +172,7 @@ Import directly via Home Assistant's own blueprint importer (Settings → Automa
 Import Blueprint, paste this repo's raw URL to
 `blueprints/automation/danspencer/adaptive_lighting.yaml`) — this is a plain HA feature, not something HACS is
 involved in. Requires Adaptive Lighting Helpers to be installed first, since the blueprint calls its
-`compute_lighting_groups` service.
+`apply_lighting` service.
 
 Note: if migrating from an older, pre-rewrite version of this blueprint, the inputs have changed
 (`scene_sensor`/`scene_name_prefix` → `scene_template`/`extra_triggers`) — every room automation using the old
@@ -178,7 +214,9 @@ suite on push and PR across Python 3.9 and 3.13.
 
 The pure-Python core (`curve.py`, `grouping.py`, `scenes.py`) and the integration wrapping it as HA services
 are both written, unit tested, and **installed via HACS and confirmed working against a live Home Assistant
-instance** — all three services verified registered and functionally correct, and the blueprint's full
-compute-groups-then-turn-on-lights path exercised end to end against real hardware. The optional day-phase/
-curve sensors (`sensor.py`) haven't been configured or tested live yet. See CLAUDE.md's "Current status"
-section for the full rundown.
+instance** — `compute_lighting_groups`/`compute_curve`/`compute_scene_coverage` verified registered and
+functionally correct, and the blueprint's full compute-groups-then-turn-on-lights path exercised end to end
+against real hardware. `apply_lighting` and RGB colour support (`prefer_rgb_color`, `night_floor_kelvin`) are
+new, unit tested, and **not yet exercised against a live instance**. The optional day-phase/curve sensors
+(`sensor.py`) haven't been configured or tested live yet either. See CLAUDE.md's "Current status" section for
+the full rundown.

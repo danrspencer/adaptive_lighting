@@ -13,6 +13,14 @@
  * a manual override via select.adaptive_lighting_phase (see
  * coordinator.py), since they represent "right now" rather than the
  * full-day schedule.
+ *
+ * Each point also carries kelvin_rgb - the same value but with a
+ * (possibly lower) night_floor_kelvin applied, i.e. what apply_lighting/
+ * compute_lighting_groups would actually send as rgb_color to an
+ * RGB-capable light with Prefer RGB Color on. Identical to kelvin unless
+ * night_floor_kelvin has been configured below 2700, so this card only
+ * draws the extra "RGB target" caps where the two actually diverge -
+ * nothing extra renders for anyone who hasn't touched that setting.
  */
 
 const DEFAULT_ENTITIES = {
@@ -87,6 +95,16 @@ function numFromAttrOrState(stateObj, attrName) {
   if (!stateObj) return undefined;
   const attrVal = stateObj.attributes && stateObj.attributes[attrName];
   return attrVal !== undefined ? Number(attrVal) : Number(stateObj.state);
+}
+
+// rgb_color is optional (only meaningful once night_floor_kelvin is
+// configured below 2700 - see coordinator.py) - null rather than a
+// default when absent or malformed, so callers can tell "no RGB target"
+// apart from "RGB target happens to equal the colour-temp one".
+function rgbFromAttr(stateObj) {
+  if (!stateObj) return null;
+  const v = stateObj.attributes && stateObj.attributes.rgb_color;
+  return Array.isArray(v) && v.length === 3 ? v.map(Number) : null;
 }
 
 function fmtTime(tSec) {
@@ -178,6 +196,10 @@ class AdaptiveLightingCurveCard extends HTMLElement {
     // by falling back to .state.
     const brightnessNowValue = numFromAttrOrState(brightnessNow, 'brightness');
     const kelvinNowValue = numFromAttrOrState(kelvinNow, 'color_temp');
+    // kelvinNow is the same entity as phase by default (sensor.adaptive_lighting) -
+    // its rgb_color attribute is only present/meaningfully different once
+    // night_floor_kelvin is configured below 2700.
+    const rgbColorNowValue = rgbFromAttr(kelvinNow);
 
     const cacheKey = JSON.stringify([
       boundaries,
@@ -187,6 +209,7 @@ class AdaptiveLightingCurveCard extends HTMLElement {
       pointsRaw,
       brightnessNowValue,
       kelvinNowValue,
+      rgbColorNowValue,
     ]);
 
     if (cacheKey === this._cacheKey) {
@@ -199,6 +222,7 @@ class AdaptiveLightingCurveCard extends HTMLElement {
     this._sun = sun;
     this._brightnessNow = brightnessNowValue;
     this._kelvinNow = kelvinNowValue;
+    this._rgbColorNow = rgbColorNowValue;
 
     if (pointsRaw) {
       // HA's trigger-template attribute rendering sometimes preserves the
@@ -280,6 +304,8 @@ class AdaptiveLightingCurveCard extends HTMLElement {
     const hOf = (brightness) => (brightness / 255) * CHART_H;
 
     let bars = '';
+    let rgbCaps = '';
+    let haveRgbDivergence = false;
     if (haveSamples) {
       const barW = CHART_W / (samples.length - 1) + 0.6;
       bars = samples
@@ -288,6 +314,24 @@ class AdaptiveLightingCurveCard extends HTMLElement {
           const h = hOf(s.brightness);
           const color = rgbToHex(kelvinToRgb(s.kelvin));
           return `<rect x="${(x - barW / 2).toFixed(2)}" y="${(BASELINE_Y - h).toFixed(2)}" width="${barW.toFixed(2)}" height="${h.toFixed(2)}" fill="${color}" />`;
+        })
+        .join('');
+
+      // A thin cap above each bar wherever the RGB target actually
+      // diverges from the colour-temp one (typically just Evening's
+      // final hour + Night) - nothing renders here at all for a
+      // default/unconfigured night_floor_kelvin, since every sample's
+      // kelvin_rgb then equals its kelvin.
+      const RGB_CAP_H = 8;
+      const diverging = samples.filter((s) => s.kelvin_rgb != null && s.kelvin_rgb !== s.kelvin);
+      haveRgbDivergence = diverging.length > 0;
+      rgbCaps = diverging
+        .map((s) => {
+          const x = xOf(s.t);
+          const h = hOf(s.brightness);
+          const color = rgbToHex(kelvinToRgb(s.kelvin_rgb));
+          const y = BASELINE_Y - h - RGB_CAP_H;
+          return `<rect x="${(x - barW / 2).toFixed(2)}" y="${y.toFixed(2)}" width="${barW.toFixed(2)}" height="${RGB_CAP_H}" fill="${color}" class="rgb-cap" />`;
         })
         .join('');
     }
@@ -365,10 +409,21 @@ class AdaptiveLightingCurveCard extends HTMLElement {
     let nowMarker = '';
     if (haveNow) {
       const nowHex = rgbToHex(kelvinToRgb(this._kelvinNow));
+      const nowY = BASELINE_Y - hOf(this._brightnessNow);
       nowMarker = `
         <line x1="${nowX}" y1="${PAD_TOP - 4}" x2="${nowX}" y2="${BASELINE_Y}" class="now-line" />
-        <circle cx="${nowX}" cy="${(BASELINE_Y - hOf(this._brightnessNow)).toFixed(1)}" r="4" fill="${nowHex}" class="now-dot" />
+        <circle cx="${nowX}" cy="${nowY.toFixed(1)}" r="4" fill="${nowHex}" class="now-dot" />
       `;
+      // Small ring above the main dot for the RGB target, only when the
+      // sensor actually provides one and it's visibly different from
+      // the colour-temp target - see rgbFromAttr()/night_floor_kelvin.
+      if (this._rgbColorNow) {
+        const nowRgbHex = rgbToHex(this._rgbColorNow);
+        if (nowRgbHex !== nowHex) {
+          haveRgbDivergence = true;
+          nowMarker += `<circle cx="${nowX}" cy="${(nowY - 10).toFixed(1)}" r="3" fill="${nowRgbHex}" class="now-rgb-dot" />`;
+        }
+      }
     } else if (nowInWindow) {
       nowMarker = `<line x1="${nowX}" y1="${PAD_TOP - 4}" x2="${nowX}" y2="${BASELINE_Y}" class="now-line" />`;
     }
@@ -377,6 +432,7 @@ class AdaptiveLightingCurveCard extends HTMLElement {
       <svg viewBox="0 0 ${VB_W} ${VB_H}" preserveAspectRatio="none" class="chart">
         ${bars}
         ${clampBand}
+        ${rgbCaps}
         ${boundaryLines}
         ${hourTicks.join('')}
         ${sunMarkers}
@@ -384,6 +440,10 @@ class AdaptiveLightingCurveCard extends HTMLElement {
         <line x1="${PAD_L}" y1="${BASELINE_Y}" x2="${VB_W - PAD_R}" y2="${BASELINE_Y}" class="axis-line" />
       </svg>
     `;
+
+    const rgbLegend = haveRgbDivergence
+      ? `<div class="rgb-legend"><span class="rgb-swatch"></span>RGB target (Prefer RGB Color) where warmer than colour temperature can reach</div>`
+      : '';
 
     const nowLabel = haveNow
       ? `Now ${fmtTime(now)} · ${this._brightnessNow} bri · ${this._kelvinNow}K${this._phaseState ? ` · ${this._phaseState}` : ''}`
@@ -411,6 +471,22 @@ class AdaptiveLightingCurveCard extends HTMLElement {
           stroke-width: 1;
           stroke-dasharray: 1 3;
           opacity: 0.6;
+        }
+        .rgb-cap { opacity: 0.95; }
+        .now-rgb-dot { stroke: var(--card-background-color); stroke-width: 1; }
+        .rgb-legend {
+          font-size: 0.78em;
+          color: var(--secondary-text-color);
+          margin-top: 2px;
+        }
+        .rgb-swatch {
+          display: inline-block;
+          width: 8px;
+          height: 8px;
+          border-radius: 2px;
+          background: linear-gradient(135deg, #ff9f45, #ffd7a8);
+          margin-right: 5px;
+          vertical-align: middle;
         }
         .boundary-line {
           stroke: var(--secondary-text-color);
@@ -451,6 +527,7 @@ class AdaptiveLightingCurveCard extends HTMLElement {
           ${svg}
           <div class="tooltip"></div>
           <div class="footnote">${footnote}</div>
+          ${rgbLegend}
         </div>
       </ha-card>
     `;
@@ -478,10 +555,17 @@ class AdaptiveLightingCurveCard extends HTMLElement {
       }
       const s = samples[idx];
       const hex = rgbToHex(kelvinToRgb(s.kelvin));
+      const swatch = `<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${hex};vertical-align:middle;"></span>`;
+      let rgbPart = '';
+      if (s.kelvin_rgb != null && s.kelvin_rgb !== s.kelvin) {
+        const rgbHex = rgbToHex(kelvinToRgb(s.kelvin_rgb));
+        const rgbSwatch = `<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${rgbHex};vertical-align:middle;"></span>`;
+        rgbPart = ` &nbsp; RGB ${s.kelvin_rgb}K ${rgbSwatch}`;
+      }
       this._tooltipEl.style.display = 'block';
-      this._tooltipEl.style.left = `${clamp((clientX - rect.left), 0, rect.width - 120)}px`;
+      this._tooltipEl.style.left = `${clamp((clientX - rect.left), 0, rect.width - 160)}px`;
       this._tooltipEl.style.top = '4px';
-      this._tooltipEl.innerHTML = `<b>${fmtTime(s.t)}</b> &nbsp; ${s.brightness} bri &nbsp; ${s.kelvin}K &nbsp; <span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${hex};vertical-align:middle;"></span>`;
+      this._tooltipEl.innerHTML = `<b>${fmtTime(s.t)}</b> &nbsp; ${s.brightness} bri &nbsp; ${s.kelvin}K ${swatch}${rgbPart}`;
     };
     const onLeave = () => {
       this._tooltipEl.style.display = 'none';

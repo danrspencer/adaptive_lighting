@@ -4,15 +4,35 @@
 > (in particular, [why the schedule has four named phases](../README.md#why-four-phases-not-a-continuous-curve)
 > rather than a single continuous curve) and how to install it.
 
-Three services, each documented in full in `services.yaml` (visible in Home Assistant's Developer Tools → Actions
+Four services, each documented in full in `services.yaml` (visible in Home Assistant's Developer Tools → Actions
 once installed) — call them directly from your own automations or scripts, no blueprint required.
+
+## `adaptive_lighting_helpers.apply_lighting`
+
+The "just make it happen" service: reads brightness/colour-temperature (and optionally RGB colour) off any
+sensor entity you point it at — see [README's "Bring your own sensor"](../README.md#bring-your-own-sensor) for
+the exact contract — and actually turns entities on/off via `light.turn_on`/`light.turn_off`, handling
+reachability, tolerance, manual-override protection, two-step transitions, and RGB-vs-colour-temp dispatch
+internally. This is what the blueprint calls.
+
+```yaml
+action: adaptive_lighting_helpers.apply_lighting
+data:
+  entities: [light.kitchen_1, light.kitchen_2]
+  sensor_entity_id: sensor.adaptive_lighting
+  transition: 2
+  brightness_multipliers: { light.kitchen_2: 0.5 }
+  prefer_rgb_color: true # optional - see "RGB colour" below
+```
 
 ## `adaptive_lighting_helpers.compute_lighting_groups`
 
-Given a set of light entities, a target brightness/colour-temperature, and optional per-light brightness
-multipliers, returns the minimal set of groups actually needing a `light.turn_on`/`light.turn_off` call: filters
-out unreachable lights, buckets by multiplier, skips anything already within tolerance of the target, leaves
-manually-set lights alone, and separates out lights tagged for two-step transitions.
+The pure-planner version of `apply_lighting`: given a set of light entities, a target brightness/colour-temperature,
+and optional per-light brightness multipliers, returns the minimal set of groups actually needing a
+`light.turn_on`/`light.turn_off` call — filters out unreachable lights, buckets by multiplier, skips anything
+already within tolerance of the target, leaves manually-set lights alone, and separates out lights tagged for
+two-step transitions — without touching any light itself. Use this instead of `apply_lighting` if you want to
+dispatch the calls yourself (custom transition curves, logging, etc.).
 
 ```yaml
 action: adaptive_lighting_helpers.compute_lighting_groups
@@ -22,14 +42,23 @@ data:
   sensor_color_temp_kelvin: 3200
   brightness_multipliers: { light.kitchen_2: 0.5 }
 response_variable: plan
-# plan.groups -> [{multiplier, brightness, needing_off, combined, two_step}, ...]
+# plan.groups -> [{multiplier, brightness, needing_off, combined, two_step, combined_rgb, two_step_rgb}, ...]
 ```
+
+### RGB colour
+
+Both services above accept `prefer_rgb_color` (off by default). When on, entities whose `supported_color_modes`
+indicates RGB support (auto-detected — nothing to configure per light) are routed to `rgb_color` instead of
+`color_temp_kelvin`; entities without RGB support are unaffected. `apply_lighting` reads the RGB target straight
+off `sensor_entity_id`'s `rgb_color` attribute; `compute_lighting_groups` takes it as an explicit `rgb_color`
+field since it isn't reading a sensor at all. Neither service invents an RGB target on its own — see
+`compute_curve`'s `night_floor_kelvin` below for where that value actually comes from, or supply your own.
 
 ## `adaptive_lighting_helpers.compute_curve`
 
 Given today's morning/day/evening/night phase-boundary timestamps, returns the target brightness, colour
-temperature, and phase name for a given instant (or now). Useful for building your own day-phase sensor without
-any of the rest of this project.
+temperature, RGB colour, and phase name for a given instant (or now). Useful for building your own day-phase
+sensor without any of the rest of this project.
 
 ```yaml
 action: adaptive_lighting_helpers.compute_curve
@@ -38,9 +67,18 @@ data:
   day: "{{ today_at('08:00:00') | as_timestamp }}"
   evening: "{{ today_at('18:00:00') | as_timestamp }}"
   night: "{{ today_at('22:00:00') | as_timestamp }}"
+  night_floor_kelvin: 2000 # optional, default 2700 - see below
 response_variable: now
-# now.phase / now.brightness / now.kelvin
+# now.phase / now.brightness / now.kelvin / now.rgb_color
 ```
+
+`night_floor_kelvin` controls the response's `rgb_color` (never `kelvin`, which always uses the default):
+Evening's final hour and all of Night can target a Kelvin value warmer than 2700 - lower than most bulbs' native
+`color_temp` minimum - and `rgb_color` is that value converted to RGB. Left at the default 2700, `rgb_color` is
+just the plain conversion of `kelvin` and the two colour representations are equivalent; Morning/Day and
+Evening's earlier ramp are unaffected either way. See
+[README's "Why four phases"](../README.md#why-four-phases-not-a-continuous-curve) for why only Evening/Night's
+tail is eligible to extend this way.
 
 ## `adaptive_lighting_helpers.compute_scene_coverage`
 
@@ -62,21 +100,22 @@ response_variable: coverage
 
 ## Optional: day-phase/curve sensors
 
-If you'd rather have this running continuously as sensors than call `compute_curve` yourself, fill in the five
+If you'd rather have this running continuously as sensors than call `compute_curve` yourself, fill in the
 schedule times when setting up the integration (Settings → Devices & Services → Adaptive Lighting Helpers →
 Configure) — start times for Morning, Day, and Night, and Evening's earliest/latest bound. No separate helper
 entities to create first — these are plain times stored directly on the integration's own config entry, editable
-later from the same Configure screen. Leave them blank and you just get the three services above with nothing
-else.
+later from the same Configure screen. Leave them blank and you just get the services above with nothing else.
+The same Configure screen also has an optional `night_floor_kelvin` field (see `compute_curve` above) - blank
+means 2700, no colour extension.
 
-Filling them in adds, computed the same way `compute_curve` computes them, refreshed every 60 seconds:
+Filling in the five times adds, computed the same way `compute_curve` computes them, refreshed every 60 seconds:
 
 | Entity | What it is |
 |---|---|
 | `sensor.morning_start` / `day_start` / `night_start` | Today's boundary, `attributes.timestamp` |
 | `sensor.evening_start` | Today's evening boundary, `attributes.timestamp`, plus `attributes.earliest`/`latest` (the two configured bounds, for reference) |
-| `sensor.adaptive_lighting` | Combined "right now" reading — state is the phase (Morning/Day/Evening/Night), `attributes.brightness` (0-255) and `attributes.color_temp` (Kelvin) are exactly the attribute names the blueprint's `adaptive_sensor` input already reads, so this can be pointed at directly |
-| `sensor.adaptive_lighting_curve` | `attributes.points`: the full day as 289 `{t, brightness, kelvin}` samples — what the [dashboard card](../README.md#previewing-the-dashboard-card) reads. Deliberately does **not** follow a manual phase override (see below) — it's a full-day schedule, not a "right now" value |
+| `sensor.adaptive_lighting` | Combined "right now" reading — state is the phase (Morning/Day/Evening/Night), `attributes.brightness` (0-255), `attributes.color_temp` (Kelvin), and `attributes.rgb_color` (`[r, g, b]`, `night_floor_kelvin`-aware) are exactly the attribute names `apply_lighting`'s `sensor_entity_id` and the blueprint's `adaptive_sensor` input already read, so this can be pointed at directly |
+| `sensor.adaptive_lighting_curve` | `attributes.points`: the full day as 289 `{t, brightness, kelvin, kelvin_rgb}` samples — what the [dashboard card](../README.md#previewing-the-dashboard-card) reads (`kelvin_rgb` only differs from `kelvin` where `night_floor_kelvin` has actually lowered the floor). Deliberately does **not** follow a manual phase override (see below) — it's a full-day schedule, not a "right now" value |
 | `select.adaptive_lighting_phase` | Manual override — `Auto` (default) or a specific phase. Pinning a phase holds it until the *schedule itself* next moves on (e.g. override to `Day` during `Evening` and it still becomes `Night` once Evening would naturally have ended, rather than staying on `Day` forever) — tick "Keep a manual phase override until cleared by hand" in Configure to disable that and keep an override until you clear it yourself instead |
 
 Entity IDs are forced to match what a Jinja `packages/*.yaml` day-phase setup would typically use (rather than

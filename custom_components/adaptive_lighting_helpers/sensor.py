@@ -124,10 +124,16 @@ class _AdaptiveLightingSensor(_ScheduleSensorBase):
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
         data = self.coordinator.data
+        rgb_color = data.get("rgb_color")
         return {
             "phase": data.get("phase"),
             "brightness": data.get("brightness"),
             "color_temp": data.get("kelvin"),
+            # list, not tuple - matches what apply_lighting/
+            # compute_lighting_groups's rgb_color field and HA's own
+            # color_rgb selector expect (see README's "Bring your own
+            # sensor" section for the full attribute contract).
+            "rgb_color": list(rgb_color) if rgb_color is not None else None,
         }
 
 

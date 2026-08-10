@@ -26,6 +26,7 @@ from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers import selector
 
 from .const import DOMAIN
+from .curve import DEFAULT_NIGHT_FLOOR_KELVIN
 
 TIME_FIELDS = {
     vol.Optional("morning_time"): selector.TimeSelector(),
@@ -39,6 +40,18 @@ TIME_FIELDS = {
     # old Jinja system's behaviour. True keeps an override pinned until
     # manually set back to Auto.
     vol.Optional("sticky_phase_override", default=False): selector.BooleanSelector(),
+    # Feeds sensor.adaptive_lighting's rgb_color attribute and
+    # apply_lighting/compute_lighting_groups's RGB path (see
+    # coordinator.py, curve.py's kelvin_for_phase night_floor param).
+    # Left blank, kelvin_for_phase's own DEFAULT_NIGHT_FLOOR_KELVIN
+    # applies and the RGB curve is identical to the colour-temperature
+    # one. Above that default doesn't mean anything for this field (it
+    # already is "no extension"), hence the max bound below.
+    vol.Optional("night_floor_kelvin"): selector.NumberSelector(
+        selector.NumberSelectorConfig(
+            min=1000, max=DEFAULT_NIGHT_FLOOR_KELVIN, unit_of_measurement="K", mode=selector.NumberSelectorMode.BOX
+        )
+    ),
 }
 
 
