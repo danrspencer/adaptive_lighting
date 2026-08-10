@@ -14,13 +14,12 @@
  * coordinator.py), since they represent "right now" rather than the
  * full-day schedule.
  *
- * Each point also carries kelvin_rgb - the same value but with a
- * (possibly lower) night_floor_kelvin applied, i.e. what apply_lighting/
+ * Each point also carries kelvin_rgb - what apply_lighting/
  * compute_lighting_groups would actually send as rgb_color to an
- * RGB-capable light with Prefer RGB Color on. Identical to kelvin unless
- * night_floor_kelvin has been configured below 2700, so this card only
- * draws the extra "RGB target" caps where the two actually diverge -
- * nothing extra renders for anyone who hasn't touched that setting.
+ * RGB-capable light with Prefer RGB Color on. Always identical to
+ * kelvin for this integration's own curve sensor, so the extra "RGB
+ * target" caps this card can draw only ever appear for a hand-written
+ * points source that sets the two differently.
  */
 
 const DEFAULT_ENTITIES = {
@@ -97,10 +96,10 @@ function numFromAttrOrState(stateObj, attrName) {
   return attrVal !== undefined ? Number(attrVal) : Number(stateObj.state);
 }
 
-// rgb_color is optional (only meaningful once night_floor_kelvin is
-// configured below 2700 - see coordinator.py) - null rather than a
-// default when absent or malformed, so callers can tell "no RGB target"
-// apart from "RGB target happens to equal the colour-temp one".
+// rgb_color is optional (only present for entities exposing it - see
+// README's "Bring your own sensor") - null rather than a default when
+// absent or malformed, so callers can tell "no RGB target" apart from
+// "RGB target happens to equal the colour-temp one".
 function rgbFromAttr(stateObj) {
   if (!stateObj) return null;
   const v = stateObj.attributes && stateObj.attributes.rgb_color;
@@ -197,8 +196,8 @@ class AdaptiveLightingCurveCard extends HTMLElement {
     const brightnessNowValue = numFromAttrOrState(brightnessNow, 'brightness');
     const kelvinNowValue = numFromAttrOrState(kelvinNow, 'color_temp');
     // kelvinNow is the same entity as phase by default (sensor.adaptive_lighting) -
-    // its rgb_color attribute is only present/meaningfully different once
-    // night_floor_kelvin is configured below 2700.
+    // its rgb_color attribute is present whenever the pointed-at sensor
+    // exposes one (see README's "Bring your own sensor").
     const rgbColorNowValue = rgbFromAttr(kelvinNow);
 
     const cacheKey = JSON.stringify([
@@ -318,10 +317,11 @@ class AdaptiveLightingCurveCard extends HTMLElement {
         .join('');
 
       // A thin cap above each bar wherever the RGB target actually
-      // diverges from the colour-temp one (typically just Evening's
-      // final hour + Night) - nothing renders here at all for a
-      // default/unconfigured night_floor_kelvin, since every sample's
-      // kelvin_rgb then equals its kelvin.
+      // diverges from the colour-temp one - nothing renders here for
+      // this integration's own curve sensor, since kelvin_rgb always
+      // equals kelvin there now; kept in case anything ever points this
+      // card at a hand-written points source that sets the two
+      // differently.
       const RGB_CAP_H = 8;
       const diverging = samples.filter((s) => s.kelvin_rgb != null && s.kelvin_rgb !== s.kelvin);
       haveRgbDivergence = diverging.length > 0;
@@ -416,7 +416,7 @@ class AdaptiveLightingCurveCard extends HTMLElement {
       `;
       // Small ring above the main dot for the RGB target, only when the
       // sensor actually provides one and it's visibly different from
-      // the colour-temp target - see rgbFromAttr()/night_floor_kelvin.
+      // the colour-temp target - see rgbFromAttr().
       if (this._rgbColorNow) {
         const nowRgbHex = rgbToHex(this._rgbColorNow);
         if (nowRgbHex !== nowHex) {

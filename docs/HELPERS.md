@@ -52,7 +52,8 @@ indicates RGB support (auto-detected — nothing to configure per light) are rou
 `color_temp_kelvin`; entities without RGB support are unaffected. `apply_lighting` reads the RGB target straight
 off `sensor_entity_id`'s `rgb_color` attribute; `compute_lighting_groups` takes it as an explicit `rgb_color`
 field since it isn't reading a sensor at all. Neither service invents an RGB target on its own — see
-`compute_curve`'s `night_floor_kelvin` below for where that value actually comes from, or supply your own.
+`compute_curve` below (or `sensor.adaptive_lighting`'s own `rgb_color` attribute) for where that value comes
+from, or supply your own.
 
 ## `adaptive_lighting_helpers.compute_curve`
 
@@ -67,18 +68,21 @@ data:
   day: "{{ today_at('08:00:00') | as_timestamp }}"
   evening: "{{ today_at('18:00:00') | as_timestamp }}"
   night: "{{ today_at('22:00:00') | as_timestamp }}"
-  night_floor_kelvin: 2000 # optional, default 2700 - see below
+  # All optional - each defaults to the value shown, see services.yaml for the full list
+  day_brightness: 255
+  evening_brightness: 180
+  night_brightness: 80
+  morning_kelvin: 6667
+  day_end_kelvin: 4000
+  evening_kelvin: 3200
+  night_kelvin: 2700
 response_variable: now
 # now.phase / now.brightness / now.kelvin / now.rgb_color
 ```
 
-`night_floor_kelvin` controls the response's `rgb_color` (never `kelvin`, which always uses the default):
-Evening's final hour and all of Night can target a Kelvin value warmer than 2700 - lower than most bulbs' native
-`color_temp` minimum - and `rgb_color` is that value converted to RGB. Left at the default 2700, `rgb_color` is
-just the plain conversion of `kelvin` and the two colour representations are equivalent; Morning/Day and
-Evening's earlier ramp are unaffected either way. See
-[README's "Why four phases"](../README.md#why-four-phases-not-a-continuous-curve) for why only Evening/Night's
-tail is eligible to extend this way.
+`rgb_color` is just the Kelvin → RGB conversion of `kelvin` - useful as a ready-made `rgb_color` value for
+`apply_lighting`/`compute_lighting_groups`'s `prefer_rgb_color` path even when you're not using RGB bulbs any
+differently from colour-temperature ones.
 
 ## `adaptive_lighting_helpers.compute_scene_coverage`
 
@@ -105,8 +109,8 @@ schedule times when setting up the integration (Settings → Devices & Services 
 Configure) — start times for Morning, Day, and Night, and Evening's earliest/latest bound. No separate helper
 entities to create first — these are plain times stored directly on the integration's own config entry, editable
 later from the same Configure screen. Leave them blank and you just get the services above with nothing else.
-The same Configure screen also has an optional `night_floor_kelvin` field (see `compute_curve` above) - blank
-means 2700, no colour extension.
+The same Configure screen also has the same optional brightness/Kelvin fields `compute_curve` takes (see above)
+— blank means curve.py's own defaults, identical to the numbers shown there.
 
 Filling in the five times adds, computed the same way `compute_curve` computes them, refreshed every 60 seconds:
 
@@ -114,10 +118,23 @@ Filling in the five times adds, computed the same way `compute_curve` computes t
 |---|---|
 | `sensor.morning_start` / `day_start` / `night_start` | Today's boundary, `attributes.timestamp` |
 | `sensor.evening_start` | Today's evening boundary, `attributes.timestamp`, plus `attributes.earliest`/`latest` (the two configured bounds, for reference) |
-| `sensor.adaptive_lighting` | Combined "right now" reading — state is the phase (Morning/Day/Evening/Night), `attributes.brightness` (0-255), `attributes.color_temp` (Kelvin), and `attributes.rgb_color` (`[r, g, b]`, `night_floor_kelvin`-aware) are exactly the attribute names `apply_lighting`'s `sensor_entity_id` and the blueprint's `adaptive_sensor` input already read, so this can be pointed at directly |
-| `sensor.adaptive_lighting_curve` | `attributes.points`: the full day as 289 `{t, brightness, kelvin, kelvin_rgb}` samples — what the [dashboard card](../README.md#previewing-the-dashboard-card) reads (`kelvin_rgb` only differs from `kelvin` where `night_floor_kelvin` has actually lowered the floor). Deliberately does **not** follow a manual phase override (see below) — it's a full-day schedule, not a "right now" value |
+| `sensor.adaptive_lighting` | Combined "right now" reading — state is the phase (Morning/Day/Evening/Night), `attributes.brightness` (0-255), `attributes.color_temp` (Kelvin), and `attributes.rgb_color` (`[r, g, b]`) are exactly the attribute names `apply_lighting`'s `sensor_entity_id` and the blueprint's `adaptive_sensor` input already read, so this can be pointed at directly |
+| `sensor.adaptive_lighting_curve` | `attributes.points`: the full day as 289 `{t, brightness, kelvin, kelvin_rgb}` samples (`kelvin_rgb` always equals `kelvin`, kept as a separate key since some consumers already read it) — what the [dashboard card](../README.md#previewing-the-dashboard-card) reads. Deliberately does **not** follow a manual phase override (see below) — it's a full-day schedule, not a "right now" value |
 | `select.adaptive_lighting_phase` | Manual override — `Auto` (default) or a specific phase. Pinning a phase holds it until the *schedule itself* next moves on (e.g. override to `Day` during `Evening` and it still becomes `Night` once Evening would naturally have ended, rather than staying on `Day` forever) — tick "Keep a manual phase override until cleared by hand" in Configure to disable that and keep an override until you clear it yourself instead |
 
 Entity IDs are forced to match what a Jinja `packages/*.yaml` day-phase setup would typically use (rather than
 the usual integration-prefixed auto-generated ones), so this is meant as a drop-in replacement for one — if
 you're migrating from your own version of that, remove it first or these will get suffixed `_2`.
+
+### Multiple sensors
+
+Beyond the one schedule above, you can add any number of additional named sensors from the integration's own
+page (Settings → Devices & Services → Adaptive Lighting Helpers → Add Sensor). Each one gets its own name, its
+own five schedule times (required this time — there's no "blank = skip" for an entity you deliberately chose to
+add), and the same optional brightness/Kelvin fields, and produces the same set of entities as above, prefixed
+with the sensor's slugified name instead of living at the bare names — e.g. naming one "Living Room" gets you
+`sensor.living_room_adaptive_lighting`, `sensor.living_room_morning_start`, `select.living_room_adaptive_lighting_phase`,
+and so on. Point `apply_lighting`'s `sensor_entity_id` (or a second instance of the blueprint) at a named
+sensor's `sensor.<name>_adaptive_lighting` exactly as you would the default one. Editable or removable later from
+the same page; renaming isn't supported from the reconfigure form since it would change the entity_id prefix —
+remove and re-add instead if a sensor needs a new name.

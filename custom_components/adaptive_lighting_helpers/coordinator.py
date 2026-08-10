@@ -1,20 +1,21 @@
 """
 Shared schedule coordinator for the optional day-phase/curve sensors
 (sensor.py) and the phase-override select (select.py) - the two
-platforms share one coordinator instance (created once in __init__.py
-and stashed in hass.data) rather than each computing independently.
+platforms share one coordinator instance per schedule instance (see
+ScheduleInstance below), created once in __init__.py and stashed in
+hass.data, rather than each computing independently.
 
 Boundary computation mirrors what used to be the live
 packages/adaptive_lighting.yaml Jinja setup: morning/day/night are
 today's configured time-of-day; evening is sunset (sun.sun's
 next_setting), clamped between earliest/latest bounds. The five times
-themselves now live directly on the config entry (plain HH:MM:SS
-strings from a TimeSelector - see config_flow.py) rather than being
-read from separate input_datetime helpers the user had to create
+themselves live directly on the config entry or subentry (plain
+HH:MM:SS strings from a TimeSelector - see config_flow.py) rather than
+being read from separate input_datetime helpers the user had to create
 first.
 
-Override: select.adaptive_lighting_phase (PHASE_OVERRIDE_ENTITY_ID) can
-pin the phase used for "right now" - _phase_override() reads its
+Override: each instance's own select.<prefix>adaptive_lighting_phase
+can pin the phase used for "right now" - _phase_override() reads its
 *current* live state on every update, the same "check fresh, don't
 remember" style grouping.py's manually_set() uses, so there's nothing
 to expire or persist here beyond what the select entity itself already
@@ -29,21 +30,33 @@ doesn't mean the schedule would have looked different at 9am. This was
 previously an accidental inconsistency in the live Jinja version
 (noted in phase_at()'s docstring); here it's the same behaviour but
 deliberate.
+
+Multiple schedule instances: the default config entry itself (bare
+entity names, e.g. sensor.adaptive_lighting) is always instance zero if
+it has any of the five time fields configured; each subentry the user
+adds via the "Add Sensor" flow (config_flow.py's SensorSubentryFlow) is
+another instance, with entities prefixed by its slugified name (e.g.
+sensor.living_room_adaptive_lighting). schedule_instances() is the one
+place that enumerates all of them - __init__.py, sensor.py, and
+select.py all iterate its output rather than each re-deriving the
+entry/subentry split.
 """
 
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 from datetime import timedelta
-from typing import Any
+from typing import Any, Mapping
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
+from homeassistant.util import slugify
 import homeassistant.util.dt as dt_util
 
-from .const import PHASE_OVERRIDE_ENTITY_ID
-from .curve import DEFAULT_NIGHT_FLOOR_KELVIN, phase_at, targets_for_phase
+from .const import SUBENTRY_TYPE_SENSOR
+from .curve import phase_at, targets_for_phase
 
 UPDATE_INTERVAL = timedelta(seconds=60)
 
@@ -54,6 +67,75 @@ TIME_KEYS = (
     "evening_latest_time",
     "night_time",
 )
+
+# The optional brightness/Kelvin curve fields - see config_flow.py's
+# CURVE_AND_BEHAVIOR_FIELDS. Left unset, targets_for_phase's own
+# defaults (matching curve.py's original hardcoded values) apply.
+CURVE_KEYS = (
+    "day_brightness",
+    "evening_brightness",
+    "night_brightness",
+    "morning_kelvin",
+    "day_end_kelvin",
+    "evening_kelvin",
+    "night_kelvin",
+)
+
+
+@dataclass
+class ScheduleInstance:
+    """One schedule/curve setup - either the default config entry itself
+    (prefix="", entities at their original bare names) or a named
+    subentry (prefix="<slug>_")."""
+
+    key: str  # hass.data storage key: entry.entry_id (default) or subentry_id (named)
+    prefix: str  # "" (default) or "<slug>_" (named)
+    config: Mapping[str, Any]  # entry.data or subentry.data - same key names either way
+    subentry_id: str | None  # None for the default instance; passed to async_add_entities()
+    override_entity_id: str  # select.<prefix>adaptive_lighting_phase
+    title: str  # "" (default) or the subentry's display name - prefixes entity friendly names, not just entity_ids
+
+
+def _has_time_config(config: Mapping[str, Any]) -> bool:
+    return any(config.get(key) for key in TIME_KEYS)
+
+
+def schedule_instances(entry: ConfigEntry) -> list[ScheduleInstance]:
+    """Every schedule instance this entry should set up sensors/select
+    for - the default instance (only if it has time fields configured -
+    the services work standalone otherwise) plus one per "sensor"
+    subentry (always configured, since its time fields are required)."""
+    instances = []
+    if _has_time_config(entry.data):
+        instances.append(
+            ScheduleInstance(
+                key=entry.entry_id,
+                prefix="",
+                config=entry.data,
+                subentry_id=None,
+                override_entity_id="select.adaptive_lighting_phase",
+                title="",
+            )
+        )
+    for subentry_id, subentry in entry.subentries.items():
+        if subentry.subentry_type != SUBENTRY_TYPE_SENSOR:
+            continue
+        prefix = f"{slugify(subentry.title)}_"
+        instances.append(
+            ScheduleInstance(
+                key=subentry_id,
+                prefix=prefix,
+                config=subentry.data,
+                subentry_id=subentry_id,
+                override_entity_id=f"select.{prefix}adaptive_lighting_phase",
+                title=subentry.title,
+            )
+        )
+    return instances
+
+
+def _curve_kwargs(config: Mapping[str, Any]) -> dict[str, int]:
+    return {key: config[key] for key in CURVE_KEYS if config.get(key) is not None}
 
 
 def _time_str_to_today_timestamp(time_str: str | None) -> float | None:
@@ -68,7 +150,7 @@ def _time_str_to_today_timestamp(time_str: str | None) -> float | None:
     return now_local.replace(hour=t.hour, minute=t.minute, second=t.second, microsecond=0).timestamp()
 
 
-def _compute_boundaries(hass: HomeAssistant, config: dict[str, Any]) -> dict[str, float | None]:
+def _compute_boundaries(hass: HomeAssistant, config: Mapping[str, Any]) -> dict[str, float | None]:
     morning_ts = _time_str_to_today_timestamp(config.get("morning_time"))
     day_ts = _time_str_to_today_timestamp(config.get("day_time"))
     night_ts = _time_str_to_today_timestamp(config.get("night_time"))
@@ -95,14 +177,7 @@ def _compute_boundaries(hass: HomeAssistant, config: dict[str, Any]) -> dict[str
     }
 
 
-def _compute_curve_points(boundaries: dict[str, float | None], night_floor_kelvin: int) -> list[dict[str, Any]]:
-    """kelvin_rgb mirrors kelvin but with night_floor_kelvin applied -
-    identical to kelvin whenever night_floor_kelvin is left at the
-    default, diverging only in Evening's final hour + Night when it's
-    been set lower. Always computed (cheap pure arithmetic, same
-    reasoning as recomputing the whole 289-point curve every 60s) so the
-    dashboard card can show the divergence only when there actually is
-    one, without needing to know the configured floor itself."""
+def _compute_curve_points(boundaries: dict[str, float | None], curve_kwargs: dict[str, int]) -> list[dict[str, Any]]:
     morning_ts, day_ts, evening_ts, night_ts = (
         boundaries["morning_ts"],
         boundaries["day_ts"],
@@ -114,7 +189,7 @@ def _compute_curve_points(boundaries: dict[str, float | None], night_floor_kelvi
     for i in range(289):
         t = midnight + i * 300
         phase = phase_at(t, morning_ts, day_ts, evening_ts, night_ts)
-        targets = targets_for_phase(phase, t, evening_ts, day_ts, night_ts, night_floor=night_floor_kelvin)
+        targets = targets_for_phase(phase, t, evening_ts, day_ts, night_ts, **curve_kwargs)
         points.append(
             {
                 "t": int(t),
@@ -126,26 +201,29 @@ def _compute_curve_points(boundaries: dict[str, float | None], night_floor_kelvi
     return points
 
 
-def _phase_override(hass: HomeAssistant) -> str | None:
-    state = hass.states.get(PHASE_OVERRIDE_ENTITY_ID)
+def _phase_override(hass: HomeAssistant, override_entity_id: str) -> str | None:
+    state = hass.states.get(override_entity_id)
     if state is None or state.state in ("Auto", "unknown", "unavailable"):
         return None
     return state.state
 
 
 class ScheduleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
-    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
-        super().__init__(hass, __name__, name="Adaptive Lighting schedule", update_interval=UPDATE_INTERVAL)
-        self._config = entry.data
+    def __init__(self, hass: HomeAssistant, instance: ScheduleInstance) -> None:
+        super().__init__(
+            hass, __name__, name=f"Adaptive Lighting schedule ({instance.prefix or 'default'})", update_interval=UPDATE_INTERVAL
+        )
+        self._config = instance.config
+        self._override_entity_id = instance.override_entity_id
 
     async def _async_update_data(self) -> dict[str, Any]:
         boundaries = _compute_boundaries(self.hass, self._config)
-        night_floor_kelvin = self._config.get("night_floor_kelvin") or DEFAULT_NIGHT_FLOOR_KELVIN
+        curve_kwargs = _curve_kwargs(self._config)
         now_ts = time.time()
         computed_phase = phase_at(now_ts, boundaries["morning_ts"], boundaries["day_ts"], boundaries["evening_ts"], boundaries["night_ts"])
-        phase = _phase_override(self.hass) or computed_phase
+        phase = _phase_override(self.hass, self._override_entity_id) or computed_phase
         targets = targets_for_phase(
-            phase, now_ts, boundaries["evening_ts"], boundaries["day_ts"], boundaries["night_ts"], night_floor=night_floor_kelvin
+            phase, now_ts, boundaries["evening_ts"], boundaries["day_ts"], boundaries["night_ts"], **curve_kwargs
         )
         return {
             **boundaries,
@@ -154,5 +232,5 @@ class ScheduleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             "brightness": targets["brightness"],
             "kelvin": targets["kelvin"],
             "rgb_color": targets["rgb_color"],
-            "points": _compute_curve_points(boundaries, night_floor_kelvin),
+            "points": _compute_curve_points(boundaries, curve_kwargs),
         }

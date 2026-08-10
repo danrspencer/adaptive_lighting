@@ -1,18 +1,22 @@
 """
 Day-phase/curve sensors, backed by coordinator.py - a native
 replacement for a Jinja `packages/*.yaml` template-sensor setup (see
-CLAUDE.md for the live version this ports). Only set up if the config
-entry has schedule times configured (see config_flow.py) - the
-compute_lighting_groups/compute_curve/compute_scene_coverage services
-work without any of this.
+CLAUDE.md for the live version this ports). One set of these per
+schedule instance (see coordinator.py's ScheduleInstance/
+schedule_instances) - the default config entry (if it has schedule
+times configured - the compute_lighting_groups/compute_curve/
+compute_scene_coverage/apply_lighting services work without any of
+this) plus one per named "sensor" subentry.
 
-Entity IDs are forced to match the sensor names the original Jinja
-setup used (sensor.morning_start, sensor.adaptive_lighting_curve, etc.)
-where a like-for-like equivalent exists, so this is a drop-in
-replacement for anything already pointed at those names (the dashboard
-card's DEFAULT_ENTITIES, in particular). If those entity_ids are
-already taken by the Jinja package you're migrating away from, remove
-that package first - HA will otherwise suffix these with _2.
+The default instance's entity IDs are forced to match the sensor names
+the original Jinja setup used (sensor.morning_start,
+sensor.adaptive_lighting_curve, etc.) where a like-for-like equivalent
+exists, so this is a drop-in replacement for anything already pointed
+at those names (the dashboard card's DEFAULT_ENTITIES, in particular).
+If those entity_ids are already taken by the Jinja package you're
+migrating away from, remove that package first - HA will otherwise
+suffix these with _2. Named instances get the same suffixes prefixed
+with their slugified name (e.g. sensor.living_room_morning_start).
 
 One exception: day-phase and the brightness/colour-temperature "right
 now" values are combined into a single sensor.adaptive_lighting here
@@ -41,37 +45,37 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 import homeassistant.util.dt as dt_util
 
 from .const import DOMAIN
-from .coordinator import ScheduleCoordinator
+from .coordinator import ScheduleCoordinator, ScheduleInstance, schedule_instances
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
-    coordinator: ScheduleCoordinator = hass.data[DOMAIN][entry.entry_id]
-
-    entities = [
-        _BoundarySensor(coordinator, entry, "morning_ts", "Morning Start", "morning_start"),
-        _BoundarySensor(coordinator, entry, "day_ts", "Day Start", "day_start"),
-        _BoundarySensor(
-            coordinator,
-            entry,
-            "evening_ts",
-            "Evening Start",
-            "evening_start",
-            extra_keys={"earliest": "evening_earliest_ts", "latest": "evening_latest_ts"},
-        ),
-        _BoundarySensor(coordinator, entry, "night_ts", "Night Start", "night_start"),
-        _AdaptiveLightingSensor(coordinator, entry),
-        _CurveSensor(coordinator, entry),
-    ]
-    async_add_entities(entities)
+    for instance in schedule_instances(entry):
+        coordinator: ScheduleCoordinator = hass.data[DOMAIN][instance.key]
+        entities = [
+            _BoundarySensor(coordinator, instance, "morning_ts", "Morning Start", "morning_start"),
+            _BoundarySensor(coordinator, instance, "day_ts", "Day Start", "day_start"),
+            _BoundarySensor(
+                coordinator,
+                instance,
+                "evening_ts",
+                "Evening Start",
+                "evening_start",
+                extra_keys={"earliest": "evening_earliest_ts", "latest": "evening_latest_ts"},
+            ),
+            _BoundarySensor(coordinator, instance, "night_ts", "Night Start", "night_start"),
+            _AdaptiveLightingSensor(coordinator, instance),
+            _CurveSensor(coordinator, instance),
+        ]
+        async_add_entities(entities, config_subentry_id=instance.subentry_id)
 
 
 class _ScheduleSensorBase(CoordinatorEntity[ScheduleCoordinator], SensorEntity):
     _attr_has_entity_name = False
 
-    def __init__(self, coordinator: ScheduleCoordinator, entry: ConfigEntry, unique_id_suffix: str, forced_object_id: str) -> None:
+    def __init__(self, coordinator: ScheduleCoordinator, instance: ScheduleInstance, unique_id_suffix: str, forced_object_id: str) -> None:
         super().__init__(coordinator)
-        self._attr_unique_id = f"{entry.entry_id}_{unique_id_suffix}"
-        self.entity_id = f"sensor.{forced_object_id}"
+        self._attr_unique_id = f"{instance.key}_{unique_id_suffix}"
+        self.entity_id = f"sensor.{instance.prefix}{forced_object_id}"
 
 
 class _BoundarySensor(_ScheduleSensorBase):
@@ -80,15 +84,15 @@ class _BoundarySensor(_ScheduleSensorBase):
     def __init__(
         self,
         coordinator: ScheduleCoordinator,
-        entry: ConfigEntry,
+        instance: ScheduleInstance,
         key: str,
         name: str,
         object_id: str,
         extra_keys: dict[str, str] | None = None,
     ) -> None:
-        super().__init__(coordinator, entry, key, object_id)
+        super().__init__(coordinator, instance, key, object_id)
         self._key = key
-        self._attr_name = name
+        self._attr_name = f"{instance.title} {name}" if instance.title else name
         self._extra_keys = extra_keys or {}
 
     @property
@@ -111,11 +115,11 @@ class _BoundarySensor(_ScheduleSensorBase):
 
 
 class _AdaptiveLightingSensor(_ScheduleSensorBase):
-    _attr_name = "Adaptive Lighting"
     _attr_icon = "mdi:home-lightbulb"
 
-    def __init__(self, coordinator: ScheduleCoordinator, entry: ConfigEntry) -> None:
-        super().__init__(coordinator, entry, "adaptive_lighting", "adaptive_lighting")
+    def __init__(self, coordinator: ScheduleCoordinator, instance: ScheduleInstance) -> None:
+        super().__init__(coordinator, instance, "adaptive_lighting", "adaptive_lighting")
+        self._attr_name = f"{instance.title} Adaptive Lighting" if instance.title else "Adaptive Lighting"
 
     @property
     def native_value(self):
@@ -138,11 +142,11 @@ class _AdaptiveLightingSensor(_ScheduleSensorBase):
 
 
 class _CurveSensor(_ScheduleSensorBase):
-    _attr_name = "Adaptive Lighting Curve"
     _attr_icon = "mdi:chart-bell-curve"
 
-    def __init__(self, coordinator: ScheduleCoordinator, entry: ConfigEntry) -> None:
-        super().__init__(coordinator, entry, "curve", "adaptive_lighting_curve")
+    def __init__(self, coordinator: ScheduleCoordinator, instance: ScheduleInstance) -> None:
+        super().__init__(coordinator, instance, "curve", "adaptive_lighting_curve")
+        self._attr_name = f"{instance.title} Adaptive Lighting Curve" if instance.title else "Adaptive Lighting Curve"
 
     @property
     def native_value(self):
