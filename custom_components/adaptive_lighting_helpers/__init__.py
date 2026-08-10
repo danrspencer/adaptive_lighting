@@ -46,7 +46,7 @@ from homeassistant.helpers.event import async_track_state_change_event
 
 from .const import DOMAIN, PHASE_OVERRIDE_ENTITY_ID
 from .coordinator import TIME_KEYS, ScheduleCoordinator
-from .curve import brightness_for_phase, kelvin_for_phase, kelvin_to_rgb, phase_at
+from .curve import DEFAULT_NIGHT_FLOOR_KELVIN, phase_at, targets_for_phase
 from .grouping import EntityLookup, Group, build_groups
 from .scenes import SceneLookup, compute_scene_coverage
 
@@ -79,7 +79,7 @@ COMPUTE_CURVE_SCHEMA = vol.Schema(
         vol.Required("evening"): vol.Coerce(float),
         vol.Required("night"): vol.Coerce(float),
         vol.Optional("at"): vol.Coerce(float),
-        vol.Optional("night_floor_kelvin", default=2700): vol.Coerce(int),
+        vol.Optional("night_floor_kelvin", default=DEFAULT_NIGHT_FLOOR_KELVIN): vol.Coerce(int),
     }
 )
 
@@ -271,12 +271,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
         night_floor_kelvin = call.data["night_floor_kelvin"]
         phase = phase_at(at, morning, day, evening, night)
-        kelvin_rgb = kelvin_for_phase(phase, at, evening, day, night, night_floor=night_floor_kelvin)
+        targets = targets_for_phase(phase, at, evening, day, night, night_floor=night_floor_kelvin)
         return {
             "phase": phase,
-            "brightness": brightness_for_phase(phase, at, night),
-            "kelvin": kelvin_for_phase(phase, at, evening, day, night),
-            "rgb_color": list(kelvin_to_rgb(kelvin_rgb)),
+            "brightness": targets["brightness"],
+            "kelvin": targets["kelvin"],
+            "rgb_color": list(targets["rgb_color"]),
         }
 
     async def apply_lighting(call: ServiceCall) -> ServiceResponse:

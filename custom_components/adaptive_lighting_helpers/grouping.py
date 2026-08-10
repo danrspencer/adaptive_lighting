@@ -167,6 +167,14 @@ def build_groups(
     return groups
 
 
+def _brightness_close(entity_id: str, target_brightness: int, lookup: EntityLookup, brightness_tolerance: int) -> bool:
+    """Shared by _already_set and _already_set_rgb - brightness tolerance
+    doesn't depend on which colour representation is in play, so there's
+    only one copy of the "how close counts as close enough" check for it."""
+    current_brightness = _as_int(lookup.state_attr(entity_id, "brightness"), -999)
+    return abs(current_brightness - target_brightness) <= brightness_tolerance
+
+
 def _already_set(
     entity_id: str,
     target_brightness: int,
@@ -180,11 +188,10 @@ def _already_set(
     sent - an exact-match check would recommand them forever."""
     if not lookup.is_state(entity_id, "on"):
         return False
-    current_brightness = _as_int(lookup.state_attr(entity_id, "brightness"), -999)
+    if not _brightness_close(entity_id, target_brightness, lookup, brightness_tolerance):
+        return False
     current_color_temp = _as_int(lookup.state_attr(entity_id, "color_temp_kelvin"), -999)
-    brightness_close = abs(current_brightness - target_brightness) <= brightness_tolerance
-    color_temp_close = abs(current_color_temp - target_color_temp_kelvin) <= color_temp_tolerance
-    return brightness_close and color_temp_close
+    return abs(current_color_temp - target_color_temp_kelvin) <= color_temp_tolerance
 
 
 def _already_set_rgb(
@@ -203,12 +210,11 @@ def _already_set_rgb(
     _as_int's sentinel default."""
     if not lookup.is_state(entity_id, "on"):
         return False
-    current_brightness = _as_int(lookup.state_attr(entity_id, "brightness"), -999)
-    brightness_close = abs(current_brightness - target_brightness) <= brightness_tolerance
+    if not _brightness_close(entity_id, target_brightness, lookup, brightness_tolerance):
+        return False
     current_rgb = lookup.state_attr(entity_id, "rgb_color")
-    rgb_close = (
+    return (
         isinstance(current_rgb, (list, tuple))
         and len(current_rgb) == 3
         and all(abs(_as_int(c, -999) - int(t)) <= rgb_color_tolerance for c, t in zip(current_rgb, target_rgb))
     )
-    return brightness_close and rgb_close

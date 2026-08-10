@@ -30,7 +30,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "custom_components" / "adaptive_lighting_helpers"))
-from curve import brightness_for_phase, kelvin_for_phase, kelvin_to_rgb, phase_at  # noqa: E402
+from curve import phase_at, targets_for_phase  # noqa: E402
 
 MORNING_HOUR = 6
 DAY_HOUR = 8
@@ -46,11 +46,11 @@ EVENING_LATEST_HOUR = 20
 SUNRISE_HOUR = 6.4
 SUNSET_HOUR = 19.75
 
-# Deliberately below curve.py's own 2700 default so the generated preview
-# actually demonstrates the RGB-vs-colour-temp divergence (Evening's
-# final hour + Night) rather than rendering two identical curves - see
-# coordinator.py's night_floor_kelvin config field for what this
-# represents on a real instance.
+# Deliberately below curve.py's own DEFAULT_NIGHT_FLOOR_KELVIN so the
+# generated preview actually demonstrates the RGB-vs-colour-temp
+# divergence (Evening's final hour + Night) rather than rendering two
+# identical curves - see coordinator.py's night_floor_kelvin config
+# field for what this represents on a real instance.
 NIGHT_FLOOR_KELVIN = 2000
 
 
@@ -71,22 +71,19 @@ def main():
     for i in range(289):  # every 5 minutes across 24h, matching the real curve sensor
         t = midnight + i * 300
         phase = phase_at(t, morning_ts, day_start_ts, evening_ts, night_ts)
+        targets = targets_for_phase(phase, t, evening_ts, day_start_ts, night_ts, night_floor=NIGHT_FLOOR_KELVIN)
         points.append(
             {
                 "t": int(t),
-                "brightness": brightness_for_phase(phase, t, night_ts),
-                "kelvin": kelvin_for_phase(phase, t, evening_ts, day_start_ts, night_ts),
-                "kelvin_rgb": kelvin_for_phase(
-                    phase, t, evening_ts, day_start_ts, night_ts, night_floor=NIGHT_FLOOR_KELVIN
-                ),
+                "brightness": targets["brightness"],
+                "kelvin": targets["kelvin"],
+                "kelvin_rgb": targets["kelvin_rgb"],
             }
         )
 
     now = datetime.datetime.now().timestamp()
     now_phase = phase_at(now, morning_ts, day_start_ts, evening_ts, night_ts)
-    now_kelvin_rgb = kelvin_for_phase(
-        now_phase, now, evening_ts, day_start_ts, night_ts, night_floor=NIGHT_FLOOR_KELVIN
-    )
+    now_targets = targets_for_phase(now_phase, now, evening_ts, day_start_ts, night_ts, night_floor=NIGHT_FLOOR_KELVIN)
 
     data = {
         "boundaries": {
@@ -103,9 +100,9 @@ def main():
         },
         "points": points,
         "now_phase": now_phase,
-        "now_brightness": brightness_for_phase(now_phase, now, night_ts),
-        "now_kelvin": kelvin_for_phase(now_phase, now, evening_ts, day_start_ts, night_ts),
-        "now_rgb_color": list(kelvin_to_rgb(now_kelvin_rgb)),
+        "now_brightness": now_targets["brightness"],
+        "now_kelvin": now_targets["kelvin"],
+        "now_rgb_color": list(now_targets["rgb_color"]),
         "_now_ts": int(now),
     }
 
