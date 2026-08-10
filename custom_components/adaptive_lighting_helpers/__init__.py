@@ -44,17 +44,13 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import async_track_state_change_event
 
-from .const import DOMAIN, PHASE_OVERRIDE_ENTITY_ID
-from .coordinator import TIME_KEYS, ScheduleCoordinator
-from .curve import DEFAULT_NIGHT_FLOOR_KELVIN, phase_at, targets_for_phase
+from .const import DOMAIN
+from .coordinator import CURVE_KEYS, ScheduleCoordinator, schedule_instances
+from .curve import phase_at, targets_for_phase
 from .grouping import EntityLookup, Group, build_groups
 from .scenes import SceneLookup, compute_scene_coverage
 
 SCHEDULE_PLATFORMS = [Platform.SENSOR, Platform.SELECT]
-
-
-def _has_schedule_config(entry: ConfigEntry) -> bool:
-    return any(entry.data.get(key) for key in TIME_KEYS)
 
 
 COMPUTE_LIGHTING_GROUPS_SCHEMA = vol.Schema(
@@ -79,7 +75,16 @@ COMPUTE_CURVE_SCHEMA = vol.Schema(
         vol.Required("evening"): vol.Coerce(float),
         vol.Required("night"): vol.Coerce(float),
         vol.Optional("at"): vol.Coerce(float),
-        vol.Optional("night_floor_kelvin", default=DEFAULT_NIGHT_FLOOR_KELVIN): vol.Coerce(int),
+        # Same optional curve fields as config_flow.py's
+        # CURVE_AND_BEHAVIOR_FIELDS - left unset, targets_for_phase's own
+        # defaults apply, matching this service's original behaviour.
+        vol.Optional("day_brightness"): vol.Coerce(int),
+        vol.Optional("evening_brightness"): vol.Coerce(int),
+        vol.Optional("night_brightness"): vol.Coerce(int),
+        vol.Optional("morning_kelvin"): vol.Coerce(int),
+        vol.Optional("day_end_kelvin"): vol.Coerce(int),
+        vol.Optional("evening_kelvin"): vol.Coerce(int),
+        vol.Optional("night_kelvin"): vol.Coerce(int),
     }
 )
 
@@ -269,9 +274,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             call.data["evening"],
             call.data["night"],
         )
-        night_floor_kelvin = call.data["night_floor_kelvin"]
+        curve_kwargs = {key: call.data[key] for key in CURVE_KEYS if key in call.data}
         phase = phase_at(at, morning, day, evening, night)
-        targets = targets_for_phase(phase, at, evening, day, night, night_floor=night_floor_kelvin)
+        targets = targets_for_phase(phase, at, evening, day, night, **curve_kwargs)
         return {
             "phase": phase,
             "brightness": targets["brightness"],
@@ -411,23 +416,39 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         supports_response=SupportsResponse.OPTIONAL,
     )
 
-    if _has_schedule_config(entry):
-        coordinator = ScheduleCoordinator(hass, entry)
-        await coordinator.async_config_entry_first_refresh()
-        hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
+    # Reloads the entry on any entry/subentry change - covers the main
+    # entry's reconfigure flow, and (since adding/removing/reconfiguring a
+    # subentry doesn't otherwise trigger a reload on its own) named
+    # sensors added via the "Add Sensor" subentry flow too. config_flow.py
+    # deliberately uses async_update_and_abort rather than
+    # *_reload_and_abort so this is the only thing that reloads - the
+    # subentry version of *_reload_and_abort raises if an update listener
+    # is registered, and duplicating it here would double-reload anyway.
+    entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
 
-        # Evening tracks sun.sun; the phase-override select can change
-        # at any moment and should take effect immediately rather than
-        # waiting for the next 60s poll. The five schedule times
-        # themselves don't need tracking - they're static config, only
-        # changed via the reconfigure flow, which reloads the entry
-        # (and therefore rebuilds this coordinator from scratch) on its
-        # own.
+    instances = schedule_instances(entry)
+    if instances:
+        for instance in instances:
+            coordinator = ScheduleCoordinator(hass, instance)
+            await coordinator.async_config_entry_first_refresh()
+            hass.data.setdefault(DOMAIN, {})[instance.key] = coordinator
+
+        def _refresh_all(event) -> None:
+            for instance in instances:
+                hass.async_create_task(hass.data[DOMAIN][instance.key].async_request_refresh())
+
+        # Evening tracks sun.sun; each instance's phase-override select
+        # can change at any moment and should take effect immediately
+        # rather than waiting for the next 60s poll. The five schedule
+        # times themselves don't need tracking - they're static config,
+        # only changed via the reconfigure flow, which reloads the entry
+        # (rebuilding every coordinator from scratch) on its own. Every
+        # instance's coordinator is refreshed on any tracked change
+        # rather than mapping specific entities to specific coordinators
+        # - simpler, and refreshing extra ones is cheap pure computation.
         entry.async_on_unload(
             async_track_state_change_event(
-                hass,
-                ["sun.sun", PHASE_OVERRIDE_ENTITY_ID],
-                lambda event: hass.async_create_task(coordinator.async_request_refresh()),
+                hass, ["sun.sun", *(instance.override_entity_id for instance in instances)], _refresh_all
             )
         )
 
@@ -436,15 +457,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     return True
 
 
+async def _async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    await hass.config_entries.async_reload(entry.entry_id)
+
+
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.services.async_remove(DOMAIN, "compute_lighting_groups")
     hass.services.async_remove(DOMAIN, "compute_curve")
     hass.services.async_remove(DOMAIN, "compute_scene_coverage")
     hass.services.async_remove(DOMAIN, "apply_lighting")
 
-    if _has_schedule_config(entry):
+    instances = schedule_instances(entry)
+    if instances:
         unloaded = await hass.config_entries.async_unload_platforms(entry, SCHEDULE_PLATFORMS)
-        hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
+        for instance in instances:
+            hass.data.get(DOMAIN, {}).pop(instance.key, None)
         return unloaded
 
     return True

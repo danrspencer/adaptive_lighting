@@ -46,13 +46,6 @@ EVENING_LATEST_HOUR = 20
 SUNRISE_HOUR = 6.4
 SUNSET_HOUR = 19.75
 
-# Deliberately below curve.py's own DEFAULT_NIGHT_FLOOR_KELVIN so the
-# generated preview actually demonstrates the RGB-vs-colour-temp
-# divergence (Evening's final hour + Night) rather than rendering two
-# identical curves - see coordinator.py's night_floor_kelvin config
-# field for what this represents on a real instance.
-NIGHT_FLOOR_KELVIN = 2000
-
 
 def main():
     midnight = datetime.datetime.combine(datetime.date.today(), datetime.time(0, 0, 0)).timestamp()
@@ -71,7 +64,7 @@ def main():
     for i in range(289):  # every 5 minutes across 24h, matching the real curve sensor
         t = midnight + i * 300
         phase = phase_at(t, morning_ts, day_start_ts, evening_ts, night_ts)
-        targets = targets_for_phase(phase, t, evening_ts, day_start_ts, night_ts, night_floor=NIGHT_FLOOR_KELVIN)
+        targets = targets_for_phase(phase, t, evening_ts, day_start_ts, night_ts)
         points.append(
             {
                 "t": int(t),
@@ -83,7 +76,7 @@ def main():
 
     now = datetime.datetime.now().timestamp()
     now_phase = phase_at(now, morning_ts, day_start_ts, evening_ts, night_ts)
-    now_targets = targets_for_phase(now_phase, now, evening_ts, day_start_ts, night_ts, night_floor=NIGHT_FLOOR_KELVIN)
+    now_targets = targets_for_phase(now_phase, now, evening_ts, day_start_ts, night_ts)
 
     data = {
         "boundaries": {

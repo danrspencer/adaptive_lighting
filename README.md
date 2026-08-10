@@ -35,10 +35,10 @@ terms, not just given its own numbers on a curve:
 - **Night** isn't tied to any solar event at all — it's just what the house should look like once everyone's
   asleep: dim and warm, the lighting you want on at 3am without waking yourself up further.
 
-Each boundary is independently configurable, and any phase can be pinned manually when you want to override the
-schedule for a while — see [docs/HELPERS.md](docs/HELPERS.md). Evening and Night can also optionally go warmer
-than a bulb's native colour-temperature range allows, on lights that support RGB colour — see
-[docs/HELPERS.md](docs/HELPERS.md)'s `night_floor_kelvin`.
+Each boundary is independently configurable, each phase's brightness/colour temperature is too, and any phase
+can be pinned manually when you want to override the schedule for a while — see
+[docs/HELPERS.md](docs/HELPERS.md). You can also run any number of these schedules at once, each with its own
+name and settings — see docs/HELPERS.md's "Multiple sensors".
 
 ## Adaptive Lighting Helpers (the integration)
 
@@ -216,7 +216,7 @@ The pure-Python core (`curve.py`, `grouping.py`, `scenes.py`) and the integratio
 are both written, unit tested, and **installed via HACS and confirmed working against a live Home Assistant
 instance** — `compute_lighting_groups`/`compute_curve`/`compute_scene_coverage` verified registered and
 functionally correct, and the blueprint's full compute-groups-then-turn-on-lights path exercised end to end
-against real hardware. `apply_lighting` and RGB colour support (`prefer_rgb_color`, `night_floor_kelvin`) are
+against real hardware. `apply_lighting` and RGB colour support (`prefer_rgb_color`) are
 new, unit tested, and **not yet exercised against a live instance**. The optional day-phase/curve sensors
 (`sensor.py`) haven't been configured or tested live yet either. See CLAUDE.md's "Current status" section for
 the full rundown.

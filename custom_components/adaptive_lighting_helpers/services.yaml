@@ -96,9 +96,7 @@ compute_lighting_groups:
         The RGB colour to use for RGB-capable entities when
         prefer_rgb_color is true. Typically the Kelvin -> RGB conversion
         of the same target colour temperature (see compute_curve's own
-        rgb_color output), optionally computed with a lower
-        night_floor_kelvin than sensor_color_temp_kelvin's native range
-        allows.
+        rgb_color output).
       selector:
         color_rgb:
     rgb_color_tolerance:
@@ -258,21 +256,67 @@ compute_curve:
       description: Instant to evaluate, as a unix timestamp. Defaults to now.
       selector:
         number:
-    night_floor_kelvin:
-      name: Night floor (Kelvin)
+    day_brightness:
+      name: Day brightness
+      description: Brightness (0-255) for Morning and Day.
+      default: 255
+      selector:
+        number:
+          min: 0
+          max: 255
+    evening_brightness:
+      name: Evening brightness
+      description: Brightness (0-255) Evening holds at before its final-hour fade.
+      default: 180
+      selector:
+        number:
+          min: 0
+          max: 255
+    night_brightness:
+      name: Night brightness
+      description: Brightness (0-255) for Night, and what Evening's final hour fades toward.
+      default: 80
+      selector:
+        number:
+          min: 0
+          max: 255
+    morning_kelvin:
+      name: Morning colour temperature
+      description: Colour temperature (Kelvin) for Morning, and where Day's ramp starts from.
+      default: 6667
+      selector:
+        number:
+          min: 1000
+          max: 10000
+          unit_of_measurement: K
+    day_end_kelvin:
+      name: Day end colour temperature
       description: >-
-        The Kelvin value used to compute the response's rgb_color for
-        Night and Evening's final hour (default 2700, matching every
-        bulb's native colour-temperature range - the response's kelvin
-        field always uses this default regardless). Set lower (e.g.
-        2000) to make rgb_color deeper amber than color_temp_kelvin could
-        ever represent on most bulbs. Morning/Day and Evening's earlier
-        ramp are unaffected either way.
+        Colour temperature (Kelvin) Day ramps down to by the time Evening
+        starts - also where Evening's own opening ramp starts from.
+      default: 4000
+      selector:
+        number:
+          min: 1000
+          max: 10000
+          unit_of_measurement: K
+    evening_kelvin:
+      name: Evening colour temperature
+      description: Colour temperature (Kelvin) Evening holds at before its final-hour fade.
+      default: 3200
+      selector:
+        number:
+          min: 1000
+          max: 10000
+          unit_of_measurement: K
+    night_kelvin:
+      name: Night colour temperature
+      description: Colour temperature (Kelvin) for Night, and what Evening's final hour fades toward.
       default: 2700
       selector:
         number:
           min: 1000
-          max: 2700
+          max: 10000
           unit_of_measurement: K
 
 compute_scene_coverage:

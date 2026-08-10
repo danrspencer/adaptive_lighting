@@ -772,6 +772,92 @@ Whoever picks this back up: start from design 1 (the straight port) as
 the smaller, already-mostly-scoped piece; treat design 2 as its own
 separate decision, not a prerequisite.
 
+**Multi-sensor support, via config subentries.** The "future direction
+(not started)" flagged earlier in this section - "letting the
+integration run multiple independent config-entry instances, each with
+its own schedule and its own sensor entity" - is now implemented, using
+Home Assistant's config *subentries* rather than multiple config
+entries (confirmed against real HA core source - `home-assistant/core`'s
+`wsdot` integration - before committing to the design, not guessed).
+
+- `curve.py`'s `brightness_for_phase`/`kelvin_for_phase`/`targets_for_phase`
+  gained keyword-only params for every previously-hardcoded brightness/
+  Kelvin literal (`day_brightness`, `evening_brightness`,
+  `night_brightness`, `morning_kelvin`, `day_end_kelvin`,
+  `evening_kelvin`, `night_kelvin`) - up to 8 configurable numbers per
+  schedule instance, each defaulting to the original literal.
+- **`night_floor_kelvin` (the optional "let RGB go warmer than
+  color_temp bulbs can" delta from the RGB colour work above) was
+  dropped entirely**, at the user's explicit direction ("I'm honestly
+  not sure why we want this, so bin it for now") rather than folded
+  into the new design. `night_kelvin` is now simply the one real,
+  always-used Night/late-Evening target; `kelvin_rgb` in
+  `targets_for_phase`'s return always equals `kelvin` now (kept as a
+  key since `sensor.py` and `apply_lighting`'s RGB path already read
+  it). `DEFAULT_NIGHT_FLOOR_KELVIN` renamed to `DEFAULT_NIGHT_KELVIN`
+  to match.
+- Found two real, pre-existing quirks while generalizing the hardcoded
+  formulas, both predating this session: the brightness fade's literal
+  `80 + 160*t` doesn't reduce to `night_brightness + (evening_brightness
+  - night_brightness)*t` (160 ≠ 100) - it's actually `1.6 ×` the true
+  span, meaning the fade completes at ~37.5 minutes into the nominal
+  1-hour window and holds for the rest; preserved as a ratio (not the
+  literal span) so a custom brightness range keeps the same timing
+  shape. Separately, the *old* Kelvin evening-tail fade used a fixed
+  `+500` offset regardless of `night_floor`'s value (not derived from
+  `evening_kelvin - night_floor`), which only ever produced a correct,
+  continuous curve when `night_floor` was left at its default - passing
+  a custom `night_floor` (as the old RGB feature allowed) silently
+  produced a discontinuous curve (a jump at the fade boundary). Since
+  this quirk was a direct symptom of the very feature just removed, the
+  new `night_kelvin`/`evening_kelvin` fade uses the mathematically
+  correct, continuous `evening_kelvin + (night_kelvin - evening_kelvin)*t`
+  instead of reproducing the old discontinuity - the only intentional
+  default-output change in this pass, and only reachable via a
+  now-removed override, not the zero-config path.
+- `config_flow.py` gained `SensorSubentryFlow` (subentry type
+  `"sensor"`, registered via `async_get_supported_subentry_types`) -
+  required name + 5 required time fields (vs. optional on the main
+  entry, where blank means "services only") + the same optional curve
+  fields. Dedup on `unique_id=slugify(name)` checked against existing
+  subentries before creating.
+- **Real gap found and fixed while implementing, not anticipated in
+  planning**: adding/removing/reconfiguring a subentry does *not*
+  automatically reload the config entry (confirmed by reading
+  `ConfigSubentryFlowManager`/`async_add_subentry` in HA core directly -
+  they only fire `update_listeners`, they don't reload). Fixed with one
+  `entry.add_update_listener(...)` registered in `__init__.py`'s
+  `async_setup_entry`, which reloads on any entry/subentry change - this
+  is also why `config_flow.py`'s reconfigure steps call
+  `async_update_and_abort`, not `*_reload_and_abort`: the subentry
+  version of `*_reload_and_abort` actively **raises** `ValueError` if an
+  update listener is registered, and the main-entry version logs a
+  deprecation warning pointing at exactly this pattern
+  ("has an update listener and should use it for scheduling a reload").
+- `coordinator.py` gained `ScheduleInstance` (one per default-entry-if-
+  configured plus one per `"sensor"` subentry) and `schedule_instances(entry)`,
+  the single place that enumerates them; `__init__.py`/`sensor.py`/
+  `select.py` all iterate it instead of each assuming one coordinator
+  per entry. `ScheduleCoordinator` now takes a `ScheduleInstance`
+  instead of a `ConfigEntry` directly. Named instances get entities
+  prefixed with their slugified name (`sensor.living_room_adaptive_lighting`,
+  `select.living_room_adaptive_lighting_phase`, etc.) and a prefixed
+  friendly name too (not just a prefixed `entity_id` - two named
+  sensors would otherwise both display as plain "Morning Start" in the
+  UI, which was caught before shipping, not after).
+- Confirmed directly against HA core source (`homeassistant/config_entries.py`):
+  `ConfigSubentryFlow` has no `VERSION`/`MINOR_VERSION` of its own (that's
+  `ConfigFlow`-only) - no subentry migration story needed.
+- Dashboard card needed no *code* changes (its existing
+  `config.entities` override already supports pointing a second card
+  instance at a named sensor's entities) - only stale comments
+  referencing the now-removed `night_floor_kelvin` were updated for
+  accuracy.
+- Not yet deployed or tested live - unit tests (`pytest`, 41/41 passing)
+  and `py_compile` only so far, consistent with this repo's usual
+  "verify locally first, live deployment is its own explicit step"
+  pattern.
+
 ## Open question: dashboard card as a HACS plugin?
 
 The integration half of this used to be an open question - now

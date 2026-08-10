@@ -2,9 +2,10 @@
 Manual override for the computed day phase - see coordinator.py for
 how this feeds back into brightness/colour-temperature.
 
-select.adaptive_lighting_phase, options Auto/Morning/Day/Evening/Night,
-default Auto. Only set up alongside the day-phase/curve sensors (same
-condition as sensor.py - see __init__.py's _has_schedule_config).
+select.<prefix>adaptive_lighting_phase, options Auto/Morning/Day/Evening/Night,
+default Auto - one per schedule instance (coordinator.py's
+ScheduleInstance/schedule_instances), set up alongside that instance's
+day-phase/curve sensors (sensor.py).
 
 This is the write side of what used to be a single dual-purpose entity
 in the live Jinja setup (input_select.day_phase, which downstream
@@ -42,26 +43,27 @@ from homeassistant.helpers.restore_state import RestoreEntity
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN, PHASE_OPTIONS
-from .coordinator import ScheduleCoordinator
+from .coordinator import ScheduleCoordinator, ScheduleInstance, schedule_instances
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
-    coordinator: ScheduleCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([_PhaseOverrideSelect(coordinator, entry)])
+    for instance in schedule_instances(entry):
+        coordinator: ScheduleCoordinator = hass.data[DOMAIN][instance.key]
+        async_add_entities([_PhaseOverrideSelect(coordinator, instance)], config_subentry_id=instance.subentry_id)
 
 
 class _PhaseOverrideSelect(CoordinatorEntity[ScheduleCoordinator], SelectEntity, RestoreEntity):
     _attr_has_entity_name = False
-    _attr_name = "Adaptive Lighting Phase"
     _attr_icon = "mdi:sun-clock"
     _attr_options = PHASE_OPTIONS
 
-    def __init__(self, coordinator: ScheduleCoordinator, entry: ConfigEntry) -> None:
+    def __init__(self, coordinator: ScheduleCoordinator, instance: ScheduleInstance) -> None:
         super().__init__(coordinator)
-        self._attr_unique_id = f"{entry.entry_id}_phase_override"
-        self.entity_id = "select.adaptive_lighting_phase"
+        self._attr_unique_id = f"{instance.key}_phase_override"
+        self.entity_id = f"select.{instance.prefix}adaptive_lighting_phase"
+        self._attr_name = f"{instance.title} Adaptive Lighting Phase" if instance.title else "Adaptive Lighting Phase"
         self._attr_current_option = "Auto"
-        self._sticky = bool(entry.data.get("sticky_phase_override", False))
+        self._sticky = bool(instance.config.get("sticky_phase_override", False))
         # The computed (non-override) phase at the moment this was last
         # pinned to something other than Auto - once computed_phase
         # moves on from this, the override has "seen its boundary" and

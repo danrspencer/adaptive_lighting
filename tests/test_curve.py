@@ -1,4 +1,4 @@
-from curve import brightness_for_phase, kelvin_for_phase, kelvin_to_rgb, phase_at
+from curve import brightness_for_phase, kelvin_for_phase, kelvin_to_rgb, phase_at, targets_for_phase
 
 # A synthetic day used across every test in this file, expressed as
 # seconds-of-day for readability (these functions only ever care about
@@ -74,31 +74,68 @@ def test_kelvin_evening_has_three_segments():
     assert kelvin_for_phase("Evening", fade_start + 1800, EVENING, DAY_START, NIGHT) == 2950
 
 
-def test_kelvin_night_floor_defaults_to_2700():
+def test_kelvin_night_kelvin_defaults_to_2700():
     # Same as test_kelvin_night_is_fixed, but explicit about why: this is
-    # the default that keyword-only night_floor exists to override.
+    # the default that keyword-only night_kelvin exists to override.
     assert kelvin_for_phase("Night", 0, EVENING, DAY_START, NIGHT) == 2700
-    assert kelvin_for_phase("Night", 0, EVENING, DAY_START, NIGHT, night_floor=2700) == 2700
+    assert kelvin_for_phase("Night", 0, EVENING, DAY_START, NIGHT, night_kelvin=2700) == 2700
 
 
-def test_kelvin_night_floor_lowers_night_and_evening_tail_only():
+def test_kelvin_night_kelvin_lowers_night_and_evening_tail_only():
     fade_start = NIGHT - 3600  # 21:00
 
-    # Night itself follows night_floor directly.
-    assert kelvin_for_phase("Night", 0, EVENING, DAY_START, NIGHT, night_floor=2000) == 2000
+    # Night itself follows night_kelvin directly.
+    assert kelvin_for_phase("Night", 0, EVENING, DAY_START, NIGHT, night_kelvin=2000) == 2000
 
-    # Evening's final-hour fade ramps toward night_floor instead of 2700 -
-    # at the night boundary it's exactly night_floor; at fade_start it's
-    # night_floor + 500 (matching the un-lowered 3200 -> 2700 shape, just
-    # shifted down).
-    assert kelvin_for_phase("Evening", NIGHT, EVENING, DAY_START, NIGHT, night_floor=2000) == 2000
-    assert kelvin_for_phase("Evening", fade_start, EVENING, DAY_START, NIGHT, night_floor=2000) == 2500
+    # Evening's final-hour fade ramps from evening_kelvin down to
+    # night_kelvin - continuous with segment 2's hold (still 3200 by
+    # default) at fade_start, reaching night_kelvin exactly at the night
+    # boundary.
+    assert kelvin_for_phase("Evening", NIGHT, EVENING, DAY_START, NIGHT, night_kelvin=2000) == 2000
+    assert kelvin_for_phase("Evening", fade_start, EVENING, DAY_START, NIGHT, night_kelvin=2000) == 3200
 
     # Morning, Day, and Evening's earlier ramp/hold (before the final
-    # hour) are all untouched by night_floor.
-    assert kelvin_for_phase("Morning", 0, EVENING, DAY_START, NIGHT, night_floor=2000) == 6667
-    assert kelvin_for_phase("Day", DAY_START, EVENING, DAY_START, NIGHT, night_floor=2000) == 6667
-    assert kelvin_for_phase("Evening", EVENING, EVENING, DAY_START, NIGHT, night_floor=2000) == 4000
+    # hour) are all untouched by night_kelvin.
+    assert kelvin_for_phase("Morning", 0, EVENING, DAY_START, NIGHT, night_kelvin=2000) == 6667
+    assert kelvin_for_phase("Day", DAY_START, EVENING, DAY_START, NIGHT, night_kelvin=2000) == 6667
+    assert kelvin_for_phase("Evening", EVENING, EVENING, DAY_START, NIGHT, night_kelvin=2000) == 4000
+
+
+def test_brightness_custom_day_evening_night_values():
+    assert brightness_for_phase("Day", 0, NIGHT, day_brightness=200) == 200
+    assert brightness_for_phase("Night", 0, NIGHT, night_brightness=50) == 50
+    fade_start = NIGHT - 3600  # 21:00
+    assert brightness_for_phase("Evening", fade_start - 1, NIGHT, evening_brightness=150) == 150
+
+
+def test_kelvin_custom_morning_day_end_evening_values():
+    assert kelvin_for_phase("Morning", 0, EVENING, DAY_START, NIGHT, morning_kelvin=5000) == 5000
+    assert kelvin_for_phase("Day", DAY_START, EVENING, DAY_START, NIGHT, morning_kelvin=5000) == 5000
+    assert kelvin_for_phase("Day", EVENING, EVENING, DAY_START, NIGHT, day_end_kelvin=3500) == 3500
+    assert kelvin_for_phase("Evening", EVENING, EVENING, DAY_START, NIGHT, day_end_kelvin=3500) == 3500
+    hold_start = min(EVENING + 3600, NIGHT - 3600)
+    assert kelvin_for_phase("Evening", hold_start, EVENING, DAY_START, NIGHT, evening_kelvin=3000) == 3000
+
+
+def test_targets_for_phase_kelvin_rgb_matches_kelvin():
+    # No separate RGB-only Kelvin floor exists any more (dropped along
+    # with night_floor_kelvin) - kelvin_rgb is just kelvin, always.
+    for phase, t in (("Morning", 0), ("Day", DAY_START), ("Evening", EVENING), ("Night", NIGHT)):
+        targets = targets_for_phase(phase, t, EVENING, DAY_START, NIGHT)
+        assert targets["kelvin_rgb"] == targets["kelvin"]
+        assert targets["rgb_color"] == kelvin_to_rgb(targets["kelvin"])
+
+
+def test_targets_for_phase_defaults_match_existing_literals():
+    # Zero new kwargs reproduces every hardcoded literal from before the
+    # curve.py generalization exactly - a regression guard for that change.
+    assert targets_for_phase("Morning", 0, EVENING, DAY_START, NIGHT)["brightness"] == 255
+    assert targets_for_phase("Morning", 0, EVENING, DAY_START, NIGHT)["kelvin"] == 6667
+    assert targets_for_phase("Day", DAY_START, EVENING, DAY_START, NIGHT)["kelvin"] == 6667
+    assert targets_for_phase("Evening", EVENING, EVENING, DAY_START, NIGHT)["brightness"] == 180
+    assert targets_for_phase("Evening", EVENING, EVENING, DAY_START, NIGHT)["kelvin"] == 4000
+    assert targets_for_phase("Night", 0, EVENING, DAY_START, NIGHT)["brightness"] == 80
+    assert targets_for_phase("Night", 0, EVENING, DAY_START, NIGHT)["kelvin"] == 2700
 
 
 def test_kelvin_to_rgb_reference_points():

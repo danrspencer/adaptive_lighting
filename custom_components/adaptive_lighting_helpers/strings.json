@@ -3,32 +3,102 @@
     "step": {
       "user": {
         "title": "Adaptive Lighting Helpers",
-        "description": "Registers the adaptive_lighting_helpers.compute_lighting_groups, compute_curve, and compute_scene_coverage services - nothing below is required for those. Optionally, fill in these five times to also get day-phase/curve sensors (morning_start, day_start, evening_start, night_start, adaptive_lighting, adaptive_lighting_curve) and a phase-override select, computed the same way, no separate helpers or YAML package needed. Leave them blank to set up just the services.",
+        "description": "Registers the adaptive_lighting_helpers.compute_lighting_groups, compute_curve, compute_scene_coverage, and apply_lighting services - nothing below is required for those. Optionally, fill in these five times to also get day-phase/curve sensors (morning_start, day_start, evening_start, night_start, adaptive_lighting, adaptive_lighting_curve) and a phase-override select, computed the same way, no separate helpers or YAML package needed. Leave them blank to set up just the services. You can add any number of additional named sensors afterwards from this integration's own page.",
         "data": {
           "morning_time": "Morning start time",
           "day_time": "Day start time",
           "evening_earliest_time": "Evening earliest start time",
           "evening_latest_time": "Evening latest start time",
           "night_time": "Night start time",
-          "sticky_phase_override": "Keep a manual phase override until cleared by hand (instead of self-clearing at the next phase boundary)"
+          "sticky_phase_override": "Keep a manual phase override until cleared by hand (instead of self-clearing at the next phase boundary)",
+          "day_brightness": "Morning/Day brightness",
+          "evening_brightness": "Evening brightness",
+          "night_brightness": "Night brightness",
+          "morning_kelvin": "Morning colour temperature",
+          "day_end_kelvin": "Day end colour temperature",
+          "evening_kelvin": "Evening colour temperature",
+          "night_kelvin": "Night colour temperature"
         }
       },
       "reconfigure": {
         "title": "Adaptive Lighting Helpers",
-        "description": "Update the day-phase/curve schedule times. Leave all five blank to remove the sensors and select entity.",
+        "description": "Update the day-phase/curve schedule times and brightness/colour temperature curve. Leave all five times blank to remove the sensors and select entity.",
         "data": {
           "morning_time": "Morning start time",
           "day_time": "Day start time",
           "evening_earliest_time": "Evening earliest start time",
           "evening_latest_time": "Evening latest start time",
           "night_time": "Night start time",
-          "sticky_phase_override": "Keep a manual phase override until cleared by hand (instead of self-clearing at the next phase boundary)"
+          "sticky_phase_override": "Keep a manual phase override until cleared by hand (instead of self-clearing at the next phase boundary)",
+          "day_brightness": "Morning/Day brightness",
+          "evening_brightness": "Evening brightness",
+          "night_brightness": "Night brightness",
+          "morning_kelvin": "Morning colour temperature",
+          "day_end_kelvin": "Day end colour temperature",
+          "evening_kelvin": "Evening colour temperature",
+          "night_kelvin": "Night colour temperature"
         }
       }
     },
     "abort": {
       "already_configured": "Already configured",
       "reconfigure_successful": "Reconfiguration successful"
+    }
+  },
+  "config_subentries": {
+    "sensor": {
+      "entry_type": "Sensor",
+      "initiate_flow": {
+        "user": "Add Sensor",
+        "reconfigure": "Reconfigure Sensor"
+      },
+      "step": {
+        "user": {
+          "title": "Add an Adaptive Lighting sensor",
+          "description": "Adds a named day-phase/curve sensor and phase-override select, independent of the default one above - entities are prefixed with this name (e.g. \"Living Room\" -> sensor.living_room_adaptive_lighting).",
+          "data": {
+            "name": "Name",
+            "morning_time": "Morning start time",
+            "day_time": "Day start time",
+            "evening_earliest_time": "Evening earliest start time",
+            "evening_latest_time": "Evening latest start time",
+            "night_time": "Night start time",
+            "sticky_phase_override": "Keep a manual phase override until cleared by hand (instead of self-clearing at the next phase boundary)",
+            "day_brightness": "Morning/Day brightness",
+            "evening_brightness": "Evening brightness",
+            "night_brightness": "Night brightness",
+            "morning_kelvin": "Morning colour temperature",
+            "day_end_kelvin": "Day end colour temperature",
+            "evening_kelvin": "Evening colour temperature",
+            "night_kelvin": "Night colour temperature"
+          }
+        },
+        "reconfigure": {
+          "title": "Reconfigure sensor",
+          "description": "Renaming isn't supported here since it would change this sensor's entity IDs - remove and re-add instead if it needs a new name.",
+          "data": {
+            "morning_time": "Morning start time",
+            "day_time": "Day start time",
+            "evening_earliest_time": "Evening earliest start time",
+            "evening_latest_time": "Evening latest start time",
+            "night_time": "Night start time",
+            "sticky_phase_override": "Keep a manual phase override until cleared by hand (instead of self-clearing at the next phase boundary)",
+            "day_brightness": "Morning/Day brightness",
+            "evening_brightness": "Evening brightness",
+            "night_brightness": "Night brightness",
+            "morning_kelvin": "Morning colour temperature",
+            "day_end_kelvin": "Day end colour temperature",
+            "evening_kelvin": "Evening colour temperature",
+            "night_kelvin": "Night colour temperature"
+          }
+        }
+      },
+      "error": {
+        "already_configured": "A sensor with this name already exists"
+      },
+      "abort": {
+        "reconfigure_successful": "Reconfiguration successful"
+      }
     }
   }
 }

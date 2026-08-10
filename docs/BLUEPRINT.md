@@ -68,12 +68,9 @@ light or device.
 ## RGB colour
 
 Prefer RGB Color (off by default) sends RGB colour instead of colour temperature to lights that support it -
-auto-detected per light, nothing to configure per bulb. Two reasons to turn it on: some bulbs render colour more
-accurately in RGB mode than colour-temperature mode, and RGB can represent Evening/Night colours warmer than a
-bulb's native colour-temperature range allows if `night_floor_kelvin` is configured on the Adaptive Lighting
-Helpers integration (see [docs/HELPERS.md](HELPERS.md)) - see [README's "Why four
-phases"](../README.md#why-four-phases-not-a-continuous-curve) for why only Evening/Night are eligible. Lights
-without RGB support are unaffected either way.
+auto-detected per light, nothing to configure per bulb. Some bulbs render colour more accurately in RGB mode than
+colour-temperature mode, which is the main reason to turn it on. Lights without RGB support are unaffected
+either way.
 
 ## Reachability and redundancy filtering
 
