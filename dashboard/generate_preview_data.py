@@ -7,11 +7,19 @@ the compute_curve service uses). preview.html loads this to render the
 actual Lovelace card with synthetic data, so you can see it without a
 running Home Assistant instance.
 
-Boundaries here (06:00 morning / 08:00 day / 18:00 evening / 22:00
-night, clamped between a 17:00 earliest and 20:00 latest bound) are
-just representative defaults for the preview - the real integration
-computes these from the five schedule times configured on its config
-entry, plus sunset.
+Boundaries here (06:00 morning / 08:00 day / 22:00 night, evening
+clamped between a 17:00 earliest and 20:00 latest bound around a
+19:45 representative sunset) are just representative defaults for the
+preview - the real integration computes these from the five schedule
+times configured on its config entry, plus the actual sun.sun.
+Evening itself is DERIVED below via the same
+max(earliest, min(sunset, latest)) clamp coordinator.py uses, not a
+fixed hour - it needs to actually respond to the earliest/latest/sunset
+values above it or the "why evening starts when it does" footnote ends
+up describing numbers that don't add up (this bit the preview once
+already: earliest/latest/sunset were added without wiring them into
+evening_ts, so the footnote confidently explained a boundary that had
+nothing to do with the reasoning shown).
 
 Run from the repo root: python3 dashboard/generate_preview_data.py
 """
@@ -26,12 +34,7 @@ from curve import brightness_for_phase, kelvin_for_phase, phase_at  # noqa: E402
 
 MORNING_HOUR = 6
 DAY_HOUR = 8
-EVENING_HOUR = 18
 NIGHT_HOUR = 22
-# Not actually used to derive EVENING_HOUR above (which is fixed, for a
-# stable preview) - just representative earliest/latest bounds so the
-# card's "why evening starts when it does" footnote has something to
-# show.
 EVENING_EARLIEST_HOUR = 17
 EVENING_LATEST_HOUR = 20
 
@@ -48,10 +51,14 @@ def main():
     midnight = datetime.datetime.combine(datetime.date.today(), datetime.time(0, 0, 0)).timestamp()
     morning_ts = midnight + MORNING_HOUR * 3600
     day_start_ts = midnight + DAY_HOUR * 3600
-    evening_ts = midnight + EVENING_HOUR * 3600
     night_ts = midnight + NIGHT_HOUR * 3600
     evening_earliest_ts = midnight + EVENING_EARLIEST_HOUR * 3600
     evening_latest_ts = midnight + EVENING_LATEST_HOUR * 3600
+    sunset_ts = midnight + SUNSET_HOUR * 3600
+    # Same clamp coordinator.py's _compute_boundaries uses for the real
+    # sensor - see this file's module docstring for why this can't be a
+    # fixed hour.
+    evening_ts = max(evening_earliest_ts, min(sunset_ts, evening_latest_ts))
 
     points = []
     for i in range(289):  # every 5 minutes across 24h, matching the real curve sensor
@@ -79,7 +86,7 @@ def main():
         },
         "sun": {
             "sunrise": midnight + SUNRISE_HOUR * 3600,
-            "sunset": midnight + SUNSET_HOUR * 3600,
+            "sunset": sunset_ts,
         },
         "points": points,
         "now_phase": now_phase,

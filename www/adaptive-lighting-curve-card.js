@@ -300,6 +300,21 @@ class AdaptiveLightingCurveCard extends HTMLElement {
       );
     }
 
+    // Shaded band + edge lines showing where Evening is allowed to land
+    // (clamped between earliest/latest, tracking sunset in between) -
+    // makes it visible at a glance why Evening's own boundary line is
+    // where it is, rather than only explained in the footnote text.
+    let clampBand = '';
+    if (b.eveningEarliest != null && b.eveningLatest != null) {
+      const xEarliest = xOf(b.eveningEarliest);
+      const xLatest = xOf(b.eveningLatest);
+      clampBand = `
+        <rect x="${Math.min(xEarliest, xLatest).toFixed(2)}" y="${PAD_TOP}" width="${Math.abs(xLatest - xEarliest).toFixed(2)}" height="${(BASELINE_Y - PAD_TOP).toFixed(2)}" class="clamp-band" />
+        <line x1="${xEarliest.toFixed(1)}" y1="${PAD_TOP}" x2="${xEarliest.toFixed(1)}" y2="${BASELINE_Y}" class="clamp-edge" />
+        <line x1="${xLatest.toFixed(1)}" y1="${PAD_TOP}" x2="${xLatest.toFixed(1)}" y2="${BASELINE_Y}" class="clamp-edge" />
+      `;
+    }
+
     const boundaryDefs = [
       ['Morning', b.morning],
       ['Day', b.day],
@@ -361,6 +376,7 @@ class AdaptiveLightingCurveCard extends HTMLElement {
     const svg = `
       <svg viewBox="0 0 ${VB_W} ${VB_H}" preserveAspectRatio="none" class="chart">
         ${bars}
+        ${clampBand}
         ${boundaryLines}
         ${hourTicks.join('')}
         ${sunMarkers}
@@ -389,6 +405,13 @@ class AdaptiveLightingCurveCard extends HTMLElement {
         .chart { width: 100%; height: 220px; display: block; }
         .axis-line { stroke: var(--divider-color, #888); stroke-width: 1; }
         .axis-label { fill: var(--secondary-text-color); font-size: 11px; }
+        .clamp-band { fill: var(--secondary-text-color); opacity: 0.18; }
+        .clamp-edge {
+          stroke: var(--secondary-text-color);
+          stroke-width: 1;
+          stroke-dasharray: 1 3;
+          opacity: 0.6;
+        }
         .boundary-line {
           stroke: var(--secondary-text-color);
           stroke-width: 1;
