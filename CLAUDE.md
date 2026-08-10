@@ -619,8 +619,9 @@ scene-coverage gap filling.
   imports `../www/adaptive-lighting-curve-card.js`) and open
   `dashboard/preview.html`.
 
-**RGB colour support added (`prefer_rgb_color`, design-only - not yet
-live-tested).** Prompted by the user recalling that `basnijholt/
+**RGB colour support added (`prefer_rgb_color`) - now deployed and
+confirmed live as of 2026-08-10, see below for the full deployment
+story.** Originally prompted by the user recalling that `basnijholt/
 adaptive-lighting` (the most popular HA adaptive-lighting integration)
 has a `prefer_rgb_color` option people like. Two real decisions came out
 of planning this, both worth remembering if it's revisited:
@@ -673,6 +674,62 @@ of planning this, both worth remembering if it's revisited:
   `dashboard/render_preview_svg.py` had its own third hand-maintained
   copy of the Kelvin→RGB algorithm; consolidated onto `curve.kelvin_to_rgb`
   while in there rather than adding a fourth copy.
+
+**Deployed and confirmed live, 2026-08-10** (after the PR merged, dead
+`scene.apply` code removed, and the duplication pass below): HACS
+update (`update_information` then `download` - HACS's own 48h refresh
+cache meant the first `ha_get_hacs_info` call after merging still
+showed the pre-session commit, exactly the same staleness this repo
+hit installing the sensor redesign PR) + restart, same as every prior
+integration update this session.
+
+**New wrinkle this time: re-importing the blueprint.** `ha_import_blueprint(url, overwrite=true)`
+against this repo's GitHub blob URL did **not** update the blueprint
+the live automation actually uses. It created a second file at
+`danrspencer/adaptive_lighting.yaml` (matching the GitHub *repository
+owner* in the URL) instead of overwriting `danspencer/adaptive_lighting.yaml`
+(the path baked into this repo's own `blueprints/automation/danspencer/`
+folder structure, and the one `automation.living_room_lights_new` was
+actually using) - `overrides_existing: false` in the response was the
+tell. Yet another instance of the "danspencer" vs "danrspencer" naming
+collision lessons 6-7 already warn about, this time inside a tool's own
+path-derivation logic rather than a symlink. Couldn't fix by writing
+directly to the correct path either - `blueprints/` is read-only
+through every file-editing MCP tool available (`ha_write_file`/
+`ha_delete_file`'s allowed directories are `www/`/`themes/`/
+`custom_templates/`/`dashboards/` only). Resolved by repointing the one
+automation that mattered (`use_blueprint.path`, via
+`ha_config_set_automation`) at the new, correctly-updated file instead
+of fighting to update the old one. The old `danspencer/adaptive_lighting.yaml`
+is now an orphaned, unused leftover - harmless (unlike the
+`custom_components/*.bak-*` incident, a stray blueprint file isn't
+domain-scanned or capable of colliding with anything at startup), but
+worth deleting properly from the host directly if this comes up again,
+the same way lesson 3 handles other blueprint-deployment cleanup.
+
+Verified for real, not just "no errors in the log":
+- `ha_list_services`/error log clean after the restart.
+- Manually triggered `automation.living_room_lights_new` - trace shows
+  exactly one action step now (`adaptive_lighting_helpers.apply_lighting`,
+  no more nested `choose:`/repeat block), and `light.living_room_pendant_1`
+  actually changed state (`color_temp_kelvin: 4761`, matching what the
+  trace's `sensor_entity_id`-derived target predicted).
+- `compute_lighting_groups` called directly with `prefer_rgb_color: true`
+  against `light.kitchen_pendant_1` (a real bulb with
+  `supported_color_modes: ["color_temp", "xy"]`) correctly returned it
+  in `combined_rgb`, not `combined` - confirms `supports_rgb()` reads
+  real HA attribute shapes correctly, not just the test fakes.
+- **Not independently fired**: `apply_lighting`'s own `rgb_color`
+  dispatch branch specifically (as opposed to the grouping decision
+  above). No sensor entity on this instance currently exposes an
+  `rgb_color` attribute (the optional day-phase sensors are still
+  unconfigured - see the item below), so there was nothing to point
+  `sensor_entity_id` at for a true end-to-end RGB test. Judged low-risk
+  to leave unverified for now: the dispatch code is the identical
+  `hass.services.async_call("light", "turn_on", ...)` pattern already
+  confirmed live for `color_temp_kelvin` moments earlier, just a
+  different data key. Worth actually exercising once the day-phase
+  sensors (or any sensor with `rgb_color`) exist live.
 
 **Duplication pass, prompted by the user directly asking for one after
 the RGB work above.** Found and fixed three real cases (all from the

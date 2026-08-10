@@ -214,9 +214,12 @@ suite on push and PR across Python 3.9 and 3.13.
 
 The pure-Python core (`curve.py`, `grouping.py`, `scenes.py`) and the integration wrapping it as HA services
 are both written, unit tested, and **installed via HACS and confirmed working against a live Home Assistant
-instance** — `compute_lighting_groups`/`compute_curve`/`compute_scene_coverage` verified registered and
-functionally correct, and the blueprint's full compute-groups-then-turn-on-lights path exercised end to end
-against real hardware. `apply_lighting` and RGB colour support (`prefer_rgb_color`, `night_floor_kelvin`) are
-new, unit tested, and **not yet exercised against a live instance**. The optional day-phase/curve sensors
-(`sensor.py`) haven't been configured or tested live yet either. See CLAUDE.md's "Current status" section for
+instance** — all four services (`apply_lighting`, `compute_lighting_groups`, `compute_curve`,
+`compute_scene_coverage`) verified registered and functionally correct, and the blueprint's `apply_lighting`
+path exercised end to end against real hardware (a real bulb changed brightness/colour temperature). RGB colour
+routing (`prefer_rgb_color`) is confirmed correct against a real light's `supported_color_modes`; the actual
+`rgb_color` dispatch call hasn't been independently fired live yet (no sensor on the test instance currently
+exposes an `rgb_color` attribute — same dispatch code already confirmed for colour temperature, just a
+different data key). The optional day-phase/curve sensors (`sensor.py`) haven't been configured or tested live
+yet either. See CLAUDE.md's "Current status" section for
 the full rundown.
