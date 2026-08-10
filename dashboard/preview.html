@@ -78,18 +78,24 @@
       const states = {
         'sensor.morning_start': state('', { timestamp: data.boundaries.morning }),
         'sensor.day_start': state('', { timestamp: data.boundaries.day }),
-        'sensor.evening_start': state('', { timestamp: data.boundaries.evening }),
+        'sensor.evening_start': state('', {
+          timestamp: data.boundaries.evening,
+          earliest: data.boundaries.evening_earliest,
+          latest: data.boundaries.evening_latest,
+        }),
         'sensor.night_start': state('', { timestamp: data.boundaries.night }),
-        'sensor.day_phase': state(data.now_phase),
-        'input_datetime.evening_earliest': state('17:00:00'),
-        'input_datetime.evening_latest': state('20:00:00'),
         'sun.sun': state('above_horizon', {
           next_rising: new Date(data.sun.sunrise * 1000).toISOString(),
           next_setting: new Date(data.sun.sunset * 1000).toISOString(),
         }),
         'sensor.adaptive_lighting_curve': state(new Date().toISOString(), { points: data.points }),
-        'sensor.solar_adaptive_lighting_brightness': state(data.now_brightness),
-        'sensor.solar_adaptive_lighting_color_temperature': state(data.now_kelvin),
+        // Combined entity: state = phase, attributes = brightness/color_temp
+        // - matches sensor.py's _AdaptiveLightingSensor shape.
+        'sensor.adaptive_lighting': state(data.now_phase, {
+          phase: data.now_phase,
+          brightness: data.now_brightness,
+          color_temp: data.now_kelvin,
+        }),
       };
 
       const card = document.createElement('adaptive-lighting-curve-card');

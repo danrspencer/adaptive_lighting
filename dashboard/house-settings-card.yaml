@@ -7,17 +7,20 @@
 #        URL:  /local/adaptive-lighting-curve-card.js
 #        Type: JavaScript Module
 #   2. The sensors it reads to exist with these exact entity_ids and
-#      attribute shapes (produced by the live packages/adaptive_lighting.yaml
-#      day-phase sensors - not yet ported into this repo, see CLAUDE.md):
-#        sensor.morning_start / day_start / evening_start / night_start
+#      attribute shapes (produced by the adaptive_lighting_helpers
+#      integration's optional day-phase/curve sensors - see its README
+#      "Optional: day-phase/curve sensors" section):
+#        sensor.morning_start / day_start / night_start
 #          - attributes.timestamp (unix seconds)
-#        sensor.day_phase                          - state: Morning/Day/Evening/Night
-#        sensor.adaptive_lighting_curve             - attributes.points: [{t, brightness, kelvin}, ...]
-#        sensor.solar_adaptive_lighting_brightness  - state: int 0-255
-#        sensor.solar_adaptive_lighting_color_temperature - state: int Kelvin
-#        input_datetime.evening_earliest / evening_latest (optional - only
-#          used to explain *why* evening starts when it does)
-#        sun.sun (optional, same reason)
+#        sensor.evening_start
+#          - attributes.timestamp, plus attributes.earliest/latest
+#            (unix seconds, optional - only used to explain *why*
+#            evening starts when it does)
+#        sensor.adaptive_lighting        - state: Morning/Day/Evening/Night
+#                                           attributes.brightness (0-255),
+#                                           attributes.color_temp (Kelvin)
+#        sensor.adaptive_lighting_curve  - attributes.points: [{t, brightness, kelvin}, ...]
+#        sun.sun (optional, same reason as evening's earliest/latest)
 
 type: heading
 heading: Adaptive Lighting Curve

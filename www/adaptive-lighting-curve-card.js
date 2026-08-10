@@ -4,11 +4,15 @@
  * Renders the day's brightness + color-temperature curve as an actual
  * rendered-color chart (Kelvin -> RGB). The curve itself is NOT
  * recomputed here: it's read straight from sensor.adaptive_lighting_curve,
- * whose `points` attribute is produced by the same Jinja macros
- * (custom_templates/adaptive_lighting.jinja) that drive the real
- * production sensors in packages/adaptive_lighting.yaml. That's the
- * single source of truth; this card just displays it. The "now" marker
- * reads the live instantaneous sensors directly for the same reason.
+ * whose `points` attribute is produced by the adaptive_lighting_helpers
+ * integration's curve.py (custom_components/adaptive_lighting_helpers/) -
+ * the same module the compute_curve service uses. That's the single
+ * source of truth; this card just displays it. The "now" marker reads
+ * sensor.adaptive_lighting's phase/brightness/color_temp attributes
+ * directly for the same reason - and unlike the curve, those DO follow
+ * a manual override via select.adaptive_lighting_phase (see
+ * coordinator.py), since they represent "right now" rather than the
+ * full-day schedule.
  */
 
 const DEFAULT_ENTITIES = {
@@ -16,13 +20,15 @@ const DEFAULT_ENTITIES = {
   day: 'sensor.day_start',
   evening: 'sensor.evening_start',
   night: 'sensor.night_start',
-  phase: 'sensor.day_phase',
-  evening_earliest: 'input_datetime.evening_earliest',
-  evening_latest: 'input_datetime.evening_latest',
+  // phase/brightness_now/kelvin_now all read from the same combined
+  // entity by default (state = phase, attributes = brightness/color_temp) -
+  // see the fallback in `set hass()` below for custom configs still
+  // pointing at separate sensors.
+  phase: 'sensor.adaptive_lighting',
+  brightness_now: 'sensor.adaptive_lighting',
+  kelvin_now: 'sensor.adaptive_lighting',
   sun: 'sun.sun',
   curve: 'sensor.adaptive_lighting_curve',
-  brightness_now: 'sensor.solar_adaptive_lighting_brightness',
-  kelvin_now: 'sensor.solar_adaptive_lighting_color_temperature',
 };
 
 const VB_W = 960;
@@ -73,11 +79,14 @@ function rgbToHex([r, g, b]) {
   return '#' + [r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('');
 }
 
-function todayAtLocal(anchorDate, hhmmss) {
-  const [h, m, s] = hhmmss.split(':').map(Number);
-  const d = new Date(anchorDate);
-  d.setHours(h, m, s || 0, 0);
-  return d.getTime() / 1000;
+// brightness_now/kelvin_now default to the same combined entity as
+// phase (state = phase, attributes = brightness/color_temp) - read the
+// named attribute if present, falling back to .state for a custom
+// config still pointing at a separate plain-value sensor.
+function numFromAttrOrState(stateObj, attrName) {
+  if (!stateObj) return undefined;
+  const attrVal = stateObj.attributes && stateObj.attributes[attrName];
+  return attrVal !== undefined ? Number(attrVal) : Number(stateObj.state);
 }
 
 function fmtTime(tSec) {
@@ -144,8 +153,6 @@ class AdaptiveLightingCurveCard extends HTMLElement {
     }
 
     const phase = get(e.phase);
-    const eveningEarliest = get(e.evening_earliest);
-    const eveningLatest = get(e.evening_latest);
     const sun = get(e.sun);
     const curve = get(e.curve);
     const brightnessNow = get(e.brightness_now);
@@ -156,20 +163,30 @@ class AdaptiveLightingCurveCard extends HTMLElement {
       day: Number(day.attributes.timestamp),
       evening: Number(evening.attributes.timestamp),
       night: Number(night.attributes.timestamp),
+      // Only present on sensor.evening_start - see coordinator.py's
+      // evening_earliest_ts/evening_latest_ts. Absent (null) if the
+      // integration's evening_earliest_time/evening_latest_time
+      // weren't configured.
+      eveningEarliest: evening.attributes.earliest != null ? Number(evening.attributes.earliest) : null,
+      eveningLatest: evening.attributes.latest != null ? Number(evening.attributes.latest) : null,
     };
 
     const pointsRaw = curve && curve.attributes && curve.attributes.points;
+    // brightness_now/kelvin_now default to the same combined entity as
+    // phase, read via its brightness/color_temp attributes; a custom
+    // config pointing them at separate plain-value sensors still works
+    // by falling back to .state.
+    const brightnessNowValue = numFromAttrOrState(brightnessNow, 'brightness');
+    const kelvinNowValue = numFromAttrOrState(kelvinNow, 'color_temp');
 
     const cacheKey = JSON.stringify([
       boundaries,
       phase && phase.state,
-      eveningEarliest && eveningEarliest.state,
-      eveningLatest && eveningLatest.state,
       sun && sun.attributes.next_setting,
       sun && sun.attributes.next_rising,
       pointsRaw,
-      brightnessNow && brightnessNow.state,
-      kelvinNow && kelvinNow.state,
+      brightnessNowValue,
+      kelvinNowValue,
     ]);
 
     if (cacheKey === this._cacheKey) {
@@ -179,11 +196,9 @@ class AdaptiveLightingCurveCard extends HTMLElement {
 
     this._boundaries = boundaries;
     this._phaseState = phase && phase.state;
-    this._eveningEarliest = eveningEarliest;
-    this._eveningLatest = eveningLatest;
     this._sun = sun;
-    this._brightnessNow = brightnessNow && Number(brightnessNow.state);
-    this._kelvinNow = kelvinNow && Number(kelvinNow.state);
+    this._brightnessNow = brightnessNowValue;
+    this._kelvinNow = kelvinNowValue;
 
     if (pointsRaw) {
       // HA's trigger-template attribute rendering sometimes preserves the
@@ -221,12 +236,11 @@ class AdaptiveLightingCurveCard extends HTMLElement {
     const b = this._boundaries;
     if (!b) return '';
     const eveningTime = fmtTime(b.evening);
-    if (!this._eveningEarliest || !this._eveningLatest || !this._sun || !this._sun.attributes.next_setting) {
+    if (b.eveningEarliest == null || b.eveningLatest == null || !this._sun || !this._sun.attributes.next_setting) {
       return `Evening starts at ${eveningTime}.`;
     }
-    const anchor = new Date(b.evening * 1000);
-    const earliestTs = todayAtLocal(anchor, this._eveningEarliest.state);
-    const latestTs = todayAtLocal(anchor, this._eveningLatest.state);
+    const earliestTs = b.eveningEarliest;
+    const latestTs = b.eveningLatest;
     const sunsetTs = new Date(this._sun.attributes.next_setting).getTime() / 1000;
 
     let reason;
@@ -284,6 +298,21 @@ class AdaptiveLightingCurveCard extends HTMLElement {
       hourTicks.push(
         `<text x="${xOf(t).toFixed(1)}" y="${VB_H - 6}" class="axis-label" text-anchor="middle">${String(h).padStart(2, '0')}:00</text>`
       );
+    }
+
+    // Shaded band + edge lines showing where Evening is allowed to land
+    // (clamped between earliest/latest, tracking sunset in between) -
+    // makes it visible at a glance why Evening's own boundary line is
+    // where it is, rather than only explained in the footnote text.
+    let clampBand = '';
+    if (b.eveningEarliest != null && b.eveningLatest != null) {
+      const xEarliest = xOf(b.eveningEarliest);
+      const xLatest = xOf(b.eveningLatest);
+      clampBand = `
+        <rect x="${Math.min(xEarliest, xLatest).toFixed(2)}" y="${PAD_TOP}" width="${Math.abs(xLatest - xEarliest).toFixed(2)}" height="${(BASELINE_Y - PAD_TOP).toFixed(2)}" class="clamp-band" />
+        <line x1="${xEarliest.toFixed(1)}" y1="${PAD_TOP}" x2="${xEarliest.toFixed(1)}" y2="${BASELINE_Y}" class="clamp-edge" />
+        <line x1="${xLatest.toFixed(1)}" y1="${PAD_TOP}" x2="${xLatest.toFixed(1)}" y2="${BASELINE_Y}" class="clamp-edge" />
+      `;
     }
 
     const boundaryDefs = [
@@ -347,6 +376,7 @@ class AdaptiveLightingCurveCard extends HTMLElement {
     const svg = `
       <svg viewBox="0 0 ${VB_W} ${VB_H}" preserveAspectRatio="none" class="chart">
         ${bars}
+        ${clampBand}
         ${boundaryLines}
         ${hourTicks.join('')}
         ${sunMarkers}
@@ -375,6 +405,13 @@ class AdaptiveLightingCurveCard extends HTMLElement {
         .chart { width: 100%; height: 220px; display: block; }
         .axis-line { stroke: var(--divider-color, #888); stroke-width: 1; }
         .axis-label { fill: var(--secondary-text-color); font-size: 11px; }
+        .clamp-band { fill: var(--secondary-text-color); opacity: 0.18; }
+        .clamp-edge {
+          stroke: var(--secondary-text-color);
+          stroke-width: 1;
+          stroke-dasharray: 1 3;
+          opacity: 0.6;
+        }
         .boundary-line {
           stroke: var(--secondary-text-color);
           stroke-width: 1;

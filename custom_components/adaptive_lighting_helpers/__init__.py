@@ -7,9 +7,10 @@ grouping - reachability, multiplier bucketing, tolerance checks,
 manual-override protection, two-step transition routing (grouping.py) -
 and scene-coverage gap filling, for "apply a scene, then a default for
 whatever it doesn't cover" (scenes.py). Optionally also sets up
-day-phase/curve sensors (sensor.py) as a native replacement for a
-Jinja packages/*.yaml setup, if the config entry has schedule entities
-configured - see config_flow.py.
+day-phase/curve sensors (sensor.py) and a phase-override select
+(select.py) as a native replacement for a Jinja packages/*.yaml setup,
+if the config entry has schedule times configured - see
+config_flow.py.
 
 Designed to work with the adaptive_lighting blueprint in this repo,
 but not coupled to it: call any of the services directly from your own
@@ -18,9 +19,9 @@ services.yaml (visible in Developer Tools -> Actions) for the full
 contract of each service on its own terms.
 
 curve.py, grouping.py, and scenes.py have no Home Assistant
-dependency - this file (and sensor.py) are the only places that touch
-`hass`, translating between real HA state/registries and the plain
-functions those modules expose.
+dependency - this file, sensor.py, select.py, and coordinator.py are
+the only places that touch `hass`, translating between real HA
+state/registries and the plain functions those modules expose.
 """
 
 from __future__ import annotations
@@ -35,23 +36,19 @@ from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, Supp
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.event import async_track_state_change_event
 
-from .const import DOMAIN
+from .const import DOMAIN, PHASE_OVERRIDE_ENTITY_ID
+from .coordinator import TIME_KEYS, ScheduleCoordinator
 from .curve import brightness_for_phase, kelvin_for_phase, phase_at
 from .grouping import EntityLookup, build_groups
 from .scenes import SceneLookup, compute_scene_coverage
 
-SCHEDULE_ENTITY_KEYS = (
-    "morning_entity",
-    "day_entity",
-    "evening_earliest_entity",
-    "evening_latest_entity",
-    "night_entity",
-)
+SCHEDULE_PLATFORMS = [Platform.SENSOR, Platform.SELECT]
 
 
 def _has_schedule_config(entry: ConfigEntry) -> bool:
-    return any(entry.data.get(key) for key in SCHEDULE_ENTITY_KEYS)
+    return any(entry.data.get(key) for key in TIME_KEYS)
 
 
 COMPUTE_LIGHTING_GROUPS_SCHEMA = vol.Schema(
@@ -232,7 +229,26 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     )
 
     if _has_schedule_config(entry):
-        await hass.config_entries.async_forward_entry_setups(entry, [Platform.SENSOR])
+        coordinator = ScheduleCoordinator(hass, entry)
+        await coordinator.async_config_entry_first_refresh()
+        hass.data.setdefault(DOMAIN, {})[entry.entry_id] = coordinator
+
+        # Evening tracks sun.sun; the phase-override select can change
+        # at any moment and should take effect immediately rather than
+        # waiting for the next 60s poll. The five schedule times
+        # themselves don't need tracking - they're static config, only
+        # changed via the reconfigure flow, which reloads the entry
+        # (and therefore rebuilds this coordinator from scratch) on its
+        # own.
+        entry.async_on_unload(
+            async_track_state_change_event(
+                hass,
+                ["sun.sun", PHASE_OVERRIDE_ENTITY_ID],
+                lambda event: hass.async_create_task(coordinator.async_request_refresh()),
+            )
+        )
+
+        await hass.config_entries.async_forward_entry_setups(entry, SCHEDULE_PLATFORMS)
 
     return True
 
@@ -243,6 +259,8 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.services.async_remove(DOMAIN, "compute_scene_coverage")
 
     if _has_schedule_config(entry):
-        return await hass.config_entries.async_unload_platforms(entry, [Platform.SENSOR])
+        unloaded = await hass.config_entries.async_unload_platforms(entry, SCHEDULE_PLATFORMS)
+        hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
+        return unloaded
 
     return True
