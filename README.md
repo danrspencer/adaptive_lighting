@@ -6,165 +6,52 @@ Two independent pieces, designed to work together but not coupled to each other:
   curve math and per-light grouping (reachability, tolerance, manual-override protection, two-step transitions) as
   plain HA services. Useful in your own automations even if you never touch the blueprint below.
 - **The Adaptive Lighting blueprint** — a per-room automation built on top of those services: brightness and
-  colour temperature follow a solar schedule, motion controls on/off, scenes can take over partially or entirely,
-  manual changes are respected, and lights that don't reach their target get corrected automatically.
+  colour temperature follow a four-phase daily schedule, motion controls on/off, scenes can take over partially
+  or entirely, manual changes are respected, and lights that don't reach their target get corrected automatically.
 
 ![Adaptive Lighting Curve card, showing brightness and colour temperature through the day](dashboard/curve-preview.svg)
 
+## Why four phases, not a continuous curve
+
+Most "adaptive lighting" tools compute one continuous curve straight from the sun's position — brightness and
+colour temperature interpolated smoothly between sunrise and sunset, nothing else to it. That's a reasonable
+default, but it treats every part of your day the same way: just "more or less light," rather than light with a
+*purpose*. This project instead uses four named phases — Morning, Day, Evening, Night — each justified on its own
+terms, not just given its own numbers on a curve:
+
+- **Morning** exists to help you wake up, not to track sunrise. It starts at a fixed time before you'd normally
+  be up, independent of the season — a sun-tracking curve would have it arrive at 5am in June and 8am in
+  December, which isn't what a wake-up light is for. Bright, cool-white light in the morning has been linked to
+  better alertness later in the day: [one study](https://pubmed.ncbi.nlm.nih.gov/36058557/) found office workers
+  given 1.5 hours of bright morning light for a week had higher sleep efficiency and less morning sleepiness than
+  under regular office lighting.
+- **Day** is the long middle stretch, gradually warming as it runs toward evening so the eventual transition
+  doesn't feel abrupt.
+- **Evening** is when relaxed, warm lighting takes over — the one phase that *does* track the sun (sunset), so
+  your indoor lighting shifts in step with what's actually happening outside. It's clamped between an earliest
+  and latest bound, though, so a 4pm winter sunset doesn't dump you into "relaxed evening" mode the moment you
+  walk in from work, and a 10pm midsummer sunset doesn't mean evening never really arrives.
+- **Night** isn't tied to any solar event at all — it's just what the house should look like once everyone's
+  asleep: dim and warm, the lighting you want on at 3am without waking yourself up further.
+
+Each boundary is independently configurable, and any phase can be pinned manually when you want to override the
+schedule for a while — see [docs/HELPERS.md](docs/HELPERS.md).
+
 ## Adaptive Lighting Helpers (the integration)
 
-Three services, each documented in full in `services.yaml` (visible in Home Assistant's Developer Tools → Actions
-once installed) — call them directly from your own automations or scripts, no blueprint required.
-
-### `adaptive_lighting_helpers.compute_lighting_groups`
-
-Given a set of light entities, a target brightness/colour-temperature, and optional per-light brightness
-multipliers, returns the minimal set of groups actually needing a `light.turn_on`/`light.turn_off` call: filters
-out unreachable lights, buckets by multiplier, skips anything already within tolerance of the target, leaves
-manually-set lights alone, and separates out lights tagged for two-step transitions.
-
-```yaml
-action: adaptive_lighting_helpers.compute_lighting_groups
-data:
-  entities: [light.kitchen_1, light.kitchen_2]
-  sensor_brightness: 200
-  sensor_color_temp_kelvin: 3200
-  brightness_multipliers: { light.kitchen_2: 0.5 }
-response_variable: plan
-# plan.groups -> [{multiplier, brightness, needing_off, combined, two_step}, ...]
-```
-
-### `adaptive_lighting_helpers.compute_curve`
-
-Given today's morning/day/evening/night phase-boundary timestamps, returns the target brightness, colour
-temperature, and phase name for a given instant (or now). Useful for building your own day-phase sensor without
-any of the rest of this project.
-
-```yaml
-action: adaptive_lighting_helpers.compute_curve
-data:
-  morning: "{{ today_at('06:00:00') | as_timestamp }}"
-  day: "{{ today_at('08:00:00') | as_timestamp }}"
-  evening: "{{ today_at('18:00:00') | as_timestamp }}"
-  night: "{{ today_at('22:00:00') | as_timestamp }}"
-response_variable: now
-# now.phase / now.brightness / now.kelvin
-```
-
-### `adaptive_lighting_helpers.compute_scene_coverage`
-
-Given a candidate scene and the entities you want a default behaviour applied to, works out which of those
-entities the scene actually covers — hand covered ones to the scene, apply your default (adaptive lighting or
-anything else) to whatever's left. A scene only counts if it exists and everything it covers is within
-`scope_entities`; a scene reaching outside that scope, or one that doesn't exist, is treated the same as no scene
-at all. Nothing here is specific to adaptive lighting, or even to lighting.
-
-```yaml
-action: adaptive_lighting_helpers.compute_scene_coverage
-data:
-  scene_entity_id: scene.kitchen_night
-  scope_entities: [light.kitchen_1, light.kitchen_2, light.kitchen_strip_effect]
-  target_entities: [light.kitchen_1, light.kitchen_2]
-response_variable: coverage
-# coverage.scene_active / scene_valid / covered_entities / uncovered_entities
-```
-
-### Optional: day-phase/curve sensors
-
-If you'd rather have this running continuously as sensors than call `compute_curve` yourself, fill in the five
-schedule times when setting up the integration (Settings → Devices & Services → Adaptive Lighting Helpers →
-Configure) — morning/day/night start times, and evening's earliest/latest bound (evening itself tracks sunset,
-clamped between those two). No separate helper entities to create first — these are plain times stored directly
-on the integration's own config entry, editable later from the same Configure screen. Leave them blank and you
-just get the three services above with nothing else.
-
-Filling them in adds, computed the same way `compute_curve` computes them, refreshed every 60 seconds:
-
-| Entity | What it is |
-|---|---|
-| `sensor.morning_start` / `day_start` / `night_start` | Today's boundary, `attributes.timestamp` |
-| `sensor.evening_start` | Today's evening boundary, `attributes.timestamp`, plus `attributes.earliest`/`latest` (the two configured bounds, for reference) |
-| `sensor.adaptive_lighting` | Combined "right now" reading — state is the phase (Morning/Day/Evening/Night), `attributes.brightness` (0-255) and `attributes.color_temp` (Kelvin) are exactly the attribute names the blueprint's `adaptive_sensor` input already reads, so this can be pointed at directly |
-| `sensor.adaptive_lighting_curve` | `attributes.points`: the full day as 289 `{t, brightness, kelvin}` samples — what the [dashboard card](#previewing-the-dashboard-card) reads. Deliberately does **not** follow a manual phase override (see below) — it's a full-day schedule, not a "right now" value |
-| `select.adaptive_lighting_phase` | Manual override — `Auto` (default) or a specific phase. Pinning a phase holds it until the *schedule itself* next moves on (e.g. override to `Day` during `Evening` and it still becomes `Night` once Evening would naturally have ended, rather than staying on `Day` forever) — tick "Keep a manual phase override until cleared by hand" in Configure to disable that and keep an override until you clear it yourself instead |
-
-Entity IDs are forced to match what a Jinja `packages/*.yaml` day-phase setup would typically use (rather than
-the usual integration-prefixed auto-generated ones), so this is meant as a drop-in replacement for one — if
-you're migrating from your own version of that, remove it first or these will get suffixed `_2`.
+Exposes the phase schedule above, plus per-light grouping (reachability, tolerance, manual-override protection,
+two-step transitions) and scene-coverage gap filling, as three plain HA services — `compute_lighting_groups`,
+`compute_curve`, `compute_scene_coverage` — usable from your own automations with no blueprint required. Can
+optionally run the schedule continuously as sensors instead of calling `compute_curve` yourself. Full service
+contracts, YAML examples, and the sensor/entity list: **[docs/HELPERS.md](docs/HELPERS.md)**.
 
 ## The blueprint
 
-Built on the services above, but the two are only loosely coupled — the blueprint just calls
-`compute_lighting_groups` the same way it calls `light.turn_on`, and doesn't otherwise assume anything about how
-that service is implemented.
-
-### Solar-driven brightness & colour temperature
-
-Tracks a target brightness and Kelvin value that changes through the day — full brightness and cool white during
-the day, warming and dimming through the evening, dim and warm at night — following a configurable
-morning/day/evening/night schedule (evening tracks sunset, clamped between an earliest and latest bound). Applied
-roughly once a minute while the room is occupied, so lights drift with the schedule instead of jumping.
-
-The [dashboard curve card](#previewing-the-dashboard-card) also plots today's actual sunrise/sunset (from
-`sun.sun`) against the schedule, so it's easy to see at a glance how far the configured boundaries and earliest/
-latest clamps are actually tracking the sun.
-
-### Motion-driven on/off
-
-Turns a room on when motion starts and off `no_motion_wait` seconds after it stops. A motion/occupancy sensor is
-optional — without one, the blueprint still keeps already-on lights updated with the adaptive curve, it just
-won't turn anything on by itself.
-
-### Manual override detection
-
-A light changed directly — wall switch, app, voice assistant — is left alone rather than being overwritten on
-the next adaptive tick. Detected via `context.user_id`: a real person's action through the UI always carries a
-user id, while automations and a device regaining power after an outage don't. The latter case is not treated as
-an override, so a bulb reconnecting after a power or Zigbee blip is brought back in line automatically rather
-than left stuck at its last known state.
-
-### Scene handoff
-
-An optional template returns the entity_id of a scene to activate instead of the adaptive curve — for example,
-`scene.kitchen_night` when a day-phase sensor reads `Night`. The template is written directly by whoever sets up
-the room, so the mapping is explicit rather than guessed from a naming convention. A scene only qualifies if
-every entity it touches is within the blueprint's own scope (the controlled lights, plus sibling entities on the
-same device, such as a light strip's effect selector); a scene reaching outside that scope, or one that doesn't
-exist (a typo, a renamed scene), is treated the same as the template returning nothing.
-
-### Per-light brightness scaling
-
-An optional template maps `entity_id` to a brightness multiplier:
-
-| Value | Effect |
-|---|---|
-| a number | scales that light's brightness, floored at 1 |
-| `0` | turns the light off during the adaptive step |
-| `null` / `false` | skips the light entirely on power-on (for another automation or a fixed scene to own), but still includes it when the room turns off |
-
-### Additional triggers
-
-Both templates above are re-rendered fresh on every run, regardless of what triggered it — so an entity that
-one of them depends on (a TV, for a brightness multiplier that dims the room while it's on; whatever a scene
-template checks) can be added to Additional Triggers to take effect immediately, rather than waiting for the
-next adaptive tick.
-
-### Two-step transitions
-
-Bulbs that can't transition brightness and colour temperature together (some IKEA TRÅDFRI models) can be tagged
-with a `no_combined_transition` label and are sent as two sequential half-length transitions instead of one.
-Everything else gets a single combined call.
-
-### Reachability and redundancy filtering
-
-Lights reported `unavailable` or `unknown` are skipped. Lights already within tolerance of the target
-brightness/colour-temperature (±2 brightness, ±10K, to absorb rounding differences some bulbs report back) are
-left alone rather than recommanded on every tick.
-
-### Self-healing
-
-On a configurable interval, if the room is unoccupied but a light is still on, the off command is retried. This
-recovers from dropped commands (a missed Zigbee message, for example) without manual intervention.
+A per-room automation built on the services above (loosely coupled — it calls `compute_lighting_groups` the same
+way it calls `light.turn_on`, without assuming anything about how that service is implemented). Brightness and
+colour temperature follow the phase schedule, motion controls on/off, scenes can take over partially or entirely,
+manual changes are respected, and lights that don't reach their target get corrected automatically. Full
+feature-by-feature breakdown and the input reference: **[docs/BLUEPRINT.md](docs/BLUEPRINT.md)**.
 
 ## Repository layout
 
@@ -174,9 +61,9 @@ custom_components/adaptive_lighting_helpers/
     coordinator.py shared schedule computation behind the optional
                    sensors/select below - only set up if the config
                    entry has schedule times configured
-    sensor.py      optional day-phase/curve sensors (see "Optional:
-                   day-phase/curve sensors" above)
-    select.py      optional phase-override select (same section above)
+    sensor.py      optional day-phase/curve sensors (see
+                   docs/HELPERS.md)
+    select.py      optional phase-override select (same doc)
     curve.py       brightness/colour-temperature schedule
     grouping.py    reachability, multiplier bucketing, tolerance checks,
                    manual-override protection, two-step/combined routing
@@ -215,6 +102,10 @@ dashboard/
 
 tests/
     pytest suite for curve.py and grouping.py.
+
+docs/
+    HELPERS.md     full service/sensor reference for the integration
+    BLUEPRINT.md   full feature/input reference for the blueprint
 ```
 
 Triggers, conditions, and target resolution stay in the blueprint; Home Assistant `condition:` blocks can't call
@@ -232,8 +123,8 @@ menu → Custom repositories → this repo's URL, category "Integration"), insta
 new `custom_components` entry needs a restart to be discovered, not just a reload), then add it once via
 Settings → Devices & Services → Add Integration → "Adaptive Lighting Helpers". The setup form is entirely
 optional — leave every field blank to just get the three services above, or fill in the five schedule times for
-the day-phase/curve sensors too (see "Optional: day-phase/curve sensors" above). Editable later from the same
-place (Configure), which re-runs the same form pre-filled with your current values.
+the day-phase/curve sensors too (see [docs/HELPERS.md](docs/HELPERS.md)). Editable later from the same place
+(Configure), which re-runs the same form pre-filled with your current values.
 
 For local testing before it's on HACS at all, `scripts/link_into_ha.sh` copies
 `custom_components/adaptive_lighting_helpers/` directly onto an HA host over SSH — see the script's own header
@@ -251,28 +142,15 @@ Note: if migrating from an older, pre-rewrite version of this blueprint, the inp
 (`scene_sensor`/`scene_name_prefix` → `scene_template`/`extra_triggers`) — every room automation using the old
 inputs will show as misconfigured until updated. Worth doing deliberately, room by room, rather than all at once.
 
+Once imported, add an automation using the "Adaptive Lighting" blueprint per room — see
+[docs/BLUEPRINT.md](docs/BLUEPRINT.md) for the full input reference.
+
 ### The dashboard card
 
 Register `www/adaptive-lighting-curve-card.js` as a Lovelace resource (Settings → Dashboards → Resources → Add
 Resource, URL `/local/adaptive-lighting-curve-card.js`, type JavaScript Module) and add the card config from
 `dashboard/house-settings-card.yaml` to a view. Not currently HACS-distributed either (see CLAUDE.md's "Open
 question" section for the plan to make it a proper HACS frontend plugin).
-
-## Configuration
-
-Add an automation using the "Adaptive Lighting" blueprint per room, and set:
-
-| Input | Required | Description |
-|---|---|---|
-| Light | yes | Entities, a device, or an area to control |
-| Adaptive Lighting Sensor | yes | Sensor providing brightness/colour temperature |
-| Motion Sensor | no | Enables motion-driven on/off |
-| Additional Triggers | no | Entities that trigger immediate re-evaluation (see [Additional triggers](#additional-triggers)) |
-| Scene Template | no | Template returning a scene entity_id to hand the room over to |
-| Brightness Multiplier Template | no | Per-light brightness scaling |
-| Wait time | no | Seconds to keep lights on after motion stops (default 120) |
-| Reconcile Interval | no | Self-healing check interval (default every 5 minutes) |
-| Motion On / Motion Off / Adaptive Transition | no | Transition durations for each trigger type |
 
 ## Previewing the dashboard card
 
