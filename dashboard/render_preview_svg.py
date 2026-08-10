@@ -4,17 +4,21 @@ Renders dashboard/preview_data.json (see generate_preview_data.py) as a
 standalone SVG - a static equivalent of the interactive Lovelace card,
 for embedding in README.md. No browser or Home Assistant needed.
 
-Colour math (Kelvin -> RGB) is Tanner Helland's approximation, the same
-one www/adaptive-lighting-curve-card.js uses - kept in sync by hand
-since it's a display concern, not schedule logic (same reasoning the
-card's own comment gives for not sharing it with curve.py).
+Colour math (Kelvin -> RGB) is curve.kelvin_to_rgb - the same function
+the compute_curve/apply_lighting services and www/adaptive-lighting-
+curve-card.js's kelvinToRgb() all agree with (previously this file kept
+its own hand-maintained third copy of the algorithm; consolidated once
+kelvin_to_rgb became real integration logic, not just a display concern).
 
 Run from the repo root: python3 dashboard/render_preview_svg.py
 """
 
 import json
-import math
+import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "custom_components" / "adaptive_lighting_helpers"))
+from curve import kelvin_to_rgb  # noqa: E402
 
 VB_W = 960
 VB_H = 220
@@ -33,26 +37,6 @@ FOOTNOTE_H = 24
 CARD_PAD = 16
 CARD_W = VB_W + CARD_PAD * 2
 CARD_H = TITLE_H + NOW_LABEL_H + SUN_LABEL_H + VB_H + FOOTNOTE_H + CARD_PAD
-
-
-def clamp(v, lo, hi):
-    return min(max(v, lo), hi)
-
-
-def kelvin_to_rgb(kelvin):
-    temp = kelvin / 100
-    r = 255 if temp <= 66 else clamp(329.698727446 * (temp - 60) ** -0.1332047592, 0, 255)
-    if temp <= 66:
-        g = clamp(99.4708025861 * math.log(temp) - 161.1195681661, 0, 255)
-    else:
-        g = clamp(288.1221695283 * (temp - 60) ** -0.0755148492, 0, 255)
-    if temp >= 66:
-        b = 255
-    elif temp <= 19:
-        b = 0
-    else:
-        b = clamp(138.5177312231 * math.log(temp - 10) - 305.0447927307, 0, 255)
-    return round(r), round(g), round(b)
 
 
 def rgb_to_hex(rgb):

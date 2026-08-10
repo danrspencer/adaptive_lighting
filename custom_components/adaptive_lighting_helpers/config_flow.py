@@ -39,6 +39,16 @@ TIME_FIELDS = {
     # old Jinja system's behaviour. True keeps an override pinned until
     # manually set back to Auto.
     vol.Optional("sticky_phase_override", default=False): selector.BooleanSelector(),
+    # Feeds sensor.adaptive_lighting's rgb_color attribute and
+    # apply_lighting/compute_lighting_groups's RGB path (see
+    # coordinator.py, curve.py's kelvin_for_phase night_floor param).
+    # Left blank, kelvin_for_phase's own 2700 default applies and the
+    # RGB curve is identical to the colour-temperature one. 1000-2700
+    # only - above 2700 doesn't mean anything for this field (2700
+    # already is "no extension").
+    vol.Optional("night_floor_kelvin"): selector.NumberSelector(
+        selector.NumberSelectorConfig(min=1000, max=2700, unit_of_measurement="K", mode=selector.NumberSelectorMode.BOX)
+    ),
 }
 
 

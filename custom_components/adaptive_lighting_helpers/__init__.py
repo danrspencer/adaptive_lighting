@@ -4,13 +4,17 @@ Adaptive Lighting Helpers.
 Standalone Home Assistant services for adaptive-lighting computation:
 brightness/colour-temperature curve math (curve.py), per-light
 grouping - reachability, multiplier bucketing, tolerance checks,
-manual-override protection, two-step transition routing (grouping.py) -
-and scene-coverage gap filling, for "apply a scene, then a default for
-whatever it doesn't cover" (scenes.py). Optionally also sets up
-day-phase/curve sensors (sensor.py) and a phase-override select
-(select.py) as a native replacement for a Jinja packages/*.yaml setup,
-if the config entry has schedule times configured - see
-config_flow.py.
+manual-override protection, two-step transition routing, RGB-vs-colour-
+temp routing (grouping.py) - and scene-coverage gap filling, for "apply
+a scene, then a default for whatever it doesn't cover" (scenes.py).
+`compute_lighting_groups` is a pure planner (returns groups, doesn't
+touch any light); `apply_lighting` wraps the same grouping logic and
+actually dispatches light.turn_on/turn_off, reading its brightness/
+colour target off any sensor entity you point it at - see README's
+"Bring your own sensor" section. Optionally also sets up day-phase/curve
+sensors (sensor.py) and a phase-override select (select.py) as a native
+replacement for a Jinja packages/*.yaml setup, if the config entry has
+schedule times configured - see config_flow.py.
 
 Designed to work with the adaptive_lighting blueprint in this repo,
 but not coupled to it: call any of the services directly from your own
@@ -26,6 +30,7 @@ state/registries and the plain functions those modules expose.
 
 from __future__ import annotations
 
+import asyncio
 import time
 from typing import Any
 
@@ -33,6 +38,7 @@ import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
@@ -40,8 +46,8 @@ from homeassistant.helpers.event import async_track_state_change_event
 
 from .const import DOMAIN, PHASE_OVERRIDE_ENTITY_ID
 from .coordinator import TIME_KEYS, ScheduleCoordinator
-from .curve import brightness_for_phase, kelvin_for_phase, phase_at
-from .grouping import EntityLookup, build_groups
+from .curve import brightness_for_phase, kelvin_for_phase, kelvin_to_rgb, phase_at
+from .grouping import EntityLookup, Group, build_groups
 from .scenes import SceneLookup, compute_scene_coverage
 
 SCHEDULE_PLATFORMS = [Platform.SENSOR, Platform.SELECT]
@@ -60,6 +66,9 @@ COMPUTE_LIGHTING_GROUPS_SCHEMA = vol.Schema(
         vol.Optional("brightness_tolerance", default=2): vol.Coerce(int),
         vol.Optional("color_temp_tolerance", default=10): vol.Coerce(int),
         vol.Optional("two_step_label", default="no_combined_transition"): cv.string,
+        vol.Optional("prefer_rgb_color", default=False): cv.boolean,
+        vol.Optional("rgb_color"): vol.All([vol.Coerce(int)], vol.Length(min=3, max=3)),
+        vol.Optional("rgb_color_tolerance", default=10): vol.Coerce(int),
     }
 )
 
@@ -70,6 +79,7 @@ COMPUTE_CURVE_SCHEMA = vol.Schema(
         vol.Required("evening"): vol.Coerce(float),
         vol.Required("night"): vol.Coerce(float),
         vol.Optional("at"): vol.Coerce(float),
+        vol.Optional("night_floor_kelvin", default=2700): vol.Coerce(int),
     }
 )
 
@@ -78,6 +88,20 @@ COMPUTE_SCENE_COVERAGE_SCHEMA = vol.Schema(
         vol.Optional("scene_entity_id"): cv.entity_id,
         vol.Required("scope_entities"): [cv.entity_id],
         vol.Required("target_entities"): [cv.entity_id],
+    }
+)
+
+APPLY_LIGHTING_SCHEMA = vol.Schema(
+    {
+        vol.Required("entities"): [cv.entity_id],
+        vol.Optional("brightness_multipliers", default=dict): dict,
+        vol.Required("sensor_entity_id"): cv.entity_id,
+        vol.Required("transition"): vol.Coerce(float),
+        vol.Optional("brightness_tolerance", default=2): vol.Coerce(int),
+        vol.Optional("color_temp_tolerance", default=10): vol.Coerce(int),
+        vol.Optional("two_step_label", default="no_combined_transition"): cv.string,
+        vol.Optional("prefer_rgb_color", default=False): cv.boolean,
+        vol.Optional("rgb_color_tolerance", default=10): vol.Coerce(int),
     }
 )
 
@@ -137,13 +161,86 @@ def _build_scene_lookup(hass: HomeAssistant) -> SceneLookup:
     return SceneLookup(exists=exists, covered_entities=covered_entities)
 
 
+def _read_sensor_targets(hass: HomeAssistant, sensor_entity_id: str) -> tuple[int, int, tuple | None]:
+    """Reads brightness/color_temp/rgb_color off sensor_entity_id for
+    apply_lighting - fully generic, works with any entity exposing those
+    attribute names, not hardcoded to this integration's own
+    sensor.adaptive_lighting. See README's "Bring your own sensor"
+    section for the exact contract and a template-sensor example.
+    Defaults (0 brightness, 3000K) match what the blueprint's own
+    sensor_brightness/sensor_color_temp_kelvin variables used before this
+    service existed."""
+    state = hass.states.get(sensor_entity_id)
+    if state is None:
+        raise ServiceValidationError(f"Sensor entity not found: {sensor_entity_id}")
+
+    def _as_int(value, default):
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
+
+    brightness = _as_int(state.attributes.get("brightness"), 0)
+    color_temp_kelvin = _as_int(state.attributes.get("color_temp"), 3000)
+    rgb = state.attributes.get("rgb_color")
+    rgb_color = tuple(rgb) if isinstance(rgb, (list, tuple)) and len(rgb) == 3 else None
+    return brightness, color_temp_kelvin, rgb_color
+
+
+def _groups_response(groups: list[Group]) -> ServiceResponse:
+    return {
+        "groups": [
+            {
+                "multiplier": g.multiplier,
+                "brightness": g.brightness,
+                "needing_off": g.needing_off,
+                "combined": g.combined,
+                "two_step": g.two_step,
+                "combined_rgb": g.combined_rgb,
+                "two_step_rgb": g.two_step_rgb,
+            }
+            for g in groups
+        ]
+    }
+
+
+async def _two_step_turn_on(
+    hass: HomeAssistant,
+    entity_ids: list,
+    brightness: int,
+    half_transition: float,
+    *,
+    color_temp_kelvin: int | None = None,
+    rgb_color: list | None = None,
+) -> None:
+    """Brightness-only call, wait, then brightness + colour - for bulbs
+    that can't transition both together (no_combined_transition label).
+    Works the same for either colour representation; only the second
+    call's colour field differs."""
+    await hass.services.async_call(
+        "light",
+        "turn_on",
+        {"entity_id": entity_ids, "transition": half_transition, "brightness": brightness},
+        blocking=True,
+    )
+    await asyncio.sleep(half_transition)
+    data = {"entity_id": entity_ids, "transition": half_transition, "brightness": brightness}
+    if color_temp_kelvin is not None:
+        data["color_temp_kelvin"] = color_temp_kelvin
+    else:
+        data["rgb_color"] = rgb_color
+    await hass.services.async_call("light", "turn_on", data, blocking=True)
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async def compute_lighting_groups(call: ServiceCall) -> ServiceResponse:
         """adaptive_lighting_helpers.compute_lighting_groups
 
         Returns: {"groups": [{"multiplier", "brightness", "needing_off",
-        "combined", "two_step"}, ...]} - see services.yaml for field docs.
+        "combined", "two_step", "combined_rgb", "two_step_rgb"}, ...]} -
+        see services.yaml for field docs.
         """
+        rgb_color = call.data.get("rgb_color")
         groups = build_groups(
             entities=call.data["entities"],
             brightness_multipliers=call.data["brightness_multipliers"],
@@ -153,25 +250,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             brightness_tolerance=call.data["brightness_tolerance"],
             color_temp_tolerance=call.data["color_temp_tolerance"],
             two_step_label=call.data["two_step_label"],
+            prefer_rgb_color=call.data["prefer_rgb_color"],
+            rgb_color=tuple(rgb_color) if rgb_color else None,
+            rgb_color_tolerance=call.data["rgb_color_tolerance"],
         )
-        return {
-            "groups": [
-                {
-                    "multiplier": g.multiplier,
-                    "brightness": g.brightness,
-                    "needing_off": g.needing_off,
-                    "combined": g.combined,
-                    "two_step": g.two_step,
-                }
-                for g in groups
-            ]
-        }
+        return _groups_response(groups)
 
     async def compute_curve(call: ServiceCall) -> ServiceResponse:
         """adaptive_lighting_helpers.compute_curve
 
-        Returns: {"phase", "brightness", "kelvin"} for the given
-        instant (or now) - see services.yaml for field docs.
+        Returns: {"phase", "brightness", "kelvin", "rgb_color"} for the
+        given instant (or now) - see services.yaml for field docs.
         """
         at = call.data.get("at", time.time())
         morning, day, evening, night = (
@@ -180,12 +269,99 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             call.data["evening"],
             call.data["night"],
         )
+        night_floor_kelvin = call.data["night_floor_kelvin"]
         phase = phase_at(at, morning, day, evening, night)
+        kelvin_rgb = kelvin_for_phase(phase, at, evening, day, night, night_floor=night_floor_kelvin)
         return {
             "phase": phase,
             "brightness": brightness_for_phase(phase, at, night),
             "kelvin": kelvin_for_phase(phase, at, evening, day, night),
+            "rgb_color": list(kelvin_to_rgb(kelvin_rgb)),
         }
+
+    async def apply_lighting(call: ServiceCall) -> ServiceResponse:
+        """adaptive_lighting_helpers.apply_lighting
+
+        Reads brightness/color_temp/rgb_color off sensor_entity_id (any
+        entity with those attributes - see README's "Bring your own
+        sensor") and actually turns entities on/off via
+        light.turn_on/turn_off, handling reachability, tolerance,
+        manual-override protection, two-step transitions, and RGB-vs-
+        colour-temp dispatch internally rather than leaving it to the
+        caller. Returns the same {"groups": [...]} shape as
+        compute_lighting_groups for introspection, but nothing requires
+        capturing it - see services.yaml for field docs.
+        """
+        brightness, color_temp_kelvin, rgb_color = _read_sensor_targets(hass, call.data["sensor_entity_id"])
+        groups = build_groups(
+            entities=call.data["entities"],
+            brightness_multipliers=call.data["brightness_multipliers"],
+            sensor_brightness=brightness,
+            sensor_color_temp_kelvin=color_temp_kelvin,
+            lookup=_build_lookup(hass),
+            brightness_tolerance=call.data["brightness_tolerance"],
+            color_temp_tolerance=call.data["color_temp_tolerance"],
+            two_step_label=call.data["two_step_label"],
+            prefer_rgb_color=call.data["prefer_rgb_color"],
+            rgb_color=rgb_color,
+            rgb_color_tolerance=call.data["rgb_color_tolerance"],
+        )
+
+        transition = call.data["transition"]
+        half_transition = round(transition / 2, 1)
+        rgb_color_list = list(rgb_color) if rgb_color is not None else None
+
+        tasks = []
+        for g in groups:
+            if g.needing_off:
+                tasks.append(
+                    hass.services.async_call(
+                        "light", "turn_off", {"entity_id": g.needing_off, "transition": transition}, blocking=True
+                    )
+                )
+            if g.combined:
+                tasks.append(
+                    hass.services.async_call(
+                        "light",
+                        "turn_on",
+                        {
+                            "entity_id": g.combined,
+                            "transition": transition,
+                            "brightness": g.brightness,
+                            "color_temp_kelvin": color_temp_kelvin,
+                        },
+                        blocking=True,
+                    )
+                )
+            if g.combined_rgb:
+                tasks.append(
+                    hass.services.async_call(
+                        "light",
+                        "turn_on",
+                        {
+                            "entity_id": g.combined_rgb,
+                            "transition": transition,
+                            "brightness": g.brightness,
+                            "rgb_color": rgb_color_list,
+                        },
+                        blocking=True,
+                    )
+                )
+            if g.two_step:
+                tasks.append(
+                    _two_step_turn_on(
+                        hass, g.two_step, g.brightness, half_transition, color_temp_kelvin=color_temp_kelvin
+                    )
+                )
+            if g.two_step_rgb:
+                tasks.append(
+                    _two_step_turn_on(hass, g.two_step_rgb, g.brightness, half_transition, rgb_color=rgb_color_list)
+                )
+
+        if tasks:
+            await asyncio.gather(*tasks)
+
+        return _groups_response(groups)
 
     async def compute_scene_coverage_service(call: ServiceCall) -> ServiceResponse:
         """adaptive_lighting_helpers.compute_scene_coverage
@@ -227,6 +403,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         schema=COMPUTE_SCENE_COVERAGE_SCHEMA,
         supports_response=SupportsResponse.ONLY,
     )
+    hass.services.async_register(
+        DOMAIN,
+        "apply_lighting",
+        apply_lighting,
+        schema=APPLY_LIGHTING_SCHEMA,
+        supports_response=SupportsResponse.OPTIONAL,
+    )
 
     if _has_schedule_config(entry):
         coordinator = ScheduleCoordinator(hass, entry)
@@ -257,6 +440,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.services.async_remove(DOMAIN, "compute_lighting_groups")
     hass.services.async_remove(DOMAIN, "compute_curve")
     hass.services.async_remove(DOMAIN, "compute_scene_coverage")
+    hass.services.async_remove(DOMAIN, "apply_lighting")
 
     if _has_schedule_config(entry):
         unloaded = await hass.config_entries.async_unload_platforms(entry, SCHEDULE_PLATFORMS)

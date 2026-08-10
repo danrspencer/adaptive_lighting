@@ -77,15 +77,157 @@ compute_lighting_groups:
       default: no_combined_transition
       selector:
         text:
+    prefer_rgb_color:
+      name: Prefer RGB colour
+      description: >-
+        When true (and rgb_color is given), entities whose
+        supported_color_modes indicates RGB support are returned
+        separately (as "combined_rgb"/"two_step_rgb") targeting rgb_color
+        instead of "combined"/"two_step" targeting
+        sensor_color_temp_kelvin. Entities without RGB support are
+        unaffected either way. Off by default - behaviour is identical to
+        before this field existed.
+      default: false
+      selector:
+        boolean:
+    rgb_color:
+      name: Target RGB colour
+      description: >-
+        The RGB colour to use for RGB-capable entities when
+        prefer_rgb_color is true. Typically the Kelvin -> RGB conversion
+        of the same target colour temperature (see compute_curve's own
+        rgb_color output), optionally computed with a lower
+        night_floor_kelvin than sensor_color_temp_kelvin's native range
+        allows.
+      selector:
+        color_rgb:
+    rgb_color_tolerance:
+      name: RGB colour tolerance
+      description: >-
+        A light already within this many points (0-255 scale, per
+        channel) of the target rgb_color is left alone instead of being
+        recommanded.
+      default: 10
+      selector:
+        number:
+          min: 0
+          max: 100
+
+apply_lighting:
+  name: Apply adaptive lighting
+  description: >-
+    Reads brightness/colour temperature (and optionally RGB colour) off
+    sensor_entity_id and actually turns entities on/off via
+    light.turn_on/light.turn_off - the same reachability/tolerance/
+    manual-override/two-step/RGB-vs-colour-temp logic
+    compute_lighting_groups exposes as data, but dispatched for you.
+    sensor_entity_id can be any sensor with brightness/color_temp
+    attributes (optionally rgb_color too) - this integration's own
+    sensor.adaptive_lighting works, but so does a hand-written template
+    sensor (see README's "Bring your own sensor" section). Standalone -
+    call this from your own automation, it doesn't require the
+    adaptive_lighting blueprint in this repo.
+  fields:
+    entities:
+      name: Entities
+      description: Light entities to consider.
+      required: true
+      selector:
+        entity:
+          multiple: true
+          domain: light
+    brightness_multipliers:
+      name: Brightness multipliers
+      description: >-
+        Map of entity_id to multiplier. 0 turns that light off; other
+        numbers scale brightness (floored at 1); null/false skips the
+        light entirely (excluded from every group). Entities not listed
+        default to a multiplier of 1.
+      example: '{"light.lamp": 0.5, "light.strip": 0}'
+      selector:
+        object:
+    sensor_entity_id:
+      name: Sensor
+      description: >-
+        The sensor to read brightness/color_temp/rgb_color attributes
+        from - see README's "Bring your own sensor" section for the
+        exact contract.
+      required: true
+      selector:
+        entity:
+          domain: sensor
+    transition:
+      name: Transition
+      description: >-
+        Transition duration in seconds. Two-step entities get this
+        halved, applied twice (brightness, then colour).
+      required: true
+      selector:
+        number:
+          min: 0
+          max: 300
+          unit_of_measurement: s
+    brightness_tolerance:
+      name: Brightness tolerance
+      description: >-
+        A light already within this many brightness points of the target
+        is left alone instead of being recommanded.
+      default: 2
+      selector:
+        number:
+          min: 0
+          max: 50
+    color_temp_tolerance:
+      name: Colour temperature tolerance
+      description: >-
+        A light already within this many Kelvin of the target is left
+        alone instead of being recommanded.
+      default: 10
+      selector:
+        number:
+          min: 0
+          max: 500
+          unit_of_measurement: K
+    two_step_label:
+      name: Two-step label
+      description: >-
+        Entities or devices carrying this label get brightness and
+        colour temperature sent as two sequential calls instead of one
+        combined call - for bulbs that can't transition both together.
+      default: no_combined_transition
+      selector:
+        text:
+    prefer_rgb_color:
+      name: Prefer RGB colour
+      description: >-
+        When true, entities whose supported_color_modes indicates RGB
+        support get the sensor's rgb_color attribute instead of
+        color_temp_kelvin. Entities without RGB support, or used when the
+        sensor has no rgb_color attribute, are unaffected. Off by
+        default.
+      default: false
+      selector:
+        boolean:
+    rgb_color_tolerance:
+      name: RGB colour tolerance
+      description: >-
+        A light already within this many points (0-255 scale, per
+        channel) of the target rgb_color is left alone instead of being
+        recommanded.
+      default: 10
+      selector:
+        number:
+          min: 0
+          max: 100
 
 compute_curve:
   name: Compute adaptive curve point
   description: >-
     Given today's morning/day/evening/night phase-boundary timestamps,
-    returns the target brightness, colour temperature, and phase name for
-    a given instant (or now, if not specified). Standalone - useful for
-    building your own day-phase sensor or automation without the
-    adaptive_lighting blueprint.
+    returns the target brightness, colour temperature, RGB colour, and
+    phase name for a given instant (or now, if not specified). Standalone
+    - useful for building your own day-phase sensor or automation without
+    the adaptive_lighting blueprint.
   fields:
     morning:
       name: Morning boundary
@@ -116,6 +258,22 @@ compute_curve:
       description: Instant to evaluate, as a unix timestamp. Defaults to now.
       selector:
         number:
+    night_floor_kelvin:
+      name: Night floor (Kelvin)
+      description: >-
+        The Kelvin value used to compute the response's rgb_color for
+        Night and Evening's final hour (default 2700, matching every
+        bulb's native colour-temperature range - the response's kelvin
+        field always uses this default regardless). Set lower (e.g.
+        2000) to make rgb_color deeper amber than color_temp_kelvin could
+        ever represent on most bulbs. Morning/Day and Evening's earlier
+        ramp are unaffected either way.
+      default: 2700
+      selector:
+        number:
+          min: 1000
+          max: 2700
+          unit_of_measurement: K
 
 compute_scene_coverage:
   name: Compute scene coverage

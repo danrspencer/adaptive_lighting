@@ -16,7 +16,8 @@ blueprint:
     elsewhere) always turns lights on correctly. Lights labelled
     `no_combined_transition` get brightness and colour temperature sent
     as two sequential calls instead of one, for bulbs that can't do both
-    together.
+    together. Prefer RGB Color (if enabled) sends RGB colour instead of
+    colour temperature to lights that support it.
   domain: automation
   source_url: https://github.com/danspencer
   author: Dan Spencer
@@ -89,6 +90,18 @@ blueprint:
       default: "{{ {} }}"
       selector:
         template: {}
+    prefer_rgb_color:
+      name: Prefer RGB Color (Optional)
+      description: >
+        For lights that support it (auto-detected), send the Adaptive
+        Lighting Sensor's rgb_color attribute instead of colour
+        temperature - lets a light go warmer at night than its native
+        colour-temperature range allows, and can render more accurately
+        on some RGB bulbs. Lights without RGB support, or if the sensor
+        has no rgb_color attribute, are unaffected either way.
+      default: false
+      selector:
+        boolean: {}
     no_motion_wait:
       name: Wait time
       description: Time to keep the light on after motion stops.
@@ -276,6 +289,7 @@ variables:
   scene_template: !input scene_template
   adaptive_transition: !input adaptive_transition
   motion_on_transition: !input motion_on_transition
+  prefer_rgb_color: !input prefer_rgb_color
   script_transition: >
     {# Slow transition for adaptive/scene/extra-trigger updates; snappier for motion or a manual run #}
     {% if trigger is defined and trigger.id is defined and trigger.id in ['adaptive', 'extra'] %}
@@ -283,10 +297,11 @@ variables:
     {% else %}
       {{ motion_on_transition }}
     {% endif %}
-  half_transition: "{{ (script_transition / 2) | round(1) }}"
-  sensor_brightness: "{{ state_attr(adaptive_sensor, 'brightness') | int(0) }}"
-  # Already in Kelvin (not mireds) - passed straight into color_temp_kelvin everywhere below
-  sensor_color_temp_kelvin: "{{ state_attr(adaptive_sensor, 'color_temp') | int(3000) }}"
+  # Brightness/colour temperature themselves are no longer extracted
+  # here - adaptive_lighting_helpers.apply_lighting reads them straight
+  # off adaptive_sensor (and applies rgb_color, tolerance-checking,
+  # two-step transitions, etc.) rather than this blueprint pre-computing
+  # sensor_brightness/sensor_color_temp_kelvin and dispatching itself.
   sensor_service: "{{ state_attr(adaptive_sensor, 'service') | default('light.turn_on', true) }}"
   sensor_scene_id: "{{ state_attr(adaptive_sensor, 'scene_id') | default('', true) }}"
   # Every light this automation is allowed to touch, resolved from light_target
@@ -436,66 +451,20 @@ action:
                   activated_transition: "{{ script_transition }}"
         default:
           # Reachability, multiplier bucketing, tolerance-based
-          # "already correct" checks, manual-override protection, and
-          # two-step/combined routing are all computed by the
-          # Adaptive Lighting Helpers integration (a standalone HACS
-          # add-on, not specific to this blueprint - see its README)
-          # - this used to be ~90 lines of namespace-loop Jinja here.
-          # What's left is just turning each returned group into the
-          # actual light.turn_on/turn_off calls.
-          - alias: "Compute lighting groups (Adaptive Lighting Helpers)"
-            action: adaptive_lighting_helpers.compute_lighting_groups
+          # "already correct" checks, manual-override protection,
+          # two-step/combined routing, and RGB-vs-colour-temp dispatch
+          # are all handled by the Adaptive Lighting Helpers integration
+          # (a standalone HACS add-on, not specific to this blueprint -
+          # see its README) - this used to be ~90 lines of namespace-loop
+          # Jinja, then a repeat/parallel dispatch block, here.
+          # apply_lighting reads brightness/colour straight off
+          # adaptive_sensor itself and issues the light.turn_on/turn_off
+          # calls directly.
+          - alias: "Apply adaptive lighting (Adaptive Lighting Helpers)"
+            action: adaptive_lighting_helpers.apply_lighting
             data:
               entities: "{{ adaptive_target_entities }}"
               brightness_multipliers: "{{ brightness_multipliers }}"
-              sensor_brightness: "{{ sensor_brightness }}"
-              sensor_color_temp_kelvin: "{{ sensor_color_temp_kelvin }}"
-            response_variable: lighting_plan
-          - repeat:
-              for_each: "{{ lighting_plan.groups }}"
-              sequence:
-                - choose:
-                    - conditions:
-                        - condition: template
-                          value_template: "{{ repeat.item.brightness <= 0 }}"
-                      sequence:
-                        - alias: "Multiplier 0 - turn this group off"
-                          action: light.turn_off
-                          target:
-                            entity_id: "{{ repeat.item.needing_off }}"
-                          data:
-                            transition: "{{ script_transition }}"
-                  default:
-                    - parallel:
-                        - if:
-                            - condition: template
-                              value_template: "{{ repeat.item.combined | length > 0 }}"
-                          then:
-                            - alias: "Combined group: single call"
-                              action: light.turn_on
-                              target:
-                                entity_id: "{{ repeat.item.combined }}"
-                              data:
-                                transition: "{{ script_transition }}"
-                                brightness: "{{ repeat.item.brightness }}"
-                                color_temp_kelvin: "{{ sensor_color_temp_kelvin }}"
-                        - if:
-                            - condition: template
-                              value_template: "{{ repeat.item.two_step | length > 0 }}"
-                          then:
-                            - alias: "Two-step group, step 1: brightness only"
-                              action: light.turn_on
-                              target:
-                                entity_id: "{{ repeat.item.two_step }}"
-                              data:
-                                transition: "{{ half_transition }}"
-                                brightness: "{{ repeat.item.brightness }}"
-                            - delay: "{{ half_transition }}"
-                            - alias: "Two-step group, step 2: colour temp (brightness re-specified)"
-                              action: light.turn_on
-                              target:
-                                entity_id: "{{ repeat.item.two_step }}"
-                              data:
-                                transition: "{{ half_transition }}"
-                                brightness: "{{ repeat.item.brightness }}"
-                                color_temp_kelvin: "{{ sensor_color_temp_kelvin }}"
+              sensor_entity_id: "{{ adaptive_sensor }}"
+              transition: "{{ script_transition }}"
+              prefer_rgb_color: "{{ prefer_rgb_color }}"

@@ -89,12 +89,16 @@
           next_setting: new Date(data.sun.sunset * 1000).toISOString(),
         }),
         'sensor.adaptive_lighting_curve': state(new Date().toISOString(), { points: data.points }),
-        // Combined entity: state = phase, attributes = brightness/color_temp
-        // - matches sensor.py's _AdaptiveLightingSensor shape.
+        // Combined entity: state = phase, attributes = brightness/color_temp/
+        // rgb_color - matches sensor.py's _AdaptiveLightingSensor shape.
+        // now_rgb_color is generated with NIGHT_FLOOR_KELVIN below 2700
+        // (see generate_preview_data.py) specifically so this preview
+        // demonstrates the card's RGB overlay, not just its absence.
         'sensor.adaptive_lighting': state(data.now_phase, {
           phase: data.now_phase,
           brightness: data.now_brightness,
           color_temp: data.now_kelvin,
+          rgb_color: data.now_rgb_color,
         }),
       };
 

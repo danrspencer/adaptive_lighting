@@ -619,6 +619,61 @@ scene-coverage gap filling.
   imports `../www/adaptive-lighting-curve-card.js`) and open
   `dashboard/preview.html`.
 
+**RGB colour support added (`prefer_rgb_color`, design-only - not yet
+live-tested).** Prompted by the user recalling that `basnijholt/
+adaptive-lighting` (the most popular HA adaptive-lighting integration)
+has a `prefer_rgb_color` option people like. Two real decisions came out
+of planning this, both worth remembering if it's revisited:
+
+- **A new service, `apply_lighting`, that actually calls
+  `light.turn_on`/`light.turn_off` itself** - the first service in this
+  integration with side effects; `compute_lighting_groups` and
+  `compute_curve` are still pure planners. This was a mid-plan course
+  correction: the first draft kept the blueprint dispatching
+  `light.turn_on` itself (extending its existing `repeat:`/`parallel:`
+  block with more branches for RGB), matching how `compute_lighting_groups`
+  already worked. The user pushed back - a service that just does the
+  work, hiding `light.turn_on`/two-step/RGB-vs-colour-temp dispatch
+  entirely, is a better fit for why this repo exists at all (move logic
+  out of blueprint Jinja into tested Python) - so the blueprint's entire
+  dispatch block collapsed to one `apply_lighting` call instead of
+  growing. `compute_lighting_groups` was kept alongside it, unchanged in
+  spirit, for anyone who wants the plan without the side effect.
+- **`apply_lighting` takes `sensor_entity_id`, not raw brightness/
+  colour-temp values** - reads `brightness`/`color_temp`/`rgb_color`
+  attributes directly off whatever entity you point it at, generically
+  (see README's "Bring your own sensor" section, and
+  `_read_sensor_targets` in `__init__.py`). Clarified with the user
+  during planning: this is not about one call supporting multiple
+  sensors - a call is always one sensor - it's that the reading logic
+  must never assume it's reading *this integration's own*
+  `sensor.adaptive_lighting`, because a future direction (not started)
+  is letting the integration run multiple independent config-entry
+  instances, each with its own schedule and its own sensor entity.
+  Nothing about multi-instance config entries exists yet; the only
+  thing this constrains is that `sensor_entity_id`'s handling stays
+  generic.
+- The RGB target itself is always *derived from the existing Kelvin
+  curve* (`curve.kelvin_to_rgb`, a Python port of the dashboard card's
+  `kelvinToRgb()` - same rounding behaviour, `math.floor(x+0.5)` not
+  Python's banker's-rounding `round()`, verified to actually match by
+  hand-computing two reference points before trusting it). No separate
+  "RGB curve" - `kelvin_for_phase` gained one keyword-only parameter,
+  `night_floor` (default 2700, preserving today's output exactly), so
+  Evening's final hour and Night can optionally target something warmer
+  than a bulb's native `color_temp` range would allow. Left at the
+  default, RGB mode is purely a wire-format change with an identical
+  visual result; only actually diverges once `night_floor_kelvin` (the
+  integration's config field for this) is lowered.
+- Dashboard card gained a thin coloured overlay ("cap") above the bars
+  wherever `kelvin_rgb` diverges from `kelvin`, plus a matching ring on
+  the "now" dot and a tooltip addition - verified visually via
+  `dashboard/preview.html` and a browser screenshot before considering
+  it done, same as the earlier clamp-band feature this session.
+  `dashboard/render_preview_svg.py` had its own third hand-maintained
+  copy of the Kelvin→RGB algorithm; consolidated onto `curve.kelvin_to_rgb`
+  while in there rather than adding a fourth copy.
+
 ## Open question: dashboard card as a HACS plugin?
 
 The integration half of this used to be an open question - now

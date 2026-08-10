@@ -248,3 +248,192 @@ def test_turning_the_light_off_ends_the_protection():
         lookup=lookup,
     )
     assert groups[0].combined == ["light.a"]
+
+
+# RGB colour mode: prefer_rgb_color + rgb_color route RGB-capable
+# entities into combined_rgb/two_step_rgb instead of combined/two_step,
+# targeting rgb_color instead of sensor_color_temp_kelvin. Entities
+# without RGB support are unaffected either way.
+
+
+def test_supports_rgb_checks_supported_color_modes():
+    lookup = make_lookup(
+        states={
+            "light.rgb": {"state": "on", "attributes": {"supported_color_modes": ["rgb", "color_temp"]}},
+            "light.xy": {"state": "on", "attributes": {"supported_color_modes": ["xy"]}},
+            "light.temp_only": {"state": "on", "attributes": {"supported_color_modes": ["color_temp"]}},
+            "light.brightness_only": {"state": "on", "attributes": {"supported_color_modes": ["brightness"]}},
+            "light.no_attr": {"state": "on", "attributes": {}},
+        }
+    )
+    assert lookup.supports_rgb("light.rgb") is True
+    assert lookup.supports_rgb("light.xy") is True
+    assert lookup.supports_rgb("light.temp_only") is False
+    assert lookup.supports_rgb("light.brightness_only") is False
+    assert lookup.supports_rgb("light.no_attr") is False
+
+
+def test_prefer_rgb_color_routes_rgb_capable_entities_only():
+    lookup = make_lookup(
+        states={
+            "light.rgb_bulb": {"state": "off", "attributes": {"supported_color_modes": ["rgb"]}},
+            "light.temp_bulb": {"state": "off", "attributes": {"supported_color_modes": ["color_temp"]}},
+        }
+    )
+    groups = build_groups(
+        entities=["light.rgb_bulb", "light.temp_bulb"],
+        brightness_multipliers={},
+        sensor_brightness=200,
+        sensor_color_temp_kelvin=3000,
+        lookup=lookup,
+        prefer_rgb_color=True,
+        rgb_color=(255, 180, 107),
+    )
+    assert len(groups) == 1
+    group = groups[0]
+    assert group.combined_rgb == ["light.rgb_bulb"]
+    assert group.combined == ["light.temp_bulb"]
+
+
+def test_prefer_rgb_color_off_behaves_identically_to_before_the_feature():
+    # Same entities/state as the routing test above, but the toggle is
+    # off - both lights (RGB-capable or not) must land in the plain
+    # combined bucket, exactly as if prefer_rgb_color/rgb_color didn't
+    # exist as parameters at all.
+    lookup = make_lookup(
+        states={
+            "light.rgb_bulb": {"state": "off", "attributes": {"supported_color_modes": ["rgb"]}},
+            "light.temp_bulb": {"state": "off", "attributes": {"supported_color_modes": ["color_temp"]}},
+        }
+    )
+    groups = build_groups(
+        entities=["light.rgb_bulb", "light.temp_bulb"],
+        brightness_multipliers={},
+        sensor_brightness=200,
+        sensor_color_temp_kelvin=3000,
+        lookup=lookup,
+        prefer_rgb_color=False,
+        rgb_color=(255, 180, 107),
+    )
+    assert len(groups) == 1
+    group = groups[0]
+    assert sorted(group.combined) == ["light.rgb_bulb", "light.temp_bulb"]
+    assert group.combined_rgb == []
+    assert group.two_step_rgb == []
+
+
+def test_prefer_rgb_color_on_with_no_rgb_color_behaves_like_off():
+    # Toggle on, but nothing to target (e.g. the sensor has no rgb_color
+    # attribute) - same fallback as the toggle being off.
+    lookup = make_lookup(
+        states={"light.rgb_bulb": {"state": "off", "attributes": {"supported_color_modes": ["rgb"]}}}
+    )
+    groups = build_groups(
+        entities=["light.rgb_bulb"],
+        brightness_multipliers={},
+        sensor_brightness=200,
+        sensor_color_temp_kelvin=3000,
+        lookup=lookup,
+        prefer_rgb_color=True,
+        rgb_color=None,
+    )
+    assert groups[0].combined == ["light.rgb_bulb"]
+    assert groups[0].combined_rgb == []
+
+
+def test_rgb_two_step_label_splits_within_the_rgb_bucket():
+    lookup = make_lookup(
+        states={
+            "light.rgb_two_step": {"state": "off", "attributes": {"supported_color_modes": ["rgb"]}},
+            "light.rgb_combined": {"state": "off", "attributes": {"supported_color_modes": ["rgb"]}},
+        },
+        device_of={"light.rgb_two_step": "dev1"},
+        labels_of={"dev1": ["no_combined_transition"]},
+    )
+    groups = build_groups(
+        entities=["light.rgb_two_step", "light.rgb_combined"],
+        brightness_multipliers={},
+        sensor_brightness=200,
+        sensor_color_temp_kelvin=3000,
+        lookup=lookup,
+        prefer_rgb_color=True,
+        rgb_color=(255, 180, 107),
+    )
+    assert groups[0].two_step_rgb == ["light.rgb_two_step"]
+    assert groups[0].combined_rgb == ["light.rgb_combined"]
+
+
+def test_rgb_tolerance_skips_already_close_lights():
+    lookup = make_lookup(
+        states={
+            "light.rgb_bulb": {
+                "state": "on",
+                "attributes": {
+                    "brightness": 200,
+                    "supported_color_modes": ["rgb"],
+                    "rgb_color": [253, 181, 108],  # within default tolerance (10) of the target below
+                },
+            }
+        }
+    )
+    groups = build_groups(
+        entities=["light.rgb_bulb"],
+        brightness_multipliers={},
+        sensor_brightness=200,
+        sensor_color_temp_kelvin=3000,
+        lookup=lookup,
+        prefer_rgb_color=True,
+        rgb_color=(255, 180, 107),
+    )
+    assert groups[0].combined_rgb == []
+
+    # Just outside tolerance on one channel
+    lookup2 = make_lookup(
+        states={
+            "light.rgb_bulb": {
+                "state": "on",
+                "attributes": {
+                    "brightness": 200,
+                    "supported_color_modes": ["rgb"],
+                    "rgb_color": [255, 180, 90],  # 17 off target's blue channel
+                },
+            }
+        }
+    )
+    groups2 = build_groups(
+        entities=["light.rgb_bulb"],
+        brightness_multipliers={},
+        sensor_brightness=200,
+        sensor_color_temp_kelvin=3000,
+        lookup=lookup2,
+        prefer_rgb_color=True,
+        rgb_color=(255, 180, 107),
+    )
+    assert groups2[0].combined_rgb == ["light.rgb_bulb"]
+
+
+def test_rgb_manual_override_and_reachability_still_apply():
+    # supports_rgb doesn't bypass the existing manual-override/reachability
+    # checks - they're evaluated the same way regardless of which bucket
+    # an entity ends up in.
+    lookup = make_lookup(
+        states={
+            "light.overridden": {
+                "state": "on",
+                "attributes": {"brightness": 10, "supported_color_modes": ["rgb"]},
+                "user_id": "person-1",
+            },
+            "light.unreachable": {"state": "unavailable", "attributes": {"supported_color_modes": ["rgb"]}},
+        }
+    )
+    groups = build_groups(
+        entities=["light.overridden", "light.unreachable"],
+        brightness_multipliers={},
+        sensor_brightness=200,
+        sensor_color_temp_kelvin=3000,
+        lookup=lookup,
+        prefer_rgb_color=True,
+        rgb_color=(255, 180, 107),
+    )
+    assert groups[0].combined_rgb == []
+    assert groups[0].two_step_rgb == []

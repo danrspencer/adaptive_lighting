@@ -5,8 +5,8 @@
 > rather than a single continuous curve) and how to install it.
 
 Built on the [Adaptive Lighting Helpers](HELPERS.md) services, but the two are only loosely coupled — the
-blueprint just calls `compute_lighting_groups` the same way it calls `light.turn_on`, and doesn't otherwise
-assume anything about how that service is implemented.
+blueprint just calls `apply_lighting` the same way it calls `light.turn_on`, and doesn't otherwise assume
+anything about how that service is implemented.
 
 ## Brightness & colour temperature schedule
 
@@ -61,7 +61,19 @@ next adaptive tick.
 
 Bulbs that can't transition brightness and colour temperature together (some IKEA TRÅDFRI models) can be tagged
 with a `no_combined_transition` label and are sent as two sequential half-length transitions instead of one.
-Everything else gets a single combined call.
+Everything else gets a single combined call. Entirely handled inside `apply_lighting` (see
+[docs/HELPERS.md](HELPERS.md)) — the blueprint itself has no branching for this, it's just a label you add to a
+light or device.
+
+## RGB colour
+
+Prefer RGB Color (off by default) sends RGB colour instead of colour temperature to lights that support it -
+auto-detected per light, nothing to configure per bulb. Two reasons to turn it on: some bulbs render colour more
+accurately in RGB mode than colour-temperature mode, and RGB can represent Evening/Night colours warmer than a
+bulb's native colour-temperature range allows if `night_floor_kelvin` is configured on the Adaptive Lighting
+Helpers integration (see [docs/HELPERS.md](HELPERS.md)) - see [README's "Why four
+phases"](../README.md#why-four-phases-not-a-continuous-curve) for why only Evening/Night are eligible. Lights
+without RGB support are unaffected either way.
 
 ## Reachability and redundancy filtering
 
@@ -86,6 +98,7 @@ Add an automation using the "Adaptive Lighting" blueprint per room, and set:
 | Additional Triggers | no | Entities that trigger immediate re-evaluation (see [Additional triggers](#additional-triggers)) |
 | Scene Template | no | Template returning a scene entity_id to hand the room over to |
 | Brightness Multiplier Template | no | Per-light brightness scaling |
+| Prefer RGB Color | no | Send RGB colour instead of colour temperature to lights that support it (see [RGB colour](#rgb-colour)) |
 | Wait time | no | Seconds to keep lights on after motion stops (default 120) |
 | Reconcile Interval | no | Self-healing check interval (default every 5 minutes) |
 | Motion On / Motion Off / Adaptive Transition | no | Transition durations for each trigger type |
