@@ -47,6 +47,24 @@ blueprints to the same filename is exactly what caused the incident
 below (see "A same-named blueprint can take out every room at once") -
 don't reintroduce that collision.
 
+**Documentation layout, split for the same reason as the code:**
+README.md is the pitch - why this project exists, why the day is
+divided into four named phases (Morning/Day/Evening/Night) rather than
+a single continuous sun-elevation curve the way most adaptive-lighting
+tools work, and how to install it. The mechanical reference detail -
+full service contracts and YAML examples for the integration, the full
+per-feature/input breakdown for the blueprint - moved out to
+`docs/HELPERS.md` and `docs/BLUEPRINT.md` respectively, so someone
+deciding whether to use this doesn't have to wade through both to find
+the "why." The Morning-phase research citation
+([Xiao et al., 2022](https://pubmed.ncbi.nlm.nih.gov/36058557/) - 1.5h
+of bright morning light for a week improved office workers' sleep
+efficiency and reduced morning sleepiness vs regular office lighting)
+was verified via a live web search before being added, not recalled
+from memory - worth re-verifying rather than trusting as-is if it's
+ever revised, same standard any factual claim in these docs should
+meet.
+
 ## The architectural split (deliberate, not arbitrary)
 
 **Stays in the blueprint (Jinja/YAML):**
