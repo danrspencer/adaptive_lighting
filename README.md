@@ -72,22 +72,24 @@ response_variable: coverage
 ### Optional: day-phase/curve sensors
 
 If you'd rather have this running continuously as sensors than call `compute_curve` yourself, fill in the five
-`input_datetime` fields when setting up the integration (Settings → Devices & Services → Adaptive Lighting
-Helpers → Configure) — morning/day/night start times, and evening's earliest/latest bound (evening itself tracks
-sunset, clamped between those two). Leave them blank and you just get the three services above with nothing else.
+schedule times when setting up the integration (Settings → Devices & Services → Adaptive Lighting Helpers →
+Configure) — morning/day/night start times, and evening's earliest/latest bound (evening itself tracks sunset,
+clamped between those two). No separate helper entities to create first — these are plain times stored directly
+on the integration's own config entry, editable later from the same Configure screen. Leave them blank and you
+just get the three services above with nothing else.
 
 Filling them in adds, computed the same way `compute_curve` computes them, refreshed every 60 seconds:
 
 | Entity | What it is |
 |---|---|
-| `sensor.morning_start` / `day_start` / `evening_start` / `night_start` | Today's boundary, state + `attributes.timestamp` |
-| `sensor.day_phase` | Morning / Day / Evening / Night |
-| `sensor.solar_adaptive_lighting_brightness` | Target brightness right now (0-255) |
-| `sensor.solar_adaptive_lighting_color_temperature` | Target colour temperature right now (Kelvin) |
-| `sensor.adaptive_lighting_curve` | `attributes.points`: the full day as 289 `{t, brightness, kelvin}` samples — what the [dashboard card](#previewing-the-dashboard-card) reads |
+| `sensor.morning_start` / `day_start` / `night_start` | Today's boundary, `attributes.timestamp` |
+| `sensor.evening_start` | Today's evening boundary, `attributes.timestamp`, plus `attributes.earliest`/`latest` (the two configured bounds, for reference) |
+| `sensor.adaptive_lighting` | Combined "right now" reading — state is the phase (Morning/Day/Evening/Night), `attributes.brightness` (0-255) and `attributes.color_temp` (Kelvin) are exactly the attribute names the blueprint's `adaptive_sensor` input already reads, so this can be pointed at directly |
+| `sensor.adaptive_lighting_curve` | `attributes.points`: the full day as 289 `{t, brightness, kelvin}` samples — what the [dashboard card](#previewing-the-dashboard-card) reads. Deliberately does **not** follow a manual phase override (see below) — it's a full-day schedule, not a "right now" value |
+| `select.adaptive_lighting_phase` | Manual override — `Auto` (default) or a specific phase. Pinning a phase holds it until the *schedule itself* next moves on (e.g. override to `Day` during `Evening` and it still becomes `Night` once Evening would naturally have ended, rather than staying on `Day` forever) — tick "Keep a manual phase override until cleared by hand" in Configure to disable that and keep an override until you clear it yourself instead |
 
-These entity IDs are forced to match what a Jinja `packages/*.yaml` day-phase setup would typically use (rather
-than the usual integration-prefixed auto-generated ones), so this is meant as a drop-in replacement for one — if
+Entity IDs are forced to match what a Jinja `packages/*.yaml` day-phase setup would typically use (rather than
+the usual integration-prefixed auto-generated ones), so this is meant as a drop-in replacement for one — if
 you're migrating from your own version of that, remove it first or these will get suffixed `_2`.
 
 ## The blueprint
@@ -169,9 +171,12 @@ recovers from dropped commands (a missed Zigbee message, for example) without ma
 ```
 custom_components/adaptive_lighting_helpers/
     __init__.py    registers the three services against real HA state
+    coordinator.py shared schedule computation behind the optional
+                   sensors/select below - only set up if the config
+                   entry has schedule times configured
     sensor.py      optional day-phase/curve sensors (see "Optional:
-                   day-phase/curve sensors" above) - only set up if the
-                   config entry has schedule entities configured
+                   day-phase/curve sensors" above)
+    select.py      optional phase-override select (same section above)
     curve.py       brightness/colour-temperature schedule
     grouping.py    reachability, multiplier bucketing, tolerance checks,
                    manual-override protection, two-step/combined routing
@@ -182,7 +187,8 @@ custom_components/adaptive_lighting_helpers/
     curve.py, grouping.py, and scenes.py are pure Python, no Home
     Assistant dependency - testable directly, and usable from anywhere
     that wants the math without the HA service/sensor wrapper around
-    it. __init__.py and sensor.py are the only files that touch `hass`.
+    it. __init__.py, coordinator.py, sensor.py, and select.py are the
+    only files that touch `hass`.
 
 hacs.json
     HACS repository metadata for the integration.
@@ -225,8 +231,9 @@ Not yet published to the HACS default store. Add this repository as a HACS custo
 menu → Custom repositories → this repo's URL, category "Integration"), install, restart Home Assistant (a brand
 new `custom_components` entry needs a restart to be discovered, not just a reload), then add it once via
 Settings → Devices & Services → Add Integration → "Adaptive Lighting Helpers". The setup form is entirely
-optional — leave every field blank to just get the three services above, or fill in the five `input_datetime`
-fields for the day-phase/curve sensors too (see "Optional: day-phase/curve sensors" above).
+optional — leave every field blank to just get the three services above, or fill in the five schedule times for
+the day-phase/curve sensors too (see "Optional: day-phase/curve sensors" above). Editable later from the same
+place (Configure), which re-runs the same form pre-filled with your current values.
 
 For local testing before it's on HACS at all, `scripts/link_into_ha.sh` copies
 `custom_components/adaptive_lighting_helpers/` directly onto an HA host over SSH — see the script's own header

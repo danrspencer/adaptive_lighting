@@ -8,9 +8,10 @@ actual Lovelace card with synthetic data, so you can see it without a
 running Home Assistant instance.
 
 Boundaries here (06:00 morning / 08:00 day / 18:00 evening / 22:00
-night) are just representative defaults for the preview - the real
-automation computes these from your own input_datetime helpers plus
-sunset.
+night, clamped between a 17:00 earliest and 20:00 latest bound) are
+just representative defaults for the preview - the real integration
+computes these from the five schedule times configured on its config
+entry, plus sunset.
 
 Run from the repo root: python3 dashboard/generate_preview_data.py
 """
@@ -27,6 +28,12 @@ MORNING_HOUR = 6
 DAY_HOUR = 8
 EVENING_HOUR = 18
 NIGHT_HOUR = 22
+# Not actually used to derive EVENING_HOUR above (which is fixed, for a
+# stable preview) - just representative earliest/latest bounds so the
+# card's "why evening starts when it does" footnote has something to
+# show.
+EVENING_EARLIEST_HOUR = 17
+EVENING_LATEST_HOUR = 20
 
 # Representative sunrise/sunset for the preview, deliberately offset from
 # the schedule boundaries above - sunrise doesn't track Morning at all in
@@ -43,6 +50,8 @@ def main():
     day_start_ts = midnight + DAY_HOUR * 3600
     evening_ts = midnight + EVENING_HOUR * 3600
     night_ts = midnight + NIGHT_HOUR * 3600
+    evening_earliest_ts = midnight + EVENING_EARLIEST_HOUR * 3600
+    evening_latest_ts = midnight + EVENING_LATEST_HOUR * 3600
 
     points = []
     for i in range(289):  # every 5 minutes across 24h, matching the real curve sensor
@@ -65,6 +74,8 @@ def main():
             "day": day_start_ts,
             "evening": evening_ts,
             "night": night_ts,
+            "evening_earliest": evening_earliest_ts,
+            "evening_latest": evening_latest_ts,
         },
         "sun": {
             "sunrise": midnight + SUNRISE_HOUR * 3600,

@@ -495,15 +495,68 @@ scene-coverage gap filling.
   (documented above) hold up against real state, registries, and
   context - no longer carried-over guesses from the pyscript era.
 
+  **The optional day-phase/curve sensors were redesigned after this
+  pass, before ever being deployed live** (design discussion, not a
+  live-tested change - still open per item 1 below):
+  - The five schedule boundaries are no longer separate `input_datetime`
+    helpers the user has to create first - they're plain `TimeSelector`
+    fields stored directly on the config entry (`morning_time`/`day_time`/
+    `evening_earliest_time`/`evening_latest_time`/`night_time`), editable
+    later via a proper `async_step_reconfigure` (previously missing
+    entirely - `supports_reconfigure` was `false` on the entry this
+    session created, a real gap, not just an unexercised feature).
+  - `sensor.day_phase` plus the separate `solar_adaptive_lighting_brightness`/
+    `_color_temperature` sensors collapsed into one `sensor.adaptive_lighting`
+    (state = phase, `attributes.brightness`/`color_temp`) - closes a
+    shape mismatch that would otherwise have blocked ever fully
+    retiring the live package (see item 2 below): the blueprint's
+    `adaptive_sensor` input needs one entity with `brightness`/
+    `color_temp` attributes, which separate value-only sensors never
+    provided. Losing a standalone phase entity costs nothing
+    automations care about - `platform: state` triggers can watch just
+    the `phase` attribute on the combined sensor (`attribute: phase`),
+    the same pattern the blueprint's own `adaptive_attr` trigger already
+    uses for the whole attribute set.
+  - Added `select.adaptive_lighting_phase` (Auto/Morning/Day/Evening/Night)
+    as the write side of what used to be a single dual-purpose entity
+    (`input_select.day_phase`, both computed-value display and manual
+    override in one). Self-clears at the next phase boundary by
+    default, matching the live Jinja system's actual behaviour (pin
+    Evening to Day and it still becomes Night once Evening would
+    naturally have ended, not stuck on Day forever) - a
+    `sticky_phase_override` config field disables that and keeps an
+    override until cleared by hand instead. Implemented by remembering
+    `computed_phase` at override time and comparing against it on every
+    coordinator refresh (`select.py`), not a timer - consistent with
+    this repo's general "check live state fresh, don't invent a
+    persisted expiry" style (`grouping.py`'s `manually_set()` does the
+    same thing for manual light overrides).
+  - The precomputed curve (`sensor.adaptive_lighting_curve`) deliberately
+    does NOT follow the override - it's a full-day schedule/forecast,
+    and pinning "right now" doesn't change what the schedule would have
+    looked like at 9am. This was an unintentional inconsistency in the
+    old Jinja version (see `phase_at()`'s docstring); here it's the
+    same behaviour, now deliberate and documented rather than a wart.
+  - `www/adaptive-lighting-curve-card.js`'s `DEFAULT_ENTITIES` and
+    `dashboard/preview.html`'s synthetic state were both updated to
+    match - `phase`/`brightness_now`/`kelvin_now` now default to the
+    same `sensor.adaptive_lighting` entity (attribute-based, with a
+    `.state` fallback for custom configs still pointing at separate
+    sensors), and evening's earliest/latest bounds moved from two
+    standalone `input_datetime` entities to `attributes.earliest`/
+    `latest` on `sensor.evening_start` itself.
+
   **Still open:**
-  1. The optional day-phase/curve sensors (`sensor.py`) - not set up
-     this pass (see above). Configuring them means filling in this
-     instance's actual `input_datetime.morning`/`day`/`evening_earliest`/
-     `evening_latest`/`night` entities via the integration's Configure
-     screen, then checking the sensors land at the forced entity_ids
-     (`sensor.morning_start` etc. - expect a `_2` suffix if the live
-     `packages/adaptive_lighting.yaml` sensors of the same name are
-     still active; see `sensor.py`'s docstring).
+  1. None of the above has been configured or tested against the live
+     instance yet - still just the services (confirmed live, see above).
+     Configuring the sensors now means filling in the five `TimeSelector`
+     fields via the integration's Configure screen, then checking the
+     sensors land at the forced entity_ids (`sensor.morning_start` etc.
+     - expect a `_2` suffix if the live `packages/adaptive_lighting.yaml`
+     sensors of the same name are still active; see `sensor.py`'s
+     docstring), and separately confirming the phase-override select
+     and its self-clearing behaviour actually work against a real
+     `sun.sun`-driven boundary crossing, not just by inspection.
   2. **Once the sensors are confirmed working, retire the live
      `packages/adaptive_lighting.yaml`** (or at least its generic
      boundary/phase/brightness/curve parts - the household-specific
