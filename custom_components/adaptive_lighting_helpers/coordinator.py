@@ -31,15 +31,19 @@ previously an accidental inconsistency in the live Jinja version
 (noted in phase_at()'s docstring); here it's the same behaviour but
 deliberate.
 
-Multiple schedule instances: the default config entry itself (bare
-entity names, e.g. sensor.adaptive_lighting) is always instance zero if
-it has any of the five time fields configured; each subentry the user
-adds via the "Add Sensor" flow (config_flow.py's SensorSubentryFlow) is
-another instance, with entities prefixed by its slugified name (e.g.
-sensor.living_room_adaptive_lighting). schedule_instances() is the one
-place that enumerates all of them - __init__.py, sensor.py, and
-select.py all iterate its output rather than each re-deriving the
-entry/subentry split.
+Schedule instances: the config entry itself never carries a schedule -
+it only registers the services (see __init__.py). Every schedule is a
+"sensor" subentry, added via the "Add Sensor" flow (config_flow.py's
+SensorSubentryFlow) - so there's exactly one mechanism for adding a
+schedule, not "the first one is special". A subentry's name is
+optional, though: leave it blank for bare, unprefixed entity IDs
+(sensor.adaptive_lighting etc, matching the original single-sensor
+naming) or give it a name for prefixed ones (sensor.living_room_
+adaptive_lighting) - at most one blank-named subentry is allowed,
+enforced the same way a duplicate name is (see SensorSubentryFlow).
+schedule_instances() is the one place that enumerates all of them -
+__init__.py, sensor.py, and select.py all iterate its output rather
+than each re-deriving the subentry lookup.
 """
 
 from __future__ import annotations
@@ -60,6 +64,8 @@ from .curve import phase_at, targets_for_phase
 
 UPDATE_INTERVAL = timedelta(seconds=60)
 
+# The five required time fields every "sensor" subentry has - see
+# config_flow.py's TIME_FIELDS.
 TIME_KEYS = (
     "morning_time",
     "day_time",
@@ -84,43 +90,28 @@ CURVE_KEYS = (
 
 @dataclass
 class ScheduleInstance:
-    """One schedule/curve setup - either the default config entry itself
-    (prefix="", entities at their original bare names) or a named
-    subentry (prefix="<slug>_")."""
+    """One sensor's schedule/curve setup, derived from a "sensor"
+    subentry - named (prefixed) or blank (bare names)."""
 
-    key: str  # hass.data storage key: entry.entry_id (default) or subentry_id (named)
-    prefix: str  # "" (default) or "<slug>_" (named)
-    config: Mapping[str, Any]  # entry.data or subentry.data - same key names either way
-    subentry_id: str | None  # None for the default instance; passed to async_add_entities()
+    key: str  # hass.data storage key: the subentry_id
+    prefix: str  # "<slug>_" (named) or "" (blank name - bare entity IDs)
+    config: Mapping[str, Any]  # subentry.data
+    subentry_id: str  # passed to async_add_entities(config_subentry_id=...)
     override_entity_id: str  # select.<prefix>adaptive_lighting_phase
-    title: str  # "" (default) or the subentry's display name - prefixes entity friendly names, not just entity_ids
-
-
-def _has_time_config(config: Mapping[str, Any]) -> bool:
-    return any(config.get(key) for key in TIME_KEYS)
+    title: str  # "" (blank name) or the subentry's name - prefixes entity friendly names too, not just entity_ids
 
 
 def schedule_instances(entry: ConfigEntry) -> list[ScheduleInstance]:
     """Every schedule instance this entry should set up sensors/select
-    for - the default instance (only if it has time fields configured -
-    the services work standalone otherwise) plus one per "sensor"
-    subentry (always configured, since its time fields are required)."""
+    for - one per "sensor" subentry (see config_flow.py's
+    SensorSubentryFlow). The entry itself never carries a schedule -
+    it only registers the services (see __init__.py)."""
     instances = []
-    if _has_time_config(entry.data):
-        instances.append(
-            ScheduleInstance(
-                key=entry.entry_id,
-                prefix="",
-                config=entry.data,
-                subentry_id=None,
-                override_entity_id="select.adaptive_lighting_phase",
-                title="",
-            )
-        )
     for subentry_id, subentry in entry.subentries.items():
         if subentry.subentry_type != SUBENTRY_TYPE_SENSOR:
             continue
-        prefix = f"{slugify(subentry.title)}_"
+        slug = slugify(subentry.title)
+        prefix = f"{slug}_" if slug else ""
         instances.append(
             ScheduleInstance(
                 key=subentry_id,
@@ -210,9 +201,7 @@ def _phase_override(hass: HomeAssistant, override_entity_id: str) -> str | None:
 
 class ScheduleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def __init__(self, hass: HomeAssistant, instance: ScheduleInstance) -> None:
-        super().__init__(
-            hass, __name__, name=f"Adaptive Lighting schedule ({instance.prefix or 'default'})", update_interval=UPDATE_INTERVAL
-        )
+        super().__init__(hass, __name__, name=f"Adaptive Lighting schedule ({instance.title})", update_interval=UPDATE_INTERVAL)
         self._config = instance.config
         self._override_entity_id = instance.override_entity_id
 

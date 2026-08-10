@@ -3,46 +3,11 @@
     "step": {
       "user": {
         "title": "Adaptive Lighting Helpers",
-        "description": "Registers the adaptive_lighting_helpers.compute_lighting_groups, compute_curve, compute_scene_coverage, and apply_lighting services - nothing below is required for those. Optionally, fill in these five times to also get day-phase/curve sensors (morning_start, day_start, evening_start, night_start, adaptive_lighting, adaptive_lighting_curve) and a phase-override select, computed the same way, no separate helpers or YAML package needed. Leave them blank to set up just the services. You can add any number of additional named sensors afterwards from this integration's own page.",
-        "data": {
-          "morning_time": "Morning start time",
-          "day_time": "Day start time",
-          "evening_earliest_time": "Evening earliest start time",
-          "evening_latest_time": "Evening latest start time",
-          "night_time": "Night start time",
-          "sticky_phase_override": "Keep a manual phase override until cleared by hand (instead of self-clearing at the next phase boundary)",
-          "day_brightness": "Morning/Day brightness",
-          "evening_brightness": "Evening brightness",
-          "night_brightness": "Night brightness",
-          "morning_kelvin": "Morning colour temperature",
-          "day_end_kelvin": "Day end colour temperature",
-          "evening_kelvin": "Evening colour temperature",
-          "night_kelvin": "Night colour temperature"
-        }
-      },
-      "reconfigure": {
-        "title": "Adaptive Lighting Helpers",
-        "description": "Update the day-phase/curve schedule times and brightness/colour temperature curve. Leave all five times blank to remove the sensors and select entity.",
-        "data": {
-          "morning_time": "Morning start time",
-          "day_time": "Day start time",
-          "evening_earliest_time": "Evening earliest start time",
-          "evening_latest_time": "Evening latest start time",
-          "night_time": "Night start time",
-          "sticky_phase_override": "Keep a manual phase override until cleared by hand (instead of self-clearing at the next phase boundary)",
-          "day_brightness": "Morning/Day brightness",
-          "evening_brightness": "Evening brightness",
-          "night_brightness": "Night brightness",
-          "morning_kelvin": "Morning colour temperature",
-          "day_end_kelvin": "Day end colour temperature",
-          "evening_kelvin": "Evening colour temperature",
-          "night_kelvin": "Night colour temperature"
-        }
+        "description": "Registers the adaptive_lighting_helpers.compute_lighting_groups, compute_curve, compute_scene_coverage, and apply_lighting services. Nothing else to configure here - add day-phase/curve sensors afterwards from this integration's own page (Add Sensor)."
       }
     },
     "abort": {
-      "already_configured": "Already configured",
-      "reconfigure_successful": "Reconfiguration successful"
+      "already_configured": "Already configured"
     }
   },
   "config_subentries": {
@@ -55,9 +20,9 @@
       "step": {
         "user": {
           "title": "Add an Adaptive Lighting sensor",
-          "description": "Adds a named day-phase/curve sensor and phase-override select, independent of the default one above - entities are prefixed with this name (e.g. \"Living Room\" -> sensor.living_room_adaptive_lighting).",
+          "description": "Adds a day-phase/curve sensor and phase-override select. Entities are prefixed with the name (e.g. \"Living Room\" -> sensor.living_room_adaptive_lighting) - leave it blank for bare entity IDs instead (sensor.adaptive_lighting). At most one sensor may leave the name blank.",
           "data": {
-            "name": "Name",
+            "name": "Name (blank for bare entity IDs)",
             "morning_time": "Morning start time",
             "day_time": "Day start time",
             "evening_earliest_time": "Evening earliest start time",
@@ -94,7 +59,7 @@
         }
       },
       "error": {
-        "already_configured": "A sensor with this name already exists"
+        "already_configured": "A sensor with this name (or another blank-named sensor) already exists"
       },
       "abort": {
         "reconfigure_successful": "Reconfiguration successful"

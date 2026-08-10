@@ -858,6 +858,72 @@ entries (confirmed against real HA core source - `home-assistant/core`'s
   "verify locally first, live deployment is its own explicit step"
   pattern.
 
+**Deployed via HACS, then simplified based on live user feedback -
+before ever configuring a sensor.** Pulled onto the live instance via
+`ha_manage_hacs` (`update_information` then `download`), restarted to
+activate. Trying the new config flow live surfaced two real usability
+gaps, both fixed the same session:
+
+- The "Add Sensor" subentry form showed every field blank, forcing a
+  full retype even when the new sensor's schedule would obviously match
+  an existing one. Fixed by pre-filling from the most recently added
+  sibling subentry (`existing[-1].data`) - falls back to a blank form
+  only for the very first sensor ever added. A validation-error retry
+  (a clashing name) re-suggests whatever was just submitted instead of
+  reverting to that default, so fixing the name doesn't cost the rest
+  of the form.
+- **Bigger one, prompted by the user directly questioning the design**:
+  "why am I still asked for schedule input when just adding the
+  integration - isn't that only relevant for a new sensor instance?"
+  Fair question - the main config entry carrying its own optional
+  schedule was a leftover from before subentries existed, now a pure
+  special case (an unnamed "instance zero" living alongside named ones)
+  with no real benefit, since nothing on the live instance actually
+  used it (it had only ever been configured services-only). Removed
+  entirely: `async_step_user` now creates the entry immediately with
+  `data={}` and no form at all; `async_step_reconfigure` was deleted
+  from the main flow (nothing left to reconfigure - HA hides the
+  "Configure" button once that method doesn't exist);
+  `schedule_instances()` no longer has an entry-derived branch, only
+  subentries. This does remove a capability - the unprefixed
+  `sensor.adaptive_lighting` naming - which used to come from the main
+  entry by default.
+
+  That capability came back a different way, though, from a second
+  round of user pushback: "can't we just make the prefix optional and
+  throw an error on a name collision - we have to handle collisions
+  anyway, right?" Correct, and simpler than maintaining two separate
+  mechanisms (a main-entry path and a subentry path) for what's really
+  one concept. `SensorSubentryFlow`'s `name` field became
+  `vol.Optional("name", default="")` - blank gives bare entity IDs
+  (`sensor.adaptive_lighting`, matching the original single-sensor
+  naming and the old Jinja package's convention) instead of a
+  slugified prefix. The existing duplicate-name collision check
+  (comparing `slugify(subentry.title)` across siblings) covers the
+  blank case for free, since `slugify("")` is consistently `""` for
+  every blank-named subentry - no separate "is there already a default"
+  check needed, and at most one subentry can end up unprefixed as a
+  result. `ScheduleInstance.title` stays `""` in that case too (not a
+  fallback display label), so entity *friendly names* stay bare
+  ("Morning Start", not "Default Morning Start") exactly like the
+  entity_ids do - the two needed to derive from the same blank/non-blank
+  signal, not from two different sources with different fallbacks.
+
+  Net effect: there's exactly one way to add a schedule (via "Add
+  Sensor"), and exactly one way to get the historical bare-name
+  behaviour (leave the name blank on that one call) - not a config-entry
+  special case plus a subentry special case doing similar things two
+  different ways.
+
+  This was caught and fixed *before* any real sensor was ever
+  configured on the live instance (the exchange happened right after
+  the HACS update, while the user was still exploring the new "Add
+  Sensor" flow for the first time) - so there was no live migration
+  concern to design around, just get the shape right going forward.
+  Still not deployed again / tested live as of this note - the fix
+  needs another HACS update + restart cycle to reach the instance that
+  originally surfaced the complaint.
+
 ## Open question: dashboard card as a HACS plugin?
 
 The integration half of this used to be an open question - now

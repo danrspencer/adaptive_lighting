@@ -20,6 +20,19 @@ import math
 # repeating "2700" - see kelvin_for_phase's night_kelvin param.
 DEFAULT_NIGHT_KELVIN = 2700
 
+# A representative day schedule (hour-of-day), not read by anything
+# below - a single shared "sensible starting point" for anything that
+# wants to seed or preview a schedule without real user input yet
+# (config_flow.py's auto-seeded default sensor, dashboard/generate_preview_data.py's
+# synthetic preview data). The one place these numbers are literals.
+DEFAULT_SCHEDULE_HOURS = {
+    "morning": 6,
+    "day": 8,
+    "evening_earliest": 17,
+    "evening_latest": 20,
+    "night": 22,
+}
+
 
 def _clamp(v: float, lo: float, hi: float) -> float:
     return min(max(v, lo), hi)

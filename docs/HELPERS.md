@@ -104,37 +104,35 @@ response_variable: coverage
 
 ## Optional: day-phase/curve sensors
 
-If you'd rather have this running continuously as sensors than call `compute_curve` yourself, fill in the
-schedule times when setting up the integration (Settings → Devices & Services → Adaptive Lighting Helpers →
-Configure) — start times for Morning, Day, and Night, and Evening's earliest/latest bound. No separate helper
-entities to create first — these are plain times stored directly on the integration's own config entry, editable
-later from the same Configure screen. Leave them blank and you just get the services above with nothing else.
-The same Configure screen also has the same optional brightness/Kelvin fields `compute_curve` takes (see above)
-— blank means curve.py's own defaults, identical to the numbers shown there.
+If you'd rather have this running continuously as sensors than call `compute_curve` yourself, add a sensor from
+the integration's own page (Settings → Devices & Services → Adaptive Lighting Helpers → Add Sensor) — a required
+name plus the five schedule times (start times for Morning, Day, and Night, and Evening's earliest/latest bound),
+and the same optional brightness/Kelvin fields `compute_curve` takes (see above; blank means curve.py's own
+defaults, identical to the numbers shown there). No separate helper entities to create first — these are plain
+times/numbers stored directly on the sensor's own subentry, editable later from the same page (Configure).
+Adding the integration itself needs no configuration and sets up nothing beyond the services above — a schedule
+only exists once you add a sensor.
 
-Filling in the five times adds, computed the same way `compute_curve` computes them, refreshed every 60 seconds:
+You can add any number of sensors this way, each independent, each with its own schedule and curve. Entities are
+prefixed with the sensor's slugified name — naming one "Living Room" gets you
+`sensor.living_room_adaptive_lighting`, `sensor.living_room_morning_start`, `select.living_room_adaptive_lighting_phase`,
+and so on. **Leave the name blank** to get bare, unprefixed entity IDs instead (`sensor.adaptive_lighting`,
+`sensor.morning_start`, etc.) — matching what a Jinja `packages/*.yaml` day-phase setup would typically use, so
+this is a drop-in replacement for one if you're migrating away from it (remove that package first, or these will
+get suffixed `_2`). At most one sensor may leave the name blank — adding a second one is treated as a name
+collision, the same as reusing an existing name.
+
+Each sensor produces, computed the same way `compute_curve` computes them and refreshed every 60 seconds:
 
 | Entity | What it is |
 |---|---|
-| `sensor.morning_start` / `day_start` / `night_start` | Today's boundary, `attributes.timestamp` |
-| `sensor.evening_start` | Today's evening boundary, `attributes.timestamp`, plus `attributes.earliest`/`latest` (the two configured bounds, for reference) |
-| `sensor.adaptive_lighting` | Combined "right now" reading — state is the phase (Morning/Day/Evening/Night), `attributes.brightness` (0-255), `attributes.color_temp` (Kelvin), and `attributes.rgb_color` (`[r, g, b]`) are exactly the attribute names `apply_lighting`'s `sensor_entity_id` and the blueprint's `adaptive_sensor` input already read, so this can be pointed at directly |
-| `sensor.adaptive_lighting_curve` | `attributes.points`: the full day as 289 `{t, brightness, kelvin, kelvin_rgb}` samples (`kelvin_rgb` always equals `kelvin`, kept as a separate key since some consumers already read it) — what the [dashboard card](../README.md#previewing-the-dashboard-card) reads. Deliberately does **not** follow a manual phase override (see below) — it's a full-day schedule, not a "right now" value |
-| `select.adaptive_lighting_phase` | Manual override — `Auto` (default) or a specific phase. Pinning a phase holds it until the *schedule itself* next moves on (e.g. override to `Day` during `Evening` and it still becomes `Night` once Evening would naturally have ended, rather than staying on `Day` forever) — tick "Keep a manual phase override until cleared by hand" in Configure to disable that and keep an override until you clear it yourself instead |
+| `sensor.<name_>morning_start` / `day_start` / `night_start` | Today's boundary, `attributes.timestamp` |
+| `sensor.<name_>evening_start` | Today's evening boundary, `attributes.timestamp`, plus `attributes.earliest`/`latest` (the two configured bounds, for reference) |
+| `sensor.<name_>adaptive_lighting` | Combined "right now" reading — state is the phase (Morning/Day/Evening/Night), `attributes.brightness` (0-255), `attributes.color_temp` (Kelvin), and `attributes.rgb_color` (`[r, g, b]`) are exactly the attribute names `apply_lighting`'s `sensor_entity_id` and the blueprint's `adaptive_sensor` input already read, so this can be pointed at directly |
+| `sensor.<name_>adaptive_lighting_curve` | `attributes.points`: the full day as 289 `{t, brightness, kelvin, kelvin_rgb}` samples (`kelvin_rgb` always equals `kelvin`, kept as a separate key since some consumers already read it) — what the [dashboard card](../README.md#previewing-the-dashboard-card) reads. Deliberately does **not** follow a manual phase override (see below) — it's a full-day schedule, not a "right now" value |
+| `select.<name_>adaptive_lighting_phase` | Manual override — `Auto` (default) or a specific phase. Pinning a phase holds it until the *schedule itself* next moves on (e.g. override to `Day` during `Evening` and it still becomes `Night` once Evening would naturally have ended, rather than staying on `Day` forever) — tick "Keep a manual phase override until cleared by hand" when adding/reconfiguring the sensor to disable that and keep an override until you clear it yourself instead |
 
-Entity IDs are forced to match what a Jinja `packages/*.yaml` day-phase setup would typically use (rather than
-the usual integration-prefixed auto-generated ones), so this is meant as a drop-in replacement for one — if
-you're migrating from your own version of that, remove it first or these will get suffixed `_2`.
-
-### Multiple sensors
-
-Beyond the one schedule above, you can add any number of additional named sensors from the integration's own
-page (Settings → Devices & Services → Adaptive Lighting Helpers → Add Sensor). Each one gets its own name, its
-own five schedule times (required this time — there's no "blank = skip" for an entity you deliberately chose to
-add), and the same optional brightness/Kelvin fields, and produces the same set of entities as above, prefixed
-with the sensor's slugified name instead of living at the bare names — e.g. naming one "Living Room" gets you
-`sensor.living_room_adaptive_lighting`, `sensor.living_room_morning_start`, `select.living_room_adaptive_lighting_phase`,
-and so on. Point `apply_lighting`'s `sensor_entity_id` (or a second instance of the blueprint) at a named
-sensor's `sensor.<name>_adaptive_lighting` exactly as you would the default one. Editable or removable later from
-the same page; renaming isn't supported from the reconfigure form since it would change the entity_id prefix —
-remove and re-add instead if a sensor needs a new name.
+Point `apply_lighting`'s `sensor_entity_id` (or the blueprint's Adaptive Lighting Sensor input) at whichever
+sensor's `sensor.<name_>adaptive_lighting` you want. Each sensor is editable or removable later from the
+integration's page; renaming isn't supported from the reconfigure form since it would change the entity_id
+prefix — remove and re-add instead if a sensor needs a new name.

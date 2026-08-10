@@ -9,9 +9,11 @@ running Home Assistant instance.
 
 Boundaries here (06:00 morning / 08:00 day / 22:00 night, evening
 clamped between a 17:00 earliest and 20:00 latest bound around a
-19:45 representative sunset) are just representative defaults for the
-preview - the real integration computes these from the five schedule
-times configured on its config entry, plus the actual sun.sun.
+19:45 representative sunset) come from curve.py's own DEFAULT_SCHEDULE_HOURS
+- the same numbers config_flow.py seeds a freshly-added integration's
+default sensor with, not independently chosen. The real integration
+computes actual boundaries from whichever sensor's configured schedule
+times, plus the actual sun.sun.
 Evening itself is DERIVED below via the same
 max(earliest, min(sunset, latest)) clamp coordinator.py uses, not a
 fixed hour - it needs to actually respond to the earliest/latest/sunset
@@ -30,13 +32,16 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "custom_components" / "adaptive_lighting_helpers"))
-from curve import phase_at, targets_for_phase  # noqa: E402
+from curve import DEFAULT_SCHEDULE_HOURS, phase_at, targets_for_phase  # noqa: E402
 
-MORNING_HOUR = 6
-DAY_HOUR = 8
-NIGHT_HOUR = 22
-EVENING_EARLIEST_HOUR = 17
-EVENING_LATEST_HOUR = 20
+# Same numbers config_flow.py seeds its default sensor with - both read
+# curve.py's one shared DEFAULT_SCHEDULE_HOURS rather than each keeping
+# its own copy of "6, 8, 17, 20, 22".
+MORNING_HOUR = DEFAULT_SCHEDULE_HOURS["morning"]
+DAY_HOUR = DEFAULT_SCHEDULE_HOURS["day"]
+NIGHT_HOUR = DEFAULT_SCHEDULE_HOURS["night"]
+EVENING_EARLIEST_HOUR = DEFAULT_SCHEDULE_HOURS["evening_earliest"]
+EVENING_LATEST_HOUR = DEFAULT_SCHEDULE_HOURS["evening_latest"]
 
 # Representative sunrise/sunset for the preview, deliberately offset from
 # the schedule boundaries above - sunrise doesn't track Morning at all in

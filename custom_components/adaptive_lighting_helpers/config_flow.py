@@ -1,26 +1,25 @@
 """Config flow for Adaptive Lighting Helpers.
 
-The compute_lighting_groups/compute_curve/compute_scene_coverage/
-apply_lighting services need no configuration at all - every field below
-is optional on the main entry and only matters if you also want the
-day-phase/curve sensors and the phase-override select (see sensor.py,
-select.py, coordinator.py). Leave them all blank to get just the
-services.
+The main entry needs no configuration at all - adding it just registers
+the compute_lighting_groups/compute_curve/compute_scene_coverage/
+apply_lighting services (see __init__.py), plus a single default
+"sensor" subentry (blank name -> bare entity IDs, DEFAULT_SENSOR_TIMES,
+curve.py's own brightness/Kelvin defaults) so there's something usable
+immediately rather than an empty integration you have to remember to
+add a sensor to. Every day-phase/curve sensor + phase-override select
+beyond that is a "sensor" subentry too (SensorSubentryFlow below),
+added afterwards from this integration's own page - one mechanism for
+every sensor, not a separate main-entry path alongside named ones. A
+subentry's name is optional: leave it blank for bare entity IDs
+(sensor.adaptive_lighting etc), or name it for prefixed ones
+(sensor.living_room_adaptive_lighting) - see coordinator.py's
+ScheduleInstance/schedule_instances().
 
-Values are plain HH:MM:SS times/plain numbers stored directly on the
-config entry - no separate input_datetime helpers to create first (an
-earlier version of this integration required that; TIME_FIELDS replaced
-the EntitySelector(domain="input_datetime") fields it used to have).
-Editable later via Settings -> Devices & Services -> Adaptive Lighting
-Helpers -> Configure, which re-runs async_step_reconfigure below with
-the current values pre-filled.
-
-Beyond the single main entry, this integration also supports adding any
-number of additional named sensors via a config *subentry*
-(SensorSubentryFlow below) - each with its own schedule and its own
-brightness/Kelvin curve, producing a sensor + phase-override select
-prefixed with the sensor's name (see coordinator.py's
-ScheduleInstance/schedule_instances()).
+Subentry values are plain HH:MM:SS times/plain numbers stored directly
+on the subentry - no separate input_datetime helpers to create first
+(an earlier version of this integration required that; TIME_FIELDS
+replaced the EntitySelector(domain="input_datetime") fields it used to
+have).
 """
 
 from __future__ import annotations
@@ -36,26 +35,15 @@ from homeassistant.helpers import selector
 from homeassistant.util import slugify
 
 from .const import DOMAIN, SUBENTRY_TYPE_SENSOR
+from .coordinator import CURVE_KEYS, TIME_KEYS
+from .curve import DEFAULT_SCHEDULE_HOURS
 
-TIME_FIELDS = {
-    vol.Optional("morning_time"): selector.TimeSelector(),
-    vol.Optional("day_time"): selector.TimeSelector(),
-    vol.Optional("evening_earliest_time"): selector.TimeSelector(),
-    vol.Optional("evening_latest_time"): selector.TimeSelector(),
-    vol.Optional("night_time"): selector.TimeSelector(),
-}
-
-# The 5 time fields above, but required - used by the subentry flow,
-# where a user has deliberately chosen to add a named sensor (unlike the
-# main entry, where leaving everything blank is a real "services only"
-# mode - see module docstring).
-REQUIRED_TIME_FIELDS = {
-    vol.Required("morning_time"): selector.TimeSelector(),
-    vol.Required("day_time"): selector.TimeSelector(),
-    vol.Required("evening_earliest_time"): selector.TimeSelector(),
-    vol.Required("evening_latest_time"): selector.TimeSelector(),
-    vol.Required("night_time"): selector.TimeSelector(),
-}
+# Required - a subentry only exists because a user deliberately chose to
+# add a named sensor, so there's no "leave blank to skip" mode here the
+# way the old main-entry schedule had. Built from TIME_KEYS (coordinator.py)
+# rather than listing the 5 names again, so the schema and the internal
+# key list can't drift apart.
+TIME_FIELDS = {vol.Required(key): selector.TimeSelector() for key in TIME_KEYS}
 
 _BRIGHTNESS_SELECTOR = selector.NumberSelector(
     selector.NumberSelectorConfig(min=0, max=255, mode=selector.NumberSelectorMode.BOX)
@@ -64,32 +52,42 @@ _KELVIN_SELECTOR = selector.NumberSelector(
     selector.NumberSelectorConfig(min=1000, max=10000, unit_of_measurement="K", mode=selector.NumberSelectorMode.BOX)
 )
 
-# Optional on both the main entry and subentries - a schedule (times)
-# with no curve customization just reuses curve.py's own defaults.
+# Optional - a schedule with no curve customization just reuses
+# curve.py's own defaults. Built from CURVE_KEYS (coordinator.py) rather
+# than listing the 7 names again - same reasoning as TIME_FIELDS above.
 CURVE_AND_BEHAVIOR_FIELDS = {
-    # Only meaningful alongside the time fields (it governs the
-    # phase-override select - see select.py). Default False: an override
-    # self-clears at the next phase boundary, matching the old Jinja
-    # system's behaviour. True keeps an override pinned until manually
-    # set back to Auto.
+    # Governs the phase-override select - see select.py. Default False:
+    # an override self-clears at the next phase boundary, matching the
+    # old Jinja system's behaviour. True keeps an override pinned until
+    # manually set back to Auto.
     vol.Optional("sticky_phase_override", default=False): selector.BooleanSelector(),
-    vol.Optional("day_brightness"): _BRIGHTNESS_SELECTOR,
-    vol.Optional("evening_brightness"): _BRIGHTNESS_SELECTOR,
-    vol.Optional("night_brightness"): _BRIGHTNESS_SELECTOR,
-    vol.Optional("morning_kelvin"): _KELVIN_SELECTOR,
-    vol.Optional("day_end_kelvin"): _KELVIN_SELECTOR,
-    vol.Optional("evening_kelvin"): _KELVIN_SELECTOR,
-    vol.Optional("night_kelvin"): _KELVIN_SELECTOR,
+    **{
+        vol.Optional(key): (_BRIGHTNESS_SELECTOR if key.endswith("_brightness") else _KELVIN_SELECTOR)
+        for key in CURVE_KEYS
+    },
 }
 
-MAIN_ENTRY_FIELDS = {**TIME_FIELDS, **CURVE_AND_BEHAVIOR_FIELDS}
 # Schedule/curve fields only, no "name" - shared by both the initial
 # subentry form (which adds "name" on top, see SUBENTRY_FIELDS below)
 # and the reconfigure form (which deliberately excludes it - renaming
 # would change the slugified entity_id prefix, not something a
 # reconfigure form should do silently).
-SUBENTRY_SCHEDULE_FIELDS = {**REQUIRED_TIME_FIELDS, **CURVE_AND_BEHAVIOR_FIELDS}
-SUBENTRY_FIELDS = {vol.Required("name"): selector.TextSelector(), **SUBENTRY_SCHEDULE_FIELDS}
+SUBENTRY_SCHEDULE_FIELDS = {**TIME_FIELDS, **CURVE_AND_BEHAVIOR_FIELDS}
+# Optional, not Required - blank means "no prefix", giving bare entity
+# IDs (sensor.adaptive_lighting etc). At most one subentry may leave
+# this blank - see async_step_user's collision check, which treats a
+# second blank name the same as a duplicate name.
+SUBENTRY_FIELDS = {vol.Optional("name", default=""): selector.TextSelector(), **SUBENTRY_SCHEDULE_FIELDS}
+
+# Seeded onto the single default sensor subentry created alongside the
+# main entry (see async_step_user below). Derived from curve.py's
+# DEFAULT_SCHEDULE_HOURS - the same numbers dashboard/generate_preview_data.py
+# uses for its synthetic preview, both reading the one shared constant
+# rather than each keeping its own copy of "6, 8, 17, 20, 22". Curve
+# values are deliberately left unset here so they fall through to
+# curve.py's own defaults, same as any other sensor with nothing
+# configured.
+DEFAULT_SENSOR_TIMES = {f"{key}_time": f"{hour:02d}:00:00" for key, hour in DEFAULT_SCHEDULE_HOURS.items()}
 
 
 class AdaptiveLightingHelpersConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -98,27 +96,21 @@ class AdaptiveLightingHelpersConfigFlow(config_entries.ConfigFlow, domain=DOMAIN
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         await self.async_set_unique_id(DOMAIN)
         self._abort_if_unique_id_configured()
-
-        if user_input is not None:
-            return self.async_create_entry(title="Adaptive Lighting Helpers", data=user_input)
-
-        return self.async_show_form(step_id="user", data_schema=vol.Schema(MAIN_ENTRY_FIELDS))
-
-    async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None) -> FlowResult:
-        if user_input is not None:
-            # Not *_reload_and_abort - __init__.py registers its own
-            # entry.add_update_listener that reloads on any entry/subentry
-            # change (needed regardless for subentry add/remove, which
-            # don't go through this flow at all), so the reload happens
-            # from there instead. Calling both would double-reload for
-            # the main entry, and the subentry equivalent of this method
-            # actively raises if an update listener is registered.
-            return self.async_update_and_abort(self._get_reconfigure_entry(), data=user_input)
-
-        current = self._get_reconfigure_entry().data
-        return self.async_show_form(
-            step_id="reconfigure",
-            data_schema=self.add_suggested_values_to_schema(vol.Schema(MAIN_ENTRY_FIELDS), current),
+        # No fields to ask for - see module docstring. Creates
+        # immediately rather than showing an empty form to click through,
+        # seeding one default (blank-named, bare-entity-ID) sensor so
+        # there's something usable right away.
+        return self.async_create_entry(
+            title="Adaptive Lighting Helpers",
+            data={},
+            subentries=[
+                {
+                    "subentry_type": SUBENTRY_TYPE_SENSOR,
+                    "title": "",
+                    "unique_id": None,
+                    "data": DEFAULT_SENSOR_TIMES,
+                }
+            ],
         )
 
     @classmethod
@@ -128,19 +120,26 @@ class AdaptiveLightingHelpersConfigFlow(config_entries.ConfigFlow, domain=DOMAIN
 
 
 class SensorSubentryFlow(ConfigSubentryFlow):
-    """Adds one named adaptive lighting sensor - its own schedule and
+    """Adds one adaptive lighting sensor - its own schedule and
     (optionally) its own brightness/Kelvin curve. Produces a
     sensor.<slug>_adaptive_lighting + select.<slug>_adaptive_lighting_phase
     pair, namespaced by the slugified name so multiple sensors can
-    coexist - see coordinator.py's schedule_instances()."""
+    coexist - see coordinator.py's schedule_instances(). Leaving name
+    blank drops the prefix entirely (bare sensor.adaptive_lighting etc);
+    at most one subentry may do this."""
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
         errors: dict[str, str] = {}
         if user_input is not None:
-            name = user_input["name"]
-            unique_id = slugify(name)
+            name = user_input.get("name", "").strip()
+            slug = slugify(name)
+            # Compares slugified titles rather than trusting stored
+            # unique_ids directly, so a second blank name collides with
+            # an existing blank-named subentry exactly the same way a
+            # second "Living Room" would - one collision check handles
+            # both cases, matching coordinator.py's own prefix derivation.
             for subentry in self._get_entry().subentries.values():
-                if subentry.unique_id == unique_id:
+                if slugify(subentry.title) == slug:
                     errors["name"] = "already_configured"
                     break
             if not errors:
@@ -149,14 +148,34 @@ class SensorSubentryFlow(ConfigSubentryFlow):
                 # keys, so storing it twice would just be a stray, unused
                 # field a future maintainer could mistake for meaningful.
                 data = {k: v for k, v in user_input.items() if k != "name"}
-                return self.async_create_entry(title=name, unique_id=unique_id, data=data)
+                return self.async_create_entry(title=name, unique_id=slug or None, data=data)
 
-        return self.async_show_form(step_id="user", data_schema=vol.Schema(SUBENTRY_FIELDS), errors=errors)
+        # Pre-fill schedule/curve values from the most recently added
+        # sibling sensor, if any - a new sensor most often wants "the
+        # same schedule as my other one, just named", not a blank form.
+        # Re-showing after a validation error (a clashing name) instead
+        # re-suggests whatever was just submitted, so fixing the name
+        # doesn't cost the rest of the form.
+        if user_input is not None:
+            suggested = user_input
+        else:
+            existing = list(self._get_entry().subentries.values())
+            suggested = existing[-1].data if existing else {}
+        return self.async_show_form(
+            step_id="user",
+            data_schema=self.add_suggested_values_to_schema(vol.Schema(SUBENTRY_FIELDS), suggested),
+            errors=errors,
+        )
 
     async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
         if user_input is not None:
-            # async_update_and_abort, not *_reload_and_abort - see the
-            # matching comment on the main entry's async_step_reconfigure.
+            # async_update_and_abort, not *_reload_and_abort - __init__.py
+            # registers its own entry.add_update_listener that reloads on
+            # any entry/subentry change (needed regardless for subentry
+            # add/remove, which don't go through this flow at all), so the
+            # reload happens from there instead. Calling both would
+            # double-reload, and this method actively raises if an update
+            # listener is already registered.
             return self.async_update_and_abort(self._get_entry(), self._get_reconfigure_subentry(), data=user_input)
 
         current = self._get_reconfigure_subentry().data

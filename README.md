@@ -36,9 +36,9 @@ terms, not just given its own numbers on a curve:
   asleep: dim and warm, the lighting you want on at 3am without waking yourself up further.
 
 Each boundary is independently configurable, each phase's brightness/colour temperature is too, and any phase
-can be pinned manually when you want to override the schedule for a while — see
-[docs/HELPERS.md](docs/HELPERS.md). You can also run any number of these schedules at once, each with its own
-name and settings — see docs/HELPERS.md's "Multiple sensors".
+can be pinned manually when you want to override the schedule for a while. You can also run any number of these
+schedules at once, each with its own name and settings — see
+[docs/HELPERS.md](docs/HELPERS.md#optional-day-phasecurve-sensors).
 
 ## Adaptive Lighting Helpers (the integration)
 
@@ -157,10 +157,9 @@ at all.
 Not yet published to the HACS default store. Add this repository as a HACS custom repository (HACS → the "⋮"
 menu → Custom repositories → this repo's URL, category "Integration"), install, restart Home Assistant (a brand
 new `custom_components` entry needs a restart to be discovered, not just a reload), then add it once via
-Settings → Devices & Services → Add Integration → "Adaptive Lighting Helpers". The setup form is entirely
-optional — leave every field blank to just get the services above, or fill in the five schedule times for
-the day-phase/curve sensors too (see [docs/HELPERS.md](docs/HELPERS.md)). Editable later from the same place
-(Configure), which re-runs the same form pre-filled with your current values.
+Settings → Devices & Services → Add Integration → "Adaptive Lighting Helpers" — nothing to configure, this just
+registers the services above. Add day-phase/curve sensors afterwards, any number of them, from the integration's
+own page (Add Sensor) — see [docs/HELPERS.md](docs/HELPERS.md).
 
 For local testing before it's on HACS at all, `scripts/link_into_ha.sh` copies
 `custom_components/adaptive_lighting_helpers/` directly onto an HA host over SSH — see the script's own header

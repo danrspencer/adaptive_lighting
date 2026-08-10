@@ -12,9 +12,10 @@ touch any light); `apply_lighting` wraps the same grouping logic and
 actually dispatches light.turn_on/turn_off, reading its brightness/
 colour target off any sensor entity you point it at - see README's
 "Bring your own sensor" section. Optionally also sets up day-phase/curve
-sensors (sensor.py) and a phase-override select (select.py) as a native
-replacement for a Jinja packages/*.yaml setup, if the config entry has
-schedule times configured - see config_flow.py.
+sensors (sensor.py) and a phase-override select (select.py) per named
+sensor added afterwards (Settings -> Devices & Services -> Adaptive
+Lighting Helpers -> Add Sensor) - a native replacement for a Jinja
+packages/*.yaml setup - see config_flow.py.
 
 Designed to work with the adaptive_lighting blueprint in this repo,
 but not coupled to it: call any of the services directly from your own
@@ -76,15 +77,11 @@ COMPUTE_CURVE_SCHEMA = vol.Schema(
         vol.Required("night"): vol.Coerce(float),
         vol.Optional("at"): vol.Coerce(float),
         # Same optional curve fields as config_flow.py's
-        # CURVE_AND_BEHAVIOR_FIELDS - left unset, targets_for_phase's own
-        # defaults apply, matching this service's original behaviour.
-        vol.Optional("day_brightness"): vol.Coerce(int),
-        vol.Optional("evening_brightness"): vol.Coerce(int),
-        vol.Optional("night_brightness"): vol.Coerce(int),
-        vol.Optional("morning_kelvin"): vol.Coerce(int),
-        vol.Optional("day_end_kelvin"): vol.Coerce(int),
-        vol.Optional("evening_kelvin"): vol.Coerce(int),
-        vol.Optional("night_kelvin"): vol.Coerce(int),
+        # CURVE_AND_BEHAVIOR_FIELDS, built from the same CURVE_KEYS
+        # (coordinator.py) rather than listing the 7 names a third time -
+        # left unset, targets_for_phase's own defaults apply, matching
+        # this service's original behaviour.
+        **{vol.Optional(key): vol.Coerce(int) for key in CURVE_KEYS},
     }
 )
 
