@@ -28,14 +28,15 @@
             "evening_earliest_time": "Evening earliest start time",
             "evening_latest_time": "Evening latest start time",
             "night_time": "Night start time",
-            "sticky_phase_override": "Keep a manual phase override until cleared by hand (instead of self-clearing at the next phase boundary)",
-            "day_brightness": "Morning/Day brightness",
-            "evening_brightness": "Evening brightness",
-            "night_brightness": "Night brightness",
+            "morning_brightness": "Morning brightness",
             "morning_kelvin": "Morning colour temperature",
+            "day_brightness": "Day brightness",
             "day_end_kelvin": "Day end colour temperature",
+            "evening_brightness": "Evening brightness",
             "evening_kelvin": "Evening colour temperature",
-            "night_kelvin": "Night colour temperature"
+            "night_brightness": "Night brightness",
+            "night_kelvin": "Night colour temperature",
+            "sticky_phase_override": "Keep a manual phase override until cleared by hand (instead of self-clearing at the next phase boundary)"
           }
         },
         "reconfigure": {
@@ -47,14 +48,15 @@
             "evening_earliest_time": "Evening earliest start time",
             "evening_latest_time": "Evening latest start time",
             "night_time": "Night start time",
-            "sticky_phase_override": "Keep a manual phase override until cleared by hand (instead of self-clearing at the next phase boundary)",
-            "day_brightness": "Morning/Day brightness",
-            "evening_brightness": "Evening brightness",
-            "night_brightness": "Night brightness",
+            "morning_brightness": "Morning brightness",
             "morning_kelvin": "Morning colour temperature",
+            "day_brightness": "Day brightness",
             "day_end_kelvin": "Day end colour temperature",
+            "evening_brightness": "Evening brightness",
             "evening_kelvin": "Evening colour temperature",
-            "night_kelvin": "Night colour temperature"
+            "night_brightness": "Night brightness",
+            "night_kelvin": "Night colour temperature",
+            "sticky_phase_override": "Keep a manual phase override until cleared by hand (instead of self-clearing at the next phase boundary)"
           }
         }
       },

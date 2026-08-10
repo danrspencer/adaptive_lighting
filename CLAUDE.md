@@ -924,6 +924,64 @@ gaps, both fixed the same session:
   needs another HACS update + restart cycle to reach the instance that
   originally surfaced the complaint.
 
+**Pushed straight to `main` and deployed, at the user's explicit
+request** ("just push to main and update my HA instance") - the only
+time this repo's workflow skipped the usual PR-then-merge step. Local
+`multi-sensor-subentries` branch was rebased onto the latest
+`origin/main` (it had fallen behind its own already-merged PR #5) and
+pushed directly with `git push origin multi-sensor-subentries:main`,
+then pulled onto the live instance via the same `ha_manage_hacs`
+update_information + download + restart sequence as every prior
+deployment.
+
+**First-ever real crash, caught immediately on restart**: setting up
+the auto-seeded default sensor threw
+`AttributeError: 'str' object has no attribute 'isEnabledFor'` from
+inside `DataUpdateCoordinator._async_refresh`. Root cause:
+`ScheduleCoordinator.__init__` called
+`super().__init__(hass, __name__, name=..., ...)` -
+`DataUpdateCoordinator`'s second positional parameter is `logger:
+logging.Logger`, not a name string, and `__name__` is a plain string
+(confirmed against HA core source before trusting the diagnosis, not
+guessed). This bug predates the entire multi-sensor session - it was
+in the very first version of `coordinator.py` - but had never actually
+run, because every live test up to this point had the schedule left
+unconfigured (services-only). The moment a real `ScheduleCoordinator`
+was instantiated and refreshed for the first time ever (via the new
+auto-seeded default sensor), the dormant bug surfaced immediately.
+Fixed with `_LOGGER = logging.getLogger(__name__)` at module level,
+passed to `super().__init__` instead of the bare string. Worth
+remembering as its own class of bug, alongside lessons 7-9: a
+constructor argument with a wrong-but-similar-shaped type (a string
+standing in for a logger) can sit completely dormant through months of
+"working" code as long as the path that actually uses it - here,
+`self.logger.isEnabledFor(...)` inside the coordinator's own refresh
+cycle - never runs.
+
+**Same pass, three field-shape fixes from live feedback, once the
+crash was out of the way**:
+- `morning_brightness` split out from `day_brightness` (which
+  previously covered both Morning and Day) - the four phases each get
+  their own independent brightness knob now, matching how Kelvin
+  already worked. `curve.py` gained named constants for all eight
+  defaults (`DEFAULT_MORNING_BRIGHTNESS` etc.) plus a
+  `DEFAULT_CURVE_VALUES` dict keyed exactly like `coordinator.py`'s
+  `CURVE_KEYS`, replacing the bare literals the function signatures
+  used to carry directly.
+- The config_flow form's curve fields showed as blank optional boxes
+  with no indication of what "leave it blank" actually resolves to.
+  Fixed by giving each `vol.Optional(...)` a real `default=` pulled
+  from `DEFAULT_CURVE_VALUES`, so the form now shows the actual ported
+  values (255/6667/255/4000/180/3200/80/2700) rather than nothing.
+- Fields reordered to group by phase (Morning brightness+Kelvin, Day,
+  Evening, Night) instead of by attribute type (all brightness fields,
+  then all Kelvin fields) - `coordinator.py`'s `CURVE_KEYS` tuple order
+  now drives both the config_flow field order and the compute_curve
+  service schema's order, since both are built by iterating it.
+  `sticky_phase_override` moved from first to last in the form - a
+  behaviour toggle, not part of the curve itself, so it doesn't belong
+  ahead of the numbers it's unrelated to.
+
 ## Open question: dashboard card as a HACS plugin?
 
 The integration half of this used to be an open question - now

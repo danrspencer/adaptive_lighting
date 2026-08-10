@@ -256,26 +256,10 @@ compute_curve:
       description: Instant to evaluate, as a unix timestamp. Defaults to now.
       selector:
         number:
-    day_brightness:
-      name: Day brightness
-      description: Brightness (0-255) for Morning and Day.
+    morning_brightness:
+      name: Morning brightness
+      description: Brightness (0-255) for Morning.
       default: 255
-      selector:
-        number:
-          min: 0
-          max: 255
-    evening_brightness:
-      name: Evening brightness
-      description: Brightness (0-255) Evening holds at before its final-hour fade.
-      default: 180
-      selector:
-        number:
-          min: 0
-          max: 255
-    night_brightness:
-      name: Night brightness
-      description: Brightness (0-255) for Night, and what Evening's final hour fades toward.
-      default: 80
       selector:
         number:
           min: 0
@@ -289,6 +273,14 @@ compute_curve:
           min: 1000
           max: 10000
           unit_of_measurement: K
+    day_brightness:
+      name: Day brightness
+      description: Brightness (0-255) for Day.
+      default: 255
+      selector:
+        number:
+          min: 0
+          max: 255
     day_end_kelvin:
       name: Day end colour temperature
       description: >-
@@ -300,6 +292,14 @@ compute_curve:
           min: 1000
           max: 10000
           unit_of_measurement: K
+    evening_brightness:
+      name: Evening brightness
+      description: Brightness (0-255) Evening holds at before its final-hour fade.
+      default: 180
+      selector:
+        number:
+          min: 0
+          max: 255
     evening_kelvin:
       name: Evening colour temperature
       description: Colour temperature (Kelvin) Evening holds at before its final-hour fade.
@@ -309,6 +309,14 @@ compute_curve:
           min: 1000
           max: 10000
           unit_of_measurement: K
+    night_brightness:
+      name: Night brightness
+      description: Brightness (0-255) for Night, and what Evening's final hour fades toward.
+      default: 80
+      selector:
+        number:
+          min: 0
+          max: 255
     night_kelvin:
       name: Night colour temperature
       description: Colour temperature (Kelvin) for Night, and what Evening's final hour fades toward.

@@ -13,12 +13,35 @@ the user's input_datetime helpers plus sunset.
 
 import math
 
-# The Kelvin value Night sits at (and what Evening's final hour fades
-# toward) when nothing overrides it - matches every bulb's native
-# color_temp range. The one place this number is allowed to be a literal;
-# every other file that needs it imports this constant instead of
-# repeating "2700" - see kelvin_for_phase's night_kelvin param.
+# The brightness/Kelvin literals every phase would use if nothing
+# overrides them - ported faithfully from the original Jinja package
+# (see CLAUDE.md). The only place these numbers are literals; every
+# other file imports the named constants (or DEFAULT_CURVE_VALUES)
+# instead of repeating them - config_flow.py's form defaults in
+# particular, so what a user sees pre-filled always matches what
+# actually happens when a field is left unset.
+DEFAULT_MORNING_BRIGHTNESS = 255
+DEFAULT_DAY_BRIGHTNESS = 255
+DEFAULT_EVENING_BRIGHTNESS = 180
+DEFAULT_NIGHT_BRIGHTNESS = 80
+DEFAULT_MORNING_KELVIN = 6667
+DEFAULT_DAY_END_KELVIN = 4000
+DEFAULT_EVENING_KELVIN = 3200
 DEFAULT_NIGHT_KELVIN = 2700
+
+# All eight, keyed exactly like coordinator.py's CURVE_KEYS - the one
+# place config_flow.py (and anything else wanting the full default set)
+# reads actual numbers from, rather than hand-copying each constant.
+DEFAULT_CURVE_VALUES = {
+    "morning_brightness": DEFAULT_MORNING_BRIGHTNESS,
+    "morning_kelvin": DEFAULT_MORNING_KELVIN,
+    "day_brightness": DEFAULT_DAY_BRIGHTNESS,
+    "day_end_kelvin": DEFAULT_DAY_END_KELVIN,
+    "evening_brightness": DEFAULT_EVENING_BRIGHTNESS,
+    "evening_kelvin": DEFAULT_EVENING_KELVIN,
+    "night_brightness": DEFAULT_NIGHT_BRIGHTNESS,
+    "night_kelvin": DEFAULT_NIGHT_KELVIN,
+}
 
 # A representative day schedule (hour-of-day), not read by anything
 # below - a single shared "sensible starting point" for anything that
@@ -91,12 +114,15 @@ def brightness_for_phase(
     now_ts: float,
     night_ts: float,
     *,
-    day_brightness: int = 255,
-    evening_brightness: int = 180,
-    night_brightness: int = 80,
+    morning_brightness: int = DEFAULT_MORNING_BRIGHTNESS,
+    day_brightness: int = DEFAULT_DAY_BRIGHTNESS,
+    evening_brightness: int = DEFAULT_EVENING_BRIGHTNESS,
+    night_brightness: int = DEFAULT_NIGHT_BRIGHTNESS,
 ) -> int:
     """Target brightness (0-255) for the given phase/instant."""
-    if day_phase in ("Morning", "Day"):
+    if day_phase == "Morning":
+        return morning_brightness
+    if day_phase == "Day":
         return day_brightness
     if day_phase == "Evening":
         fade_start_ts = night_ts - 3600
@@ -122,9 +148,9 @@ def kelvin_for_phase(
     day_start_ts: float,
     night_ts: float,
     *,
-    morning_kelvin: int = 6667,
-    day_end_kelvin: int = 4000,
-    evening_kelvin: int = 3200,
+    morning_kelvin: int = DEFAULT_MORNING_KELVIN,
+    day_end_kelvin: int = DEFAULT_DAY_END_KELVIN,
+    evening_kelvin: int = DEFAULT_EVENING_KELVIN,
     night_kelvin: int = DEFAULT_NIGHT_KELVIN,
 ) -> int:
     """Target colour temperature (Kelvin) for the given phase/instant.
@@ -165,12 +191,13 @@ def targets_for_phase(
     day_start_ts: float,
     night_ts: float,
     *,
-    day_brightness: int = 255,
-    evening_brightness: int = 180,
-    night_brightness: int = 80,
-    morning_kelvin: int = 6667,
-    day_end_kelvin: int = 4000,
-    evening_kelvin: int = 3200,
+    morning_brightness: int = DEFAULT_MORNING_BRIGHTNESS,
+    day_brightness: int = DEFAULT_DAY_BRIGHTNESS,
+    evening_brightness: int = DEFAULT_EVENING_BRIGHTNESS,
+    night_brightness: int = DEFAULT_NIGHT_BRIGHTNESS,
+    morning_kelvin: int = DEFAULT_MORNING_KELVIN,
+    day_end_kelvin: int = DEFAULT_DAY_END_KELVIN,
+    evening_kelvin: int = DEFAULT_EVENING_KELVIN,
     night_kelvin: int = DEFAULT_NIGHT_KELVIN,
 ) -> dict:
     """brightness/kelvin/kelvin_rgb/rgb_color for an already-known phase,
@@ -198,6 +225,7 @@ def targets_for_phase(
         day_phase,
         now_ts,
         night_ts,
+        morning_brightness=morning_brightness,
         day_brightness=day_brightness,
         evening_brightness=evening_brightness,
         night_brightness=night_brightness,

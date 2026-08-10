@@ -69,12 +69,13 @@ data:
   evening: "{{ today_at('18:00:00') | as_timestamp }}"
   night: "{{ today_at('22:00:00') | as_timestamp }}"
   # All optional - each defaults to the value shown, see services.yaml for the full list
-  day_brightness: 255
-  evening_brightness: 180
-  night_brightness: 80
+  morning_brightness: 255
   morning_kelvin: 6667
+  day_brightness: 255
   day_end_kelvin: 4000
+  evening_brightness: 180
   evening_kelvin: 3200
+  night_brightness: 80
   night_kelvin: 2700
 response_variable: now
 # now.phase / now.brightness / now.kelvin / now.rgb_color

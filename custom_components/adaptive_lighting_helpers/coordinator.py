@@ -48,6 +48,7 @@ than each re-deriving the subentry lookup.
 
 from __future__ import annotations
 
+import logging
 import time
 from dataclasses import dataclass
 from datetime import timedelta
@@ -61,6 +62,8 @@ import homeassistant.util.dt as dt_util
 
 from .const import SUBENTRY_TYPE_SENSOR
 from .curve import phase_at, targets_for_phase
+
+_LOGGER = logging.getLogger(__name__)
 
 UPDATE_INTERVAL = timedelta(seconds=60)
 
@@ -76,14 +79,18 @@ TIME_KEYS = (
 
 # The optional brightness/Kelvin curve fields - see config_flow.py's
 # CURVE_AND_BEHAVIOR_FIELDS. Left unset, targets_for_phase's own
-# defaults (matching curve.py's original hardcoded values) apply.
+# defaults (curve.py's DEFAULT_CURVE_VALUES) apply. Grouped by phase
+# (brightness then Kelvin, Morning through Night) rather than by
+# attribute type - this order also drives the config_flow.py form and
+# the compute_curve service schema, both built from this tuple.
 CURVE_KEYS = (
-    "day_brightness",
-    "evening_brightness",
-    "night_brightness",
+    "morning_brightness",
     "morning_kelvin",
+    "day_brightness",
     "day_end_kelvin",
+    "evening_brightness",
     "evening_kelvin",
+    "night_brightness",
     "night_kelvin",
 )
 
@@ -201,7 +208,7 @@ def _phase_override(hass: HomeAssistant, override_entity_id: str) -> str | None:
 
 class ScheduleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def __init__(self, hass: HomeAssistant, instance: ScheduleInstance) -> None:
-        super().__init__(hass, __name__, name=f"Adaptive Lighting schedule ({instance.title})", update_interval=UPDATE_INTERVAL)
+        super().__init__(hass, _LOGGER, name=f"Adaptive Lighting schedule ({instance.title})", update_interval=UPDATE_INTERVAL)
         self._config = instance.config
         self._override_entity_id = instance.override_entity_id
 

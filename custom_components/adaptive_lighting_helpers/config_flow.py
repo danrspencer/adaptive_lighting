@@ -36,7 +36,7 @@ from homeassistant.util import slugify
 
 from .const import DOMAIN, SUBENTRY_TYPE_SENSOR
 from .coordinator import CURVE_KEYS, TIME_KEYS
-from .curve import DEFAULT_SCHEDULE_HOURS
+from .curve import DEFAULT_CURVE_VALUES, DEFAULT_SCHEDULE_HOURS
 
 # Required - a subentry only exists because a user deliberately chose to
 # add a named sensor, so there's no "leave blank to skip" mode here the
@@ -53,18 +53,25 @@ _KELVIN_SELECTOR = selector.NumberSelector(
 )
 
 # Optional - a schedule with no curve customization just reuses
-# curve.py's own defaults. Built from CURVE_KEYS (coordinator.py) rather
-# than listing the 7 names again - same reasoning as TIME_FIELDS above.
+# curve.py's own defaults, shown here (default=...) rather than left
+# blank, so the form always shows what a field left untouched actually
+# does. Built from CURVE_KEYS (coordinator.py) rather than listing the
+# 8 names again - same reasoning as TIME_FIELDS above; CURVE_KEYS's own
+# order (grouped by phase: Morning brightness+Kelvin, Day, Evening,
+# Night) is what drives the field order here too. sticky_phase_override
+# goes last - it's a behaviour toggle, not part of the curve itself.
 CURVE_AND_BEHAVIOR_FIELDS = {
+    **{
+        vol.Optional(key, default=DEFAULT_CURVE_VALUES[key]): (
+            _BRIGHTNESS_SELECTOR if key.endswith("_brightness") else _KELVIN_SELECTOR
+        )
+        for key in CURVE_KEYS
+    },
     # Governs the phase-override select - see select.py. Default False:
     # an override self-clears at the next phase boundary, matching the
     # old Jinja system's behaviour. True keeps an override pinned until
     # manually set back to Auto.
     vol.Optional("sticky_phase_override", default=False): selector.BooleanSelector(),
-    **{
-        vol.Optional(key): (_BRIGHTNESS_SELECTOR if key.endswith("_brightness") else _KELVIN_SELECTOR)
-        for key in CURVE_KEYS
-    },
 }
 
 # Schedule/curve fields only, no "name" - shared by both the initial

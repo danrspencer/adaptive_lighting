@@ -20,6 +20,9 @@ def test_phase_at_boundaries():
 
 
 def test_brightness_morning_and_day_are_full():
+    # Independently configurable (morning_brightness/day_brightness),
+    # but share the same default - see test_brightness_custom_morning_and_day_values
+    # for proof they're actually separate knobs.
     assert brightness_for_phase("Morning", 0, NIGHT) == 255
     assert brightness_for_phase("Day", 0, NIGHT) == 255
 
@@ -101,8 +104,16 @@ def test_kelvin_night_kelvin_lowers_night_and_evening_tail_only():
     assert kelvin_for_phase("Evening", EVENING, EVENING, DAY_START, NIGHT, night_kelvin=2000) == 4000
 
 
-def test_brightness_custom_day_evening_night_values():
+def test_brightness_custom_morning_and_day_values():
+    # morning_brightness and day_brightness are independent knobs -
+    # setting one leaves the other at its own default.
+    assert brightness_for_phase("Morning", 0, NIGHT, morning_brightness=100) == 100
+    assert brightness_for_phase("Day", 0, NIGHT, morning_brightness=100) == 255
     assert brightness_for_phase("Day", 0, NIGHT, day_brightness=200) == 200
+    assert brightness_for_phase("Morning", 0, NIGHT, day_brightness=200) == 255
+
+
+def test_brightness_custom_evening_night_values():
     assert brightness_for_phase("Night", 0, NIGHT, night_brightness=50) == 50
     fade_start = NIGHT - 3600  # 21:00
     assert brightness_for_phase("Evening", fade_start - 1, NIGHT, evening_brightness=150) == 150
@@ -124,6 +135,10 @@ def test_targets_for_phase_kelvin_rgb_matches_kelvin():
         targets = targets_for_phase(phase, t, EVENING, DAY_START, NIGHT)
         assert targets["kelvin_rgb"] == targets["kelvin"]
         assert targets["rgb_color"] == kelvin_to_rgb(targets["kelvin"])
+
+
+def test_targets_for_phase_passes_through_morning_brightness():
+    assert targets_for_phase("Morning", 0, EVENING, DAY_START, NIGHT, morning_brightness=120)["brightness"] == 120
 
 
 def test_targets_for_phase_defaults_match_existing_literals():
