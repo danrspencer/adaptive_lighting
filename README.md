@@ -291,6 +291,9 @@ suite on push and PR across Python 3.9 and 3.13.
 
 ## Status
 
-The pure-Python core (`curve.py`, `grouping.py`) and the integration wrapping it as HA services are both
-written and unit tested, but **not yet confirmed working against a live Home Assistant instance** — see
-CLAUDE.md's "Current status" section before assuming otherwise.
+The pure-Python core (`curve.py`, `grouping.py`, `scenes.py`) and the integration wrapping it as HA services
+are both written, unit tested, and **installed via HACS and confirmed working against a live Home Assistant
+instance** — all three services verified registered and functionally correct, and the blueprint's full
+compute-groups-then-turn-on-lights path exercised end to end against real hardware. The optional day-phase/
+curve sensors (`sensor.py`) haven't been configured or tested live yet. See CLAUDE.md's "Current status"
+section for the full rundown.

@@ -368,6 +368,37 @@ some other context - not because pyscript is still part of this repo.
    WARNING by `homeassistant.reload_core_config`, so re-set it after
    calling that, not before.
 
+10. **A stray `.bak-<timestamp>` directory under `custom_components/`
+    isn't inert - it can break the domain it's a backup of.** Home
+    Assistant discovers custom integrations by scanning every directory
+    under `custom_components/` for a `manifest.json` and reading its
+    `domain` key, not by the directory's own name. A leftover
+    `custom_components/adaptive_lighting_helpers.bak-20260803-231501/`
+    (created by `scripts/link_into_ha.sh`'s own backup-before-overwrite
+    step during an earlier manual deploy, then never cleaned up) still
+    had a `manifest.json` declaring `domain: adaptive_lighting_helpers`
+    - the same domain the real, HACS-installed directory declares. When
+    Home Assistant tried to resolve the config flow handler for that
+    domain, it built the Python import path from the literal folder
+    name, dots and all - `custom_components.adaptive_lighting_helpers.
+    bak-20260803-231501` - which isn't importable, and `ha_set_integration`'s
+    config-flow call failed with a bare `404 Invalid handler specified`
+    that gave no hint the actual fault was a stray sibling directory.
+    The `ha-mcp` tool's file access couldn't help find it either -
+    `custom_components/` is readable only file-by-file (`*.py` only,
+    read-only) and not listable or deletable through it at all - so the
+    real culprit only surfaced by grepping `home-assistant.log` for the
+    domain name and finding the `.bak-` path in the error. Deleting the
+    directory on the host (via the Advanced SSH & Web Terminal add-on;
+    see lesson 3 on why not through a Samba mount) did NOT take effect
+    until a *second* full restart - Home Assistant's flow-handler
+    registry is apparently built once at startup, so un-discovering a
+    directory needs the same "restart to rescan" treatment that
+    discovering a new one does. Lesson: clean up `link_into_ha.sh`'s
+    `.bak-*` backups promptly, especially under `custom_components/` -
+    and don't expect a fix made by deleting a file mid-runtime to take
+    effect without a restart, any more than adding one would.
+
 ## Current status / what's not done
 
 **The pyscript backend has been fully replaced by a native integration.**
@@ -395,9 +426,15 @@ scene-coverage gap filling.
   work as expected against `hass.states`, `device_id`/`labels` go
   through `entity_registry`/`device_registry` (`RegistryEntry.labels`),
   and `context.user_id` comes from `hass.states.get(entity_id).context.user_id`.
-  These translations were never actually exercised against a running
-  integration (only against pyscript, a different runtime) - **treat
-  them as carried-over best guesses, not confirmed, until tested live.**
+  These translations were originally carried over from the pyscript
+  attempt (a different runtime) rather than tested directly - **now
+  confirmed against live HA state as of 2026-08-10** (see below):
+  `is_state`/`state_attr` behave as expected against `hass.states`, and
+  a full blueprint run exercised `manually_set()`'s `context_user_id`
+  path with no errors. `device_id`/`labels` were exercised too (no
+  labelled `no_combined_transition` lights existed to hit the non-empty
+  branch, but the lookup calls themselves completed cleanly against the
+  real entity/device registries).
 - The blueprint's action: block now calls
   `adaptive_lighting_helpers.compute_lighting_groups` instead of
   `pyscript.compute_lighting_groups` - a one-line change, same
@@ -417,53 +454,77 @@ scene-coverage gap filling.
   state changes) recomputes everything in one pass each time rather
   than staggering cadences the way the Jinja version did - `curve.py`'s
   functions are cheap enough that recomputing the 289-point curve every
-  60 seconds is a non-issue. **Also untested live** - same caveat as
-  the adapter functions below.
-- **Not yet deployed or tested against a live Home Assistant instance
-  at all.** Everything above is written, unit-tested (`pytest`, 26/26
-  passing), and committed - but this session ran out before actually
-  installing the new integration on the live instance and confirming
-  the services (or the sensors) register. Next steps, in order:
-  1. Get `custom_components/adaptive_lighting_helpers/` onto the live
-     host - either `scripts/link_into_ha.sh` (proven to work this way
-     for the blueprint and, before it was removed, pyscript) or
-     actually trying the HACS custom-repository flow for the first
-     time (untested - if it works, that's the better long-term answer
-     since it's what end users would actually do).
-  2. Full restart (new `custom_components` aren't discovered by a
-     reload), then add via Settings → Devices & Services → Add
-     Integration → "Adaptive Lighting Helpers" - filling in the five
-     schedule fields with this instance's actual `input_datetime.morning`/
-     `day`/`evening_earliest`/`evening_latest`/`night` entities if the
-     sensors are wanted too.
-  3. Check `ha_list_services(domain="adaptive_lighting_helpers")` for
-     all three services, then actually call `compute_lighting_groups`
-     against a real light before trusting the `__init__.py` adapter
-     guesses above. If sensors were configured, check they actually
-     appear at the forced entity_ids (`sensor.morning_start` etc.) -
-     if the live `packages/adaptive_lighting.yaml` sensors of the same
-     name are still active at that point, expect a `_2` suffix instead;
-     see the note in `sensor.py`'s docstring.
-  4. ~~Clean up the live instance's pyscript-era leftovers~~ **Done.**
-     `/config/pyscript` (both the app and module directories, plus the
-     dangling `.bak-*` symlinks from lesson 7's incident) and
-     `packages/adaptive_lighting_pyscript.yaml` were deleted from the
-     live host directly. The pyscript HACS integration itself was
-     deliberately left installed (harmless with nothing left to load;
-     cheap to remove later if wanted). Consequence: `automation.
-     living_room_lights_new` will show "Service not found:
-     pyscript.compute_lighting_groups" until step 1-3 above actually
-     happen - expected, not a regression (motion on/off and reconcile
-     turn-off are unaffected, only the adaptive brightness/colour step
-     no-ops). The dev/test git-sync automation was torn down the same
-     way at the same time - see the note about it further down this
-     list.
-  5. **Once the new sensors are confirmed working, retire the live
+  60 seconds is a non-issue. **Still untested live** - config entry was
+  added with all five schedule fields blank this pass (services only,
+  deliberately - see below), so no sensors have been set up or
+  confirmed yet. Same caveat as before, just narrower in scope now.
+- **Deployed via HACS and confirmed working against the live Home
+  Assistant instance, as of 2026-08-10.** Installed through the actual
+  HACS custom-repository flow this time - `danrspencer/adaptive_lighting`,
+  category "Integration" - rather than `scripts/link_into_ha.sh`,
+  confirming that path works end to end for the first time. This is the
+  better long-term answer since it's what end users would actually do;
+  `link_into_ha.sh` remains for local iteration before a change is
+  pushed. Hit one new blocker along the way: a stray `.bak-*` directory
+  left under `custom_components/` from an earlier manual deploy broke
+  config-flow resolution until removed and HA restarted a second time -
+  see lesson 10 above for the full story.
+
+  Added via Settings → Devices & Services → Add Integration → "Adaptive
+  Lighting Helpers" with all five schedule fields left blank -
+  services only, no sensors, so as not to conflate two untested things
+  in one pass. All three services confirmed registered
+  (`ha_list_services(domain="adaptive_lighting_helpers")`) and each
+  exercised for real, not just installed:
+  - `compute_curve` called directly with hand-supplied boundaries -
+    returned the correct phase/brightness/Kelvin.
+  - `compute_lighting_groups` called directly against `light.kitchen_spots`
+    (off at the time) - returned one correct `combined` group at full
+    target brightness.
+  - `automation.living_room_lights_new` manually triggered end-to-end
+    (`automation.trigger`) - the full blueprint → `compute_lighting_groups`
+    → `light.turn_on` path, traced with zero errors
+    (`ha_get_automation_traces`), and `light.living_room_pendant_1`
+    actually turned on at brightness 255 / 5952K against a computed
+    target of 255 / 5929K - the small Kelvin delta being exactly the
+    kind of device-side rounding the tolerance check in `grouping.py`
+    exists to absorb, seen here for the first time against a real bulb
+    rather than a fake in a test.
+
+  This confirms the `__init__.py` adapter's HA-specific translations
+  (documented above) hold up against real state, registries, and
+  context - no longer carried-over guesses from the pyscript era.
+
+  **Still open:**
+  1. The optional day-phase/curve sensors (`sensor.py`) - not set up
+     this pass (see above). Configuring them means filling in this
+     instance's actual `input_datetime.morning`/`day`/`evening_earliest`/
+     `evening_latest`/`night` entities via the integration's Configure
+     screen, then checking the sensors land at the forced entity_ids
+     (`sensor.morning_start` etc. - expect a `_2` suffix if the live
+     `packages/adaptive_lighting.yaml` sensors of the same name are
+     still active; see `sensor.py`'s docstring).
+  2. **Once the sensors are confirmed working, retire the live
      `packages/adaptive_lighting.yaml`** (or at least its generic
      boundary/phase/brightness/curve parts - the household-specific
      nightlight and IKEA-diagnostic sensors have no replacement here
      and would need to move somewhere else first, or just stay as a
      much smaller leftover package).
+  3. Three stale `service_not_found` repairs are still showing under
+     Settings → Repairs - two on `automation.living_room_lights_new`
+     (one from the pyscript era, one from before this session's fix)
+     and one on the already-removed git-sync automation (see below).
+     Home Assistant doesn't auto-clear a repair just because a later
+     run succeeds; these need dismissing by hand. Cosmetic only -
+     nothing is actually broken.
+- **The live instance's pyscript-era leftovers were cleaned up in an
+  earlier session, before this repo's HACS install existed.**
+  `/config/pyscript` (both the app and module directories, plus the
+  dangling `.bak-*` symlinks from lesson 7's incident) and
+  `packages/adaptive_lighting_pyscript.yaml` were deleted from the live
+  host directly. The pyscript HACS integration itself was deliberately
+  left installed (harmless with nothing left to load; cheap to remove
+  later if wanted).
 - **The dev/test git-sync automation has been removed.** It used to
   poll this repo for new commits and re-run `link_into_ha.sh`
   automatically (a `shell_command` + `time_pattern` automation,
@@ -472,7 +533,7 @@ scene-coverage gap filling.
   `scripts/adaptive_lighting_sync.sh` on the live host - never
   committed to this repo, see git history around the "Rewire blueprint
   to pyscript, add git auto-sync..." commit for why). Torn down at the
-  same time as the pyscript cleanup below, since the whole point of
+  same time as the pyscript cleanup above, since the whole point of
   moving to a real HACS integration is that HACS handles install/update
   natively - a git-polling shell script doing the same job by hand is
   exactly the thing this migration was meant to replace, not something
