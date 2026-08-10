@@ -76,21 +76,16 @@
       const state = (value, attributes = {}) => ({ state: String(value), attributes });
 
       const states = {
-        'sensor.morning_start': state('', { timestamp: data.boundaries.morning }),
-        'sensor.day_start': state('', { timestamp: data.boundaries.day }),
-        'sensor.evening_start': state('', {
-          timestamp: data.boundaries.evening,
-          earliest: data.boundaries.evening_earliest,
-          latest: data.boundaries.evening_latest,
-        }),
-        'sensor.night_start': state('', { timestamp: data.boundaries.night }),
         'sun.sun': state('above_horizon', {
           next_rising: new Date(data.sun.sunrise * 1000).toISOString(),
           next_setting: new Date(data.sun.sunset * 1000).toISOString(),
         }),
         'sensor.adaptive_lighting_curve': state(new Date().toISOString(), { points: data.points }),
         // Combined entity: state = phase, attributes = brightness/color_temp/
-        // rgb_color - matches sensor.py's _AdaptiveLightingSensor shape.
+        // rgb_color/morning_start/day_start/evening_start/night_start/
+        // evening_earliest/evening_latest - matches sensor.py's
+        // _AdaptiveLightingSensor shape (the four boundary sensors this
+        // used to read separately were folded into attributes here).
         // now_rgb_color is generated with NIGHT_FLOOR_KELVIN below 2700
         // (see generate_preview_data.py) specifically so this preview
         // demonstrates the card's RGB overlay, not just its absence.
@@ -99,6 +94,12 @@
           brightness: data.now_brightness,
           color_temp: data.now_kelvin,
           rgb_color: data.now_rgb_color,
+          morning_start: data.boundaries.morning,
+          day_start: data.boundaries.day,
+          evening_start: data.boundaries.evening,
+          night_start: data.boundaries.night,
+          evening_earliest: data.boundaries.evening_earliest,
+          evening_latest: data.boundaries.evening_latest,
         }),
       };
 

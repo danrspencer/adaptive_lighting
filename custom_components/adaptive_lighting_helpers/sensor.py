@@ -3,41 +3,43 @@ Day-phase/curve sensors, backed by coordinator.py - a native
 replacement for a Jinja `packages/*.yaml` template-sensor setup (see
 CLAUDE.md for the live version this ports). One set of these per
 schedule instance (see coordinator.py's ScheduleInstance/
-schedule_instances) - the default config entry (if it has schedule
-times configured - the compute_lighting_groups/compute_curve/
-compute_scene_coverage/apply_lighting services work without any of
-this) plus one per named "sensor" subentry.
+schedule_instances) - one per named "sensor" subentry.
 
-The default instance's entity IDs are forced to match the sensor names
-the original Jinja setup used (sensor.morning_start,
-sensor.adaptive_lighting_curve, etc.) where a like-for-like equivalent
-exists, so this is a drop-in replacement for anything already pointed
-at those names (the dashboard card's DEFAULT_ENTITIES, in particular).
-If those entity_ids are already taken by the Jinja package you're
-migrating away from, remove that package first - HA will otherwise
-suffix these with _2. Named instances get the same suffixes prefixed
-with their slugified name (e.g. sensor.living_room_morning_start).
+Entity IDs are prefixed with the sensor's slugified name (e.g.
+sensor.living_room_adaptive_lighting), or bare if the name was left
+blank when the sensor was added - see coordinator.py's
+schedule_instances().
 
-One exception: day-phase and the brightness/colour-temperature "right
-now" values are combined into a single sensor.adaptive_lighting here
-(state = phase, attributes = phase/brightness/color_temp) rather than
-three separate sensors - `brightness`/`color_temp` are exactly the
-attribute names the blueprint's `adaptive_sensor` input already reads
-via state_attr(), matching the shape the old packages/adaptive_lighting.yaml
+Day-phase, the brightness/colour-temperature "right now" values, and
+today's four phase-boundary timestamps are all combined into a single
+sensor.adaptive_lighting (state = phase, attributes = phase/brightness/
+color_temp/morning_start/day_start/evening_start/night_start/
+evening_earliest/evening_latest) rather than separate sensors per
+value - `brightness`/`color_temp` are exactly the attribute names the
+blueprint's `adaptive_sensor` input already reads via state_attr(),
+matching the shape the old packages/adaptive_lighting.yaml
 `sensor.solar_adaptive_lighting` sensor used, so this is a drop-in for
-that role too. A standalone day-phase entity was considered and
-dropped in favour of this - anything that wants to react to just the
-phase changing can use a `platform: state, attribute: phase` trigger
-on this entity (the blueprint already uses the equivalent
-whole-attribute-set version of this pattern for its own adaptive_attr
-trigger), no separate entity required.
+that role. The four boundary timestamps used to be their own
+sensor.morning_start/day_start/evening_start/night_start entities -
+folded into attributes here instead (four extra always-on entities per
+sensor that exist just to be read as one-off attribute lookups was
+judged not worth it; a phase-change automation reads
+sensor.adaptive_lighting's phase attribute directly, and anything that
+specifically wants a boundary time - the dashboard card, in particular
+- reads it off this same entity's attributes). A standalone day-phase
+entity was considered and dropped for the same reason - anything that
+wants to react to just the phase changing can use a
+`platform: state, attribute: phase` trigger on this entity (the
+blueprint already uses the equivalent whole-attribute-set version of
+this pattern for its own adaptive_attr trigger), no separate entity
+required.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from homeassistant.components.sensor import SensorDeviceClass, SensorEntity
+from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -52,17 +54,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     for instance in schedule_instances(entry):
         coordinator: ScheduleCoordinator = hass.data[DOMAIN][instance.key]
         entities = [
-            _BoundarySensor(coordinator, instance, "morning_ts", "Morning Start", "morning_start"),
-            _BoundarySensor(coordinator, instance, "day_ts", "Day Start", "day_start"),
-            _BoundarySensor(
-                coordinator,
-                instance,
-                "evening_ts",
-                "Evening Start",
-                "evening_start",
-                extra_keys={"earliest": "evening_earliest_ts", "latest": "evening_latest_ts"},
-            ),
-            _BoundarySensor(coordinator, instance, "night_ts", "Night Start", "night_start"),
             _AdaptiveLightingSensor(coordinator, instance),
             _CurveSensor(coordinator, instance),
         ]
@@ -76,42 +67,6 @@ class _ScheduleSensorBase(CoordinatorEntity[ScheduleCoordinator], SensorEntity):
         super().__init__(coordinator)
         self._attr_unique_id = f"{instance.key}_{unique_id_suffix}"
         self.entity_id = f"sensor.{instance.prefix}{forced_object_id}"
-
-
-class _BoundarySensor(_ScheduleSensorBase):
-    _attr_device_class = SensorDeviceClass.TIMESTAMP
-
-    def __init__(
-        self,
-        coordinator: ScheduleCoordinator,
-        instance: ScheduleInstance,
-        key: str,
-        name: str,
-        object_id: str,
-        extra_keys: dict[str, str] | None = None,
-    ) -> None:
-        super().__init__(coordinator, instance, key, object_id)
-        self._key = key
-        self._attr_name = f"{instance.title} {name}" if instance.title else name
-        self._extra_keys = extra_keys or {}
-
-    @property
-    def native_value(self):
-        ts = self.coordinator.data.get(self._key)
-        return dt_util.utc_from_timestamp(ts) if ts is not None else None
-
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
-        # Kept as a plain "timestamp" attribute (not just the native
-        # TIMESTAMP device_class value) because the dashboard card and
-        # compute_curve's inputs both read state_attr(..., 'timestamp')
-        # directly, matching the Jinja version this replaces. Evening's
-        # extra earliest/latest attributes let the dashboard card show
-        # why evening landed where it did without a separate entity.
-        attrs = {"timestamp": self.coordinator.data.get(self._key)}
-        for attr_name, data_key in self._extra_keys.items():
-            attrs[attr_name] = self.coordinator.data.get(data_key)
-        return attrs
 
 
 class _AdaptiveLightingSensor(_ScheduleSensorBase):
@@ -138,6 +93,16 @@ class _AdaptiveLightingSensor(_ScheduleSensorBase):
             # color_rgb selector expect (see README's "Bring your own
             # sensor" section for the full attribute contract).
             "rgb_color": list(rgb_color) if rgb_color is not None else None,
+            # Today's four phase-boundary timestamps, plus the two
+            # configured bounds evening_start was actually clamped
+            # between - the dashboard card reads all six of these
+            # directly off this entity (see www/adaptive-lighting-curve-card.js).
+            "morning_start": data.get("morning_ts"),
+            "day_start": data.get("day_ts"),
+            "evening_start": data.get("evening_ts"),
+            "night_start": data.get("night_ts"),
+            "evening_earliest": data.get("evening_earliest_ts"),
+            "evening_latest": data.get("evening_latest_ts"),
         }
 
 

@@ -23,14 +23,12 @@
  */
 
 const DEFAULT_ENTITIES = {
-  morning: 'sensor.morning_start',
-  day: 'sensor.day_start',
-  evening: 'sensor.evening_start',
-  night: 'sensor.night_start',
   // phase/brightness_now/kelvin_now all read from the same combined
-  // entity by default (state = phase, attributes = brightness/color_temp) -
-  // see the fallback in `set hass()` below for custom configs still
-  // pointing at separate sensors.
+  // entity by default (state = phase, attributes = brightness/color_temp/
+  // morning_start/day_start/evening_start/night_start/evening_earliest/
+  // evening_latest - see sensor.py's _AdaptiveLightingSensor) - see the
+  // fallback in `set hass()` below for custom configs still pointing at
+  // separate sensors.
   phase: 'sensor.adaptive_lighting',
   brightness_now: 'sensor.adaptive_lighting',
   kelvin_now: 'sensor.adaptive_lighting',
@@ -156,36 +154,30 @@ class AdaptiveLightingCurveCard extends HTMLElement {
     const e = this._entities;
     const get = (id) => hass.states[id];
 
-    const morning = get(e.morning);
-    const day = get(e.day);
-    const evening = get(e.evening);
-    const night = get(e.night);
-    if (!morning || !day || !evening || !night) {
-      this._renderError(
-        `Missing entity: ${[e.morning, e.day, e.evening, e.night]
-          .filter((id) => !hass.states[id])
-          .join(', ')}`
-      );
+    const phase = get(e.phase);
+    if (!phase) {
+      this._renderError(`Missing entity: ${e.phase}`);
       return;
     }
 
-    const phase = get(e.phase);
     const sun = get(e.sun);
     const curve = get(e.curve);
     const brightnessNow = get(e.brightness_now);
     const kelvinNow = get(e.kelvin_now);
 
+    // Today's four phase-boundary timestamps live as attributes on the
+    // phase entity itself (see sensor.py's _AdaptiveLightingSensor) -
+    // there's no separate sensor.morning_start/day_start/evening_start/
+    // night_start any more.
     const boundaries = {
-      morning: Number(morning.attributes.timestamp),
-      day: Number(day.attributes.timestamp),
-      evening: Number(evening.attributes.timestamp),
-      night: Number(night.attributes.timestamp),
-      // Only present on sensor.evening_start - see coordinator.py's
-      // evening_earliest_ts/evening_latest_ts. Absent (null) if the
-      // integration's evening_earliest_time/evening_latest_time
-      // weren't configured.
-      eveningEarliest: evening.attributes.earliest != null ? Number(evening.attributes.earliest) : null,
-      eveningLatest: evening.attributes.latest != null ? Number(evening.attributes.latest) : null,
+      morning: Number(phase.attributes.morning_start),
+      day: Number(phase.attributes.day_start),
+      evening: Number(phase.attributes.evening_start),
+      night: Number(phase.attributes.night_start),
+      // Absent (null) if the sensor's evening_earliest_time/
+      // evening_latest_time weren't configured.
+      eveningEarliest: phase.attributes.evening_earliest != null ? Number(phase.attributes.evening_earliest) : null,
+      eveningLatest: phase.attributes.evening_latest != null ? Number(phase.attributes.evening_latest) : null,
     };
 
     const pointsRaw = curve && curve.attributes && curve.attributes.points;

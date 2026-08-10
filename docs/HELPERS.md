@@ -116,20 +116,18 @@ only exists once you add a sensor.
 
 You can add any number of sensors this way, each independent, each with its own schedule and curve. Entities are
 prefixed with the sensor's slugified name — naming one "Living Room" gets you
-`sensor.living_room_adaptive_lighting`, `sensor.living_room_morning_start`, `select.living_room_adaptive_lighting_phase`,
-and so on. **Leave the name blank** to get bare, unprefixed entity IDs instead (`sensor.adaptive_lighting`,
-`sensor.morning_start`, etc.) — matching what a Jinja `packages/*.yaml` day-phase setup would typically use, so
-this is a drop-in replacement for one if you're migrating away from it (remove that package first, or these will
-get suffixed `_2`). At most one sensor may leave the name blank — adding a second one is treated as a name
-collision, the same as reusing an existing name.
+`sensor.living_room_adaptive_lighting`, `select.living_room_adaptive_lighting_phase`, and so on. **Leave the name
+blank** to get bare, unprefixed entity IDs instead (`sensor.adaptive_lighting` etc.) — matching what a Jinja
+`packages/*.yaml` day-phase setup would typically use, so this is a drop-in replacement for one if you're
+migrating away from it (remove that package first, or these will get suffixed `_2`). At most one sensor may
+leave the name blank — adding a second one is treated as a name collision, the same as reusing an existing name.
 
-Each sensor produces, computed the same way `compute_curve` computes them and refreshed every 60 seconds:
+Each sensor produces two entities, computed the same way `compute_curve` computes them and refreshed every 60
+seconds:
 
 | Entity | What it is |
 |---|---|
-| `sensor.<name_>morning_start` / `day_start` / `night_start` | Today's boundary, `attributes.timestamp` |
-| `sensor.<name_>evening_start` | Today's evening boundary, `attributes.timestamp`, plus `attributes.earliest`/`latest` (the two configured bounds, for reference) |
-| `sensor.<name_>adaptive_lighting` | Combined "right now" reading — state is the phase (Morning/Day/Evening/Night), `attributes.brightness` (0-255), `attributes.color_temp` (Kelvin), and `attributes.rgb_color` (`[r, g, b]`) are exactly the attribute names `apply_lighting`'s `sensor_entity_id` and the blueprint's `adaptive_sensor` input already read, so this can be pointed at directly |
+| `sensor.<name_>adaptive_lighting` | Combined "right now" reading — state is the phase (Morning/Day/Evening/Night), `attributes.brightness` (0-255), `attributes.color_temp` (Kelvin), and `attributes.rgb_color` (`[r, g, b]`) are exactly the attribute names `apply_lighting`'s `sensor_entity_id` and the blueprint's `adaptive_sensor` input already read, so this can be pointed at directly. Also carries today's four phase-boundary timestamps as `attributes.morning_start`/`day_start`/`evening_start`/`night_start`, plus `attributes.evening_earliest`/`evening_latest` (the two configured bounds Evening was actually clamped between) — no separate boundary sensors, since a phase-change automation only needs a `platform: state, attribute: phase` trigger on this same entity, and anything that specifically wants a boundary time (the dashboard card, in particular) can read it straight off these attributes |
 | `sensor.<name_>adaptive_lighting_curve` | `attributes.points`: the full day as 289 `{t, brightness, kelvin, kelvin_rgb}` samples (`kelvin_rgb` always equals `kelvin`, kept as a separate key since some consumers already read it) — what the [dashboard card](../README.md#previewing-the-dashboard-card) reads. Deliberately does **not** follow a manual phase override (see below) — it's a full-day schedule, not a "right now" value |
 | `select.<name_>adaptive_lighting_phase` | Manual override — `Auto` (default) or a specific phase. Pinning a phase holds it until the *schedule itself* next moves on (e.g. override to `Day` during `Evening` and it still becomes `Night` once Evening would naturally have ended, rather than staying on `Day` forever) — tick "Keep a manual phase override until cleared by hand" when adding/reconfiguring the sensor to disable that and keep an override until you clear it yourself instead |
 

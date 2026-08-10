@@ -982,6 +982,39 @@ crash was out of the way**:
   behaviour toggle, not part of the curve itself, so it doesn't belong
   ahead of the numbers it's unrelated to.
 
+**Boundary sensors removed, folded into attributes - user feedback
+after actually seeing them live.** Each sensor used to produce six
+entities: `sensor.<name_>morning_start`/`day_start`/`evening_start`/
+`night_start` (one per phase boundary) plus the combined
+`sensor.<name_>adaptive_lighting` and `sensor.<name_>adaptive_lighting_curve`.
+The four boundary sensors were called out directly as noise: "If I want
+a boundary automation I'll just trigger it on the phase change and
+check that the phase is the one I want" - i.e. `platform: state,
+attribute: phase` on the combined sensor already covers the automation
+case those existed for, so four always-on entities per sensor just to
+occasionally read one attribute wasn't earning their keep.
+
+Removed `sensor.py`'s `_BoundarySensor` class entirely; the same six
+values (`morning_ts`/`day_ts`/`evening_ts`/`night_ts`/
+`evening_earliest_ts`/`evening_latest_ts` already in
+`coordinator.py`'s data - nothing new to compute) now go out as
+`attributes.morning_start`/`day_start`/`evening_start`/`night_start`/
+`evening_earliest`/`evening_latest` on `_AdaptiveLightingSensor`
+instead. Two entities per sensor now, not six.
+
+The dashboard card was a real consumer of the four removed sensors
+(boundary lines on the chart, the evening clamp-band explanation) -
+not just docs to update. `DEFAULT_ENTITIES` lost its `morning`/`day`/
+`evening`/`night` keys; `set hass()` now reads all six boundary values
+off the `phase` entity's attributes instead of four separate entity
+lookups, and the "missing entity" check narrowed from four entities to
+one. `dashboard/preview.html`'s fake `hass.states` updated to match
+(the four fake boundary-sensor entries collapsed into extra attributes
+on the fake `sensor.adaptive_lighting`). Verified by actually serving
+the preview over HTTP and screenshotting it in the browser afterward,
+not just by reading the diff - boundary lines, labels, and the evening
+clamp-band footnote all rendered correctly with zero console errors.
+
 ## Open question: dashboard card as a HACS plugin?
 
 The integration half of this used to be an open question - now
