@@ -302,8 +302,10 @@ variables:
   # off adaptive_sensor (and applies rgb_color, tolerance-checking,
   # two-step transitions, etc.) rather than this blueprint pre-computing
   # sensor_brightness/sensor_color_temp_kelvin and dispatching itself.
-  sensor_service: "{{ state_attr(adaptive_sensor, 'service') | default('light.turn_on', true) }}"
-  sensor_scene_id: "{{ state_attr(adaptive_sensor, 'scene_id') | default('', true) }}"
+  # (sensor_service/sensor_scene_id, a "sensor requests scene.apply"
+  # passthrough, were removed here too - dead code: scene.apply's real
+  # service schema only accepts entities/transition, not a scene_id
+  # field, so that call never actually did anything.)
   # Every light this automation is allowed to touch, resolved from light_target
   resolved_entities: >
     {% set ns = namespace(entities=[]) %}
@@ -438,33 +440,22 @@ action:
               entity_id: "{{ desired_scene }}"
             data:
               transition: "{{ script_transition }}"
-      - choose:
-          - conditions:
-              - condition: template
-                value_template: "{{ sensor_service == 'scene.apply' }}"
-            sequence:
-              - alias: "Sensor is in scene mode - apply its scene"
-                action: scene.apply
-                data:
-                  scene_id: "{{ sensor_scene_id }}"
-                  transition: "{{ script_transition }}"
-                  activated_transition: "{{ script_transition }}"
-        default:
-          # Reachability, multiplier bucketing, tolerance-based
-          # "already correct" checks, manual-override protection,
-          # two-step/combined routing, and RGB-vs-colour-temp dispatch
-          # are all handled by the Adaptive Lighting Helpers integration
-          # (a standalone HACS add-on, not specific to this blueprint -
-          # see its README) - this used to be ~90 lines of namespace-loop
-          # Jinja, then a repeat/parallel dispatch block, here.
-          # apply_lighting reads brightness/colour straight off
-          # adaptive_sensor itself and issues the light.turn_on/turn_off
-          # calls directly.
-          - alias: "Apply adaptive lighting (Adaptive Lighting Helpers)"
-            action: adaptive_lighting_helpers.apply_lighting
-            data:
-              entities: "{{ adaptive_target_entities }}"
-              brightness_multipliers: "{{ brightness_multipliers }}"
-              sensor_entity_id: "{{ adaptive_sensor }}"
-              transition: "{{ script_transition }}"
-              prefer_rgb_color: "{{ prefer_rgb_color }}"
+      # Reachability, multiplier bucketing, tolerance-based "already
+      # correct" checks, manual-override protection, two-step/combined
+      # routing, and RGB-vs-colour-temp dispatch are all handled by the
+      # Adaptive Lighting Helpers integration (a standalone HACS add-on,
+      # not specific to this blueprint - see its README) - this used to
+      # be ~90 lines of namespace-loop Jinja, then a repeat/parallel
+      # dispatch block, then a scene-mode choose: branch (removed - see
+      # CLAUDE.md on why the "sensor requests scene.apply" mechanism was
+      # dead code), here. apply_lighting reads brightness/colour
+      # straight off adaptive_sensor itself and issues the
+      # light.turn_on/turn_off calls directly.
+      - alias: "Apply adaptive lighting (Adaptive Lighting Helpers)"
+        action: adaptive_lighting_helpers.apply_lighting
+        data:
+          entities: "{{ adaptive_target_entities }}"
+          brightness_multipliers: "{{ brightness_multipliers }}"
+          sensor_entity_id: "{{ adaptive_sensor }}"
+          transition: "{{ script_transition }}"
+          prefer_rgb_color: "{{ prefer_rgb_color }}"

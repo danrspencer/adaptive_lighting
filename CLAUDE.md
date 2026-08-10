@@ -710,13 +710,18 @@ The blueprint actually has two independent scene mechanisms, not one:
   actually been met.
 - **B) `sensor_service == 'scene.apply'`.** A separate, older mechanism
   read off the *adaptive sensor's* attributes (not a blueprint input) -
-  if set, calls `scene.apply` with `data: {scene_id: sensor_scene_id,
-  ...}`. **This is very likely dead code**: `scene.apply`'s actual
-  service schema only accepts `entities` (a state-map) and `transition`
-  - there's no `scene_id` field, so this call has probably never done
-  anything. Confirmed by reading the blueprint precisely, not by
-  running it live. User's call once surfaced: drop it entirely rather
-  than fix or keep it - just not done yet, still there today.
+  if set, called `scene.apply` with `data: {scene_id: sensor_scene_id,
+  ...}`. **This was dead code**: `scene.apply`'s actual service schema
+  only accepts `entities` (a state-map) and `transition` - there's no
+  `scene_id` field, so this call had probably never done anything.
+  Confirmed by reading the blueprint precisely, not by running it live.
+  **Removed** (along with the now-unused `sensor_service`/
+  `sensor_scene_id` variables) once this was surfaced - unlike A, this
+  wasn't parked, since it's simple dead-code deletion rather than an
+  architecture decision. The blueprint's `default:` action sequence is
+  now just the scene.turn_on `if:` (mechanism A, still inline, still
+  parked) followed directly by the `apply_lighting` call - no more
+  `choose:` wrapper between them.
 
 Two designs were discussed for moving A into `apply_lighting`:
 
