@@ -674,6 +674,99 @@ of planning this, both worth remembering if it's revisited:
   copy of the Kelvin→RGB algorithm; consolidated onto `curve.kelvin_to_rgb`
   while in there rather than adding a fourth copy.
 
+**Duplication pass, prompted by the user directly asking for one after
+the RGB work above.** Found and fixed three real cases (all from the
+RGB work itself, not pre-existing): `curve.targets_for_phase()` now
+the single place that turns a phase into brightness/kelvin/kelvin_rgb/
+rgb_color - previously hand-copied in `compute_curve`'s handler,
+`coordinator.py`'s "now" computation, its 289-point curve loop, and the
+preview generator (four places, could silently drift). `curve.
+DEFAULT_NIGHT_FLOOR_KELVIN` replaces the literal `2700` repeated across
+three files. `grouping.py`'s `_already_set`/`_already_set_rgb` shared
+brightness-tolerance-check lines, extracted to `_brightness_close()`.
+Also surfaced two *pre-existing*, already-documented duplications
+elsewhere in this file (target-resolution Jinja duplicated 3x in the
+blueprint, deliberately kept - see "Considered and explicitly rejected"
+above; and scene-coverage logic duplicated between the blueprint and
+`compute_scene_coverage` - see below, this one *was* pursued this
+session, then parked).
+
+**Parked: moving scene handling out of the blueprint into
+`apply_lighting`.** Explored in depth, decided against pursuing further
+*this session* - not implemented, blueprint's scene handling is
+untouched. Recorded here so the next session doesn't have to re-derive
+any of this.
+
+The blueprint actually has two independent scene mechanisms, not one:
+
+- **A) `scene_template` → coverage → partial handoff.** The
+  `desired_scene`/`scene_covered_entities`/`scene_valid`/`scene_active`
+  Jinja block, which is a byte-for-byte semantic match for
+  `compute_scene_coverage` (verified by comparing the two line by line -
+  same existence check, same "covered entities must all be within
+  scope" validation, same fallback-to-uncovered behaviour). This is the
+  one flagged as "revisit once confirmed live" back when
+  `compute_scene_coverage` was first added - that condition has now
+  actually been met.
+- **B) `sensor_service == 'scene.apply'`.** A separate, older mechanism
+  read off the *adaptive sensor's* attributes (not a blueprint input) -
+  if set, calls `scene.apply` with `data: {scene_id: sensor_scene_id,
+  ...}`. **This is very likely dead code**: `scene.apply`'s actual
+  service schema only accepts `entities` (a state-map) and `transition`
+  - there's no `scene_id` field, so this call has probably never done
+  anything. Confirmed by reading the blueprint precisely, not by
+  running it live. User's call once surfaced: drop it entirely rather
+  than fix or keep it - just not done yet, still there today.
+
+Two designs were discussed for moving A into `apply_lighting`:
+
+1. **Straight port**: `apply_lighting` gains optional `scene_entity_id`/
+   `scope_entities`, calls `compute_scene_coverage` internally, then
+   `scene.turn_on` (if active) + light dispatch on `uncovered_entities` -
+   otherwise identical behaviour to today. Hit a real complication:
+   `scene_active` is currently also read by the blueprint's own
+   `condition:` block (gates the adaptive/extra tick so it doesn't
+   redundantly reapply while a scene owns the room) - and `condition:`
+   can't call services, the exact same constraint already documented
+   above for why target-resolution extraction was rejected. Moving A
+   server-side means that specific optimisation is lost - the tick
+   would still fire and call `apply_lighting`/`scene.turn_on` every time,
+   just as idempotent no-ops instead of not running at all. Functionally
+   harmless, not behaviourally identical. User's call when this was
+   surfaced: accept that tradeoff if this gets picked back up (don't
+   leave a partial scene_active duplicate in `condition:` just to avoid
+   it) - but the whole thing got parked before this was implemented.
+2. **Bigger idea, raised by the user**: instead of calling `scene.turn_on`
+   at all, read the scene's own *stored per-entity target values*
+   (brightness/colour) and feed them through `apply_lighting`'s existing
+   grouping/multiplier pipeline like any other target - so a brightness
+   multiplier could scale a scene's own brightness, which today it
+   explicitly cannot (scene-covered entities are excluded from
+   multiplier application entirely). Checked this for real rather than
+   guessing: `ha_config_get_scene("kitchen_night")` against the live
+   instance confirms scenes do store full per-entity attributes
+   (`brightness`, `hs_color`/`rgb_color`/`xy_color`, `effect`, etc.) and
+   there's a documented way to read them. But real complications, not
+   hypothetical: (a) a scene captures whichever colour mode was active
+   when recorded - `kitchen_night`'s own config has one light in `xy`
+   mode with `color_temp_kelvin: null` and another with only `hs_color`,
+   no `color_temp` at all, so extraction needs real per-mode handling
+   `apply_lighting` doesn't have today (it only understands colour-temp
+   and RGB); (b) reading a scene's *stored config* (vs. the live
+   `entity_id` attribute `compute_scene_coverage` already reads) is a
+   different, less-trodden Home Assistant surface than the
+   `hass.states`/`entity_registry`/`device_registry` trio this
+   integration relies on everywhere else - exactly the class of
+   internals lessons 7-9 warn about getting burned by; (c) scenes can
+   carry `effect` and non-light domains `apply_lighting` has no model
+   for at all. Judged a genuinely bigger feature - closer to "partially
+   reimplement scene reproduction with brightness scaling" - than
+   something to fold into an already-long session. Not started.
+
+Whoever picks this back up: start from design 1 (the straight port) as
+the smaller, already-mostly-scoped piece; treat design 2 as its own
+separate decision, not a prerequisite.
+
 ## Open question: dashboard card as a HACS plugin?
 
 The integration half of this used to be an open question - now
