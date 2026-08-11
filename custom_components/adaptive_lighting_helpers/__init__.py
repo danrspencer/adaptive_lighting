@@ -38,7 +38,7 @@ from typing import Any
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse
+from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse, callback
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
@@ -430,7 +430,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             await coordinator.async_config_entry_first_refresh()
             hass.data.setdefault(DOMAIN, {})[instance.key] = coordinator
 
+        @callback
         def _refresh_all(event) -> None:
+            # @callback marks this as event-loop-safe for HA's job
+            # dispatcher - without it, a plain function here gets run in
+            # the executor thread pool instead (HassJobType.Executor),
+            # and hass.async_create_task() is only safe to call from the
+            # event loop itself. Confirmed against HA core source
+            # (get_hassjob_callable_job_type) after this fired a real
+            # "calls hass.async_create_task from a thread other than the
+            # event loop" RuntimeError in production - undecorated sync
+            # listeners are silently unsafe here, not just a lint nit.
             for instance in instances:
                 hass.async_create_task(hass.data[DOMAIN][instance.key].async_request_refresh())
 
