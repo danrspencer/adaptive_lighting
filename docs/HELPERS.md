@@ -124,13 +124,13 @@ place the sensor's *displayed* name lives; its entity_ids stay as originally cre
 sensor - seeded automatically when you add the integration - is named "Default"; add more from the same page any
 time, each with its own name.
 
-Each sensor produces two entities, computed the same way `compute_curve` computes them and refreshed every 60
+Each sensor produces three entities, computed the same way `compute_curve` computes them and refreshed every 60
 seconds:
 
 | Entity | What it is |
 |---|---|
 | `sensor.<name_>adaptive_lighting` | Combined "right now" reading — state is the phase (Morning/Day/Evening/Night), `attributes.brightness` (0-255), `attributes.color_temp` (Kelvin), and `attributes.rgb_color` (`[r, g, b]`) are exactly the attribute names `apply_lighting`'s `sensor_entity_id` and the blueprint's `adaptive_sensor` input already read, so this can be pointed at directly. Also carries today's four phase-boundary timestamps as `attributes.morning_start`/`day_start`/`evening_start`/`night_start`, plus `attributes.evening_earliest`/`evening_latest` (the two configured bounds Evening was actually clamped between) — no separate boundary sensors, since a phase-change automation only needs a `platform: state, attribute: phase` trigger on this same entity, and anything that specifically wants a boundary time (the dashboard card, in particular) can read it straight off these attributes |
-| `sensor.<name_>adaptive_lighting_curve` | `attributes.points`: the full day as 289 `{t, brightness, kelvin, kelvin_rgb}` samples (`kelvin_rgb` always equals `kelvin`, kept as a separate key since some consumers already read it) — what the [dashboard card](../README.md#previewing-the-dashboard-card) reads. Deliberately does **not** follow a manual phase override (see below) — it's a full-day schedule, not a "right now" value |
+| `sensor.<name_>adaptive_lighting_curve` | `attributes.points`: the full day as 289 `{t, brightness, kelvin}` samples — what the [dashboard card](../README.md#previewing-the-dashboard-card) reads. Deliberately does **not** follow a manual phase override (see below) — it's a full-day schedule, not a "right now" value |
 | `select.<name_>adaptive_lighting_phase` | Manual override — `Auto` (default) or a specific phase. Pinning a phase holds it until the *schedule itself* next moves on (e.g. override to `Day` during `Evening` and it still becomes `Night` once Evening would naturally have ended, rather than staying on `Day` forever) — tick "Keep a manual phase override until cleared by hand" when adding/reconfiguring the sensor to disable that and keep an override until you clear it yourself instead |
 
 Point `apply_lighting`'s `sensor_entity_id` (or the blueprint's Adaptive Lighting Sensor input) at whichever

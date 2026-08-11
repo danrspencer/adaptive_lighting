@@ -128,12 +128,11 @@ def test_kelvin_custom_morning_day_end_evening_values():
     assert kelvin_for_phase("Evening", hold_start, EVENING, DAY_START, NIGHT, evening_kelvin=3000) == 3000
 
 
-def test_targets_for_phase_kelvin_rgb_matches_kelvin():
-    # No separate RGB-only Kelvin floor exists any more (dropped along
-    # with night_floor_kelvin) - kelvin_rgb is just kelvin, always.
+def test_targets_for_phase_rgb_color_is_kelvin_converted():
+    # rgb_color is always just the Kelvin -> RGB conversion of kelvin -
+    # there's no separate RGB-only target.
     for phase, t in (("Morning", 0), ("Day", DAY_START), ("Evening", EVENING), ("Night", NIGHT)):
         targets = targets_for_phase(phase, t, EVENING, DAY_START, NIGHT)
-        assert targets["kelvin_rgb"] == targets["kelvin"]
         assert targets["rgb_color"] == kelvin_to_rgb(targets["kelvin"])
 
 

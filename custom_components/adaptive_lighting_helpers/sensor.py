@@ -6,11 +6,9 @@ schedule instance (see coordinator.py's ScheduleInstance/
 schedule_instances) - one per named "sensor" subentry.
 
 Entity IDs are prefixed with the sensor's slugified name (e.g.
-sensor.living_room_adaptive_lighting), or bare if the name was left
-blank when the sensor was added - see coordinator.py's
+sensor.living_room_adaptive_lighting) - see coordinator.py's
 schedule_instances(). Every sensor also gets its own device (see
-ScheduleInstance.device_info) regardless of whether its entity_ids are
-prefixed - device grouping and entity_id prefixing are independent.
+ScheduleInstance.device_info).
 has_entity_name=True plus a short per-entity name ("Curve") lets HA
 prefix it with the device's own name for display ("Upstairs Curve", or
 "Adaptive Lighting Curve" for the default device), so renaming the
@@ -40,10 +38,8 @@ specifically wants a boundary time - the dashboard card, in particular
 - reads it off this same entity's attributes). A standalone day-phase
 entity was considered and dropped for the same reason - anything that
 wants to react to just the phase changing can use a
-`platform: state, attribute: phase` trigger on this entity (the
-blueprint already uses the equivalent whole-attribute-set version of
-this pattern for its own adaptive_attr trigger), no separate entity
-required.
+`platform: state, attribute: phase` trigger on this entity, no
+separate entity required.
 """
 
 from __future__ import annotations
@@ -63,7 +59,7 @@ from .coordinator import ScheduleCoordinator, ScheduleInstance, schedule_instanc
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
     for instance in schedule_instances(entry):
-        coordinator: ScheduleCoordinator = hass.data[DOMAIN][instance.key]
+        coordinator: ScheduleCoordinator = hass.data[DOMAIN][instance.subentry_id]
         entities = [
             _AdaptiveLightingSensor(coordinator, instance),
             _CurveSensor(coordinator, instance),
@@ -76,7 +72,7 @@ class _ScheduleSensorBase(CoordinatorEntity[ScheduleCoordinator], SensorEntity):
 
     def __init__(self, coordinator: ScheduleCoordinator, instance: ScheduleInstance, unique_id_suffix: str, forced_object_id: str) -> None:
         super().__init__(coordinator)
-        self._attr_unique_id = f"{instance.key}_{unique_id_suffix}"
+        self._attr_unique_id = f"{instance.subentry_id}_{unique_id_suffix}"
         self.entity_id = f"sensor.{instance.prefix}{forced_object_id}"
         self._attr_device_info = instance.device_info
 

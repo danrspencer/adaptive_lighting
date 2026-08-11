@@ -75,7 +75,6 @@ def main():
                 "t": int(t),
                 "brightness": targets["brightness"],
                 "kelvin": targets["kelvin"],
-                "kelvin_rgb": targets["kelvin_rgb"],
             }
         )
 
@@ -100,7 +99,6 @@ def main():
         "now_phase": now_phase,
         "now_brightness": now_targets["brightness"],
         "now_kelvin": now_targets["kelvin"],
-        "now_rgb_color": list(now_targets["rgb_color"]),
         "_now_ts": int(now),
     }
 

@@ -3,37 +3,33 @@
  *
  * Renders the day's brightness + color-temperature curve as an actual
  * rendered-color chart (Kelvin -> RGB). The curve itself is NOT
- * recomputed here: it's read straight from sensor.adaptive_lighting_curve,
- * whose `points` attribute is produced by the adaptive_lighting_helpers
+ * recomputed here: it's read straight from the curve sensor, whose
+ * `points` attribute is produced by the adaptive_lighting_helpers
  * integration's curve.py (custom_components/adaptive_lighting_helpers/) -
  * the same module the compute_curve service uses. That's the single
  * source of truth; this card just displays it. The "now" marker reads
- * sensor.adaptive_lighting's phase/brightness/color_temp attributes
+ * the combined sensor's phase/brightness/color_temp attributes
  * directly for the same reason - and unlike the curve, those DO follow
- * a manual override via select.adaptive_lighting_phase (see
- * coordinator.py), since they represent "right now" rather than the
- * full-day schedule.
- *
- * Each point also carries kelvin_rgb - what apply_lighting/
- * compute_lighting_groups would actually send as rgb_color to an
- * RGB-capable light with Prefer RGB Color on. Always identical to
- * kelvin for this integration's own curve sensor, so the extra "RGB
- * target" caps this card can draw only ever appear for a hand-written
- * points source that sets the two differently.
+ * a manual override via the phase select (see coordinator.py), since
+ * they represent "right now" rather than the full-day schedule.
  */
 
 const DEFAULT_ENTITIES = {
+  // The entity_ids the auto-seeded "Default" sensor creates (every
+  // sensor's entities are prefixed with its slugified name - see
+  // coordinator.py's schedule_instances()). Point a card at any other
+  // sensor by overriding these via the card config's `entities` map.
   // phase/brightness_now/kelvin_now all read from the same combined
   // entity by default (state = phase, attributes = brightness/color_temp/
   // morning_start/day_start/evening_start/night_start/evening_earliest/
   // evening_latest - see sensor.py's _AdaptiveLightingSensor) - see the
   // fallback in `set hass()` below for custom configs still pointing at
   // separate sensors.
-  phase: 'sensor.adaptive_lighting',
-  brightness_now: 'sensor.adaptive_lighting',
-  kelvin_now: 'sensor.adaptive_lighting',
+  phase: 'sensor.default_adaptive_lighting',
+  brightness_now: 'sensor.default_adaptive_lighting',
+  kelvin_now: 'sensor.default_adaptive_lighting',
   sun: 'sun.sun',
-  curve: 'sensor.adaptive_lighting_curve',
+  curve: 'sensor.default_adaptive_lighting_curve',
 };
 
 const VB_W = 960;
@@ -94,16 +90,6 @@ function numFromAttrOrState(stateObj, attrName) {
   return attrVal !== undefined ? Number(attrVal) : Number(stateObj.state);
 }
 
-// rgb_color is optional (only present for entities exposing it - see
-// README's "Bring your own sensor") - null rather than a default when
-// absent or malformed, so callers can tell "no RGB target" apart from
-// "RGB target happens to equal the colour-temp one".
-function rgbFromAttr(stateObj) {
-  if (!stateObj) return null;
-  const v = stateObj.attributes && stateObj.attributes.rgb_color;
-  return Array.isArray(v) && v.length === 3 ? v.map(Number) : null;
-}
-
 function fmtTime(tSec) {
   const d = new Date(tSec * 1000);
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -129,7 +115,20 @@ class AdaptiveLightingCurveCard extends HTMLElement {
 
   setConfig(config) {
     this._config = config || {};
-    this._entities = { ...DEFAULT_ENTITIES, ...(this._config.entities || {}) };
+    // `sensor: living_room` is shorthand for pointing every entity at
+    // that named sensor's entities (the value is the sensor's slugified
+    // name, i.e. its entity_id prefix - see coordinator.py's
+    // schedule_instances()). An explicit `entities` map still overrides
+    // individual ids on top.
+    const fromSensor = {};
+    if (this._config.sensor) {
+      const base = `sensor.${this._config.sensor}_adaptive_lighting`;
+      fromSensor.phase = base;
+      fromSensor.brightness_now = base;
+      fromSensor.kelvin_now = base;
+      fromSensor.curve = `${base}_curve`;
+    }
+    this._entities = { ...DEFAULT_ENTITIES, ...fromSensor, ...(this._config.entities || {}) };
     this._cacheKey = null;
     this._samples = [];
     if (!this.shadowRoot) {
@@ -187,10 +186,6 @@ class AdaptiveLightingCurveCard extends HTMLElement {
     // by falling back to .state.
     const brightnessNowValue = numFromAttrOrState(brightnessNow, 'brightness');
     const kelvinNowValue = numFromAttrOrState(kelvinNow, 'color_temp');
-    // kelvinNow is the same entity as phase by default (sensor.adaptive_lighting) -
-    // its rgb_color attribute is present whenever the pointed-at sensor
-    // exposes one (see README's "Bring your own sensor").
-    const rgbColorNowValue = rgbFromAttr(kelvinNow);
 
     const cacheKey = JSON.stringify([
       boundaries,
@@ -200,7 +195,6 @@ class AdaptiveLightingCurveCard extends HTMLElement {
       pointsRaw,
       brightnessNowValue,
       kelvinNowValue,
-      rgbColorNowValue,
     ]);
 
     if (cacheKey === this._cacheKey) {
@@ -213,7 +207,6 @@ class AdaptiveLightingCurveCard extends HTMLElement {
     this._sun = sun;
     this._brightnessNow = brightnessNowValue;
     this._kelvinNow = kelvinNowValue;
-    this._rgbColorNow = rgbColorNowValue;
 
     if (pointsRaw) {
       // HA's trigger-template attribute rendering sometimes preserves the
@@ -295,8 +288,6 @@ class AdaptiveLightingCurveCard extends HTMLElement {
     const hOf = (brightness) => (brightness / 255) * CHART_H;
 
     let bars = '';
-    let rgbCaps = '';
-    let haveRgbDivergence = false;
     if (haveSamples) {
       const barW = CHART_W / (samples.length - 1) + 0.6;
       bars = samples
@@ -305,25 +296,6 @@ class AdaptiveLightingCurveCard extends HTMLElement {
           const h = hOf(s.brightness);
           const color = rgbToHex(kelvinToRgb(s.kelvin));
           return `<rect x="${(x - barW / 2).toFixed(2)}" y="${(BASELINE_Y - h).toFixed(2)}" width="${barW.toFixed(2)}" height="${h.toFixed(2)}" fill="${color}" />`;
-        })
-        .join('');
-
-      // A thin cap above each bar wherever the RGB target actually
-      // diverges from the colour-temp one - nothing renders here for
-      // this integration's own curve sensor, since kelvin_rgb always
-      // equals kelvin there now; kept in case anything ever points this
-      // card at a hand-written points source that sets the two
-      // differently.
-      const RGB_CAP_H = 8;
-      const diverging = samples.filter((s) => s.kelvin_rgb != null && s.kelvin_rgb !== s.kelvin);
-      haveRgbDivergence = diverging.length > 0;
-      rgbCaps = diverging
-        .map((s) => {
-          const x = xOf(s.t);
-          const h = hOf(s.brightness);
-          const color = rgbToHex(kelvinToRgb(s.kelvin_rgb));
-          const y = BASELINE_Y - h - RGB_CAP_H;
-          return `<rect x="${(x - barW / 2).toFixed(2)}" y="${y.toFixed(2)}" width="${barW.toFixed(2)}" height="${RGB_CAP_H}" fill="${color}" class="rgb-cap" />`;
         })
         .join('');
     }
@@ -406,16 +378,6 @@ class AdaptiveLightingCurveCard extends HTMLElement {
         <line x1="${nowX}" y1="${PAD_TOP - 4}" x2="${nowX}" y2="${BASELINE_Y}" class="now-line" />
         <circle cx="${nowX}" cy="${nowY.toFixed(1)}" r="4" fill="${nowHex}" class="now-dot" />
       `;
-      // Small ring above the main dot for the RGB target, only when the
-      // sensor actually provides one and it's visibly different from
-      // the colour-temp target - see rgbFromAttr().
-      if (this._rgbColorNow) {
-        const nowRgbHex = rgbToHex(this._rgbColorNow);
-        if (nowRgbHex !== nowHex) {
-          haveRgbDivergence = true;
-          nowMarker += `<circle cx="${nowX}" cy="${(nowY - 10).toFixed(1)}" r="3" fill="${nowRgbHex}" class="now-rgb-dot" />`;
-        }
-      }
     } else if (nowInWindow) {
       nowMarker = `<line x1="${nowX}" y1="${PAD_TOP - 4}" x2="${nowX}" y2="${BASELINE_Y}" class="now-line" />`;
     }
@@ -424,7 +386,6 @@ class AdaptiveLightingCurveCard extends HTMLElement {
       <svg viewBox="0 0 ${VB_W} ${VB_H}" preserveAspectRatio="none" class="chart">
         ${bars}
         ${clampBand}
-        ${rgbCaps}
         ${boundaryLines}
         ${hourTicks.join('')}
         ${sunMarkers}
@@ -433,17 +394,13 @@ class AdaptiveLightingCurveCard extends HTMLElement {
       </svg>
     `;
 
-    const rgbLegend = haveRgbDivergence
-      ? `<div class="rgb-legend"><span class="rgb-swatch"></span>RGB target (Prefer RGB Color) where warmer than colour temperature can reach</div>`
-      : '';
-
     const nowLabel = haveNow
       ? `Now ${fmtTime(now)} · ${this._brightnessNow} bri · ${this._kelvinNow}K${this._phaseState ? ` · ${this._phaseState}` : ''}`
       : this._phaseState || '';
 
     const footnote = haveSamples
       ? this._eveningNote()
-      : `${this._eveningNote()} (curve still populating — it updates every 10 minutes or on a boundary change)`;
+      : `${this._eveningNote()} (curve still populating — it refreshes every minute)`;
 
     this.shadowRoot.innerHTML = `
       <style>
@@ -463,22 +420,6 @@ class AdaptiveLightingCurveCard extends HTMLElement {
           stroke-width: 1;
           stroke-dasharray: 1 3;
           opacity: 0.6;
-        }
-        .rgb-cap { opacity: 0.95; }
-        .now-rgb-dot { stroke: var(--card-background-color); stroke-width: 1; }
-        .rgb-legend {
-          font-size: 0.78em;
-          color: var(--secondary-text-color);
-          margin-top: 2px;
-        }
-        .rgb-swatch {
-          display: inline-block;
-          width: 8px;
-          height: 8px;
-          border-radius: 2px;
-          background: linear-gradient(135deg, #ff9f45, #ffd7a8);
-          margin-right: 5px;
-          vertical-align: middle;
         }
         .boundary-line {
           stroke: var(--secondary-text-color);
@@ -519,7 +460,6 @@ class AdaptiveLightingCurveCard extends HTMLElement {
           ${svg}
           <div class="tooltip"></div>
           <div class="footnote">${footnote}</div>
-          ${rgbLegend}
         </div>
       </ha-card>
     `;
@@ -548,16 +488,10 @@ class AdaptiveLightingCurveCard extends HTMLElement {
       const s = samples[idx];
       const hex = rgbToHex(kelvinToRgb(s.kelvin));
       const swatch = `<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${hex};vertical-align:middle;"></span>`;
-      let rgbPart = '';
-      if (s.kelvin_rgb != null && s.kelvin_rgb !== s.kelvin) {
-        const rgbHex = rgbToHex(kelvinToRgb(s.kelvin_rgb));
-        const rgbSwatch = `<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${rgbHex};vertical-align:middle;"></span>`;
-        rgbPart = ` &nbsp; RGB ${s.kelvin_rgb}K ${rgbSwatch}`;
-      }
       this._tooltipEl.style.display = 'block';
       this._tooltipEl.style.left = `${clamp((clientX - rect.left), 0, rect.width - 160)}px`;
       this._tooltipEl.style.top = '4px';
-      this._tooltipEl.innerHTML = `<b>${fmtTime(s.t)}</b> &nbsp; ${s.brightness} bri &nbsp; ${s.kelvin}K ${swatch}${rgbPart}`;
+      this._tooltipEl.innerHTML = `<b>${fmtTime(s.t)}</b> &nbsp; ${s.brightness} bri &nbsp; ${s.kelvin}K ${swatch}`;
     };
     const onLeave = () => {
       this._tooltipEl.style.display = 'none';

@@ -93,12 +93,11 @@ feature-by-feature breakdown and the input reference: **[docs/BLUEPRINT.md](docs
 ```
 custom_components/adaptive_lighting_helpers/
     __init__.py    registers the four services against real HA state
-    coordinator.py shared schedule computation behind the optional
-                   sensors/select below - only set up if the config
-                   entry has schedule times configured
-    sensor.py      optional day-phase/curve sensors (see
-                   docs/HELPERS.md)
-    select.py      optional phase-override select (same doc)
+    coordinator.py shared schedule computation behind the sensors/select
+                   below - one instance per sensor added via the
+                   integration's "Add Sensor" flow
+    sensor.py      day-phase/curve sensors (see docs/HELPERS.md)
+    select.py      phase-override select (same doc)
     curve.py       brightness/colour-temperature schedule + Kelvin -> RGB
     grouping.py    reachability, multiplier bucketing, tolerance checks,
                    manual-override protection, two-step/combined and
@@ -137,7 +136,7 @@ dashboard/
                                  standalone SVG
 
 tests/
-    pytest suite for curve.py and grouping.py.
+    pytest suite for curve.py, grouping.py, and scenes.py.
 
 docs/
     HELPERS.md     full service/sensor reference for the integration
@@ -184,7 +183,9 @@ Once imported, add an automation using the "Adaptive Lighting" blueprint per roo
 
 Register `www/adaptive-lighting-curve-card.js` as a Lovelace resource (Settings → Dashboards → Resources → Add
 Resource, URL `/local/adaptive-lighting-curve-card.js`, type JavaScript Module) and add the card config from
-`dashboard/house-settings-card.yaml` to a view. Not currently HACS-distributed either (see CLAUDE.md's "Open
+`dashboard/house-settings-card.yaml` to a view. By default the card reads the auto-seeded "Default" sensor's
+entities; point it at any other named sensor with `sensor: <slugified name>` (e.g. `sensor: living_room`) in the
+card config. Not currently HACS-distributed either (see CLAUDE.md's "Open
 question" section for the plan to make it a proper HACS frontend plugin).
 
 ## Previewing the dashboard card
@@ -214,8 +215,7 @@ suite on push and PR across Python 3.9 and 3.13.
 The pure-Python core (`curve.py`, `grouping.py`, `scenes.py`) and the integration wrapping it as HA services
 are both written, unit tested, and **installed via HACS and confirmed working against a live Home Assistant
 instance** — `compute_lighting_groups`/`compute_curve`/`compute_scene_coverage` verified registered and
-functionally correct, and the blueprint's full compute-groups-then-turn-on-lights path exercised end to end
-against real hardware. `apply_lighting` and RGB colour support (`prefer_rgb_color`) are
-new, unit tested, and **not yet exercised against a live instance**. The optional day-phase/curve sensors
-(`sensor.py`) haven't been configured or tested live yet either. See CLAUDE.md's "Current status" section for
-the full rundown.
+functionally correct, the blueprint's full compute-groups-then-turn-on-lights path exercised end to end
+against real hardware, and the day-phase/curve sensors deployed and iterated on live (multi-sensor subentries,
+per-sensor devices). `apply_lighting` and RGB colour support (`prefer_rgb_color`) are unit tested but **not yet
+exercised against a live instance**. See CLAUDE.md's "Current status" section for the full rundown.

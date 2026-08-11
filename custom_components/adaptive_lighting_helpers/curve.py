@@ -160,8 +160,7 @@ def kelvin_for_phase(
     starts (also where Evening's own ramp starts). evening_kelvin:
     Evening's steady hold, after its opening ramp from day_end_kelvin.
     night_kelvin: what Evening's final hour fades toward, and what Night
-    sits at - defaults to DEFAULT_NIGHT_KELVIN, matching every bulb's
-    native color_temp range."""
+    sits at."""
     if day_phase == "Morning":
         return morning_kelvin
     if day_phase == "Day":
@@ -200,8 +199,8 @@ def targets_for_phase(
     evening_kelvin: int = DEFAULT_EVENING_KELVIN,
     night_kelvin: int = DEFAULT_NIGHT_KELVIN,
 ) -> dict:
-    """brightness/kelvin/kelvin_rgb/rgb_color for an already-known phase,
-    in one call - the single orchestration point for
+    """brightness/kelvin/rgb_color for an already-known phase, in one
+    call - the single orchestration point for
     brightness_for_phase/kelvin_for_phase/kelvin_to_rgb.
 
     Takes day_phase rather than computing it via phase_at() itself
@@ -215,12 +214,7 @@ def targets_for_phase(
     Previously this 4-line sequence was hand-copied at every call site
     (the compute_curve service, the coordinator's "now" values, its
     289-point curve loop, and the preview generator) - risking drift if
-    the shape of what gets computed here ever changed. One copy now.
-
-    kelvin_rgb duplicates kelvin (kept as a separate key since sensor.py
-    and apply_lighting's RGB dispatch path already read it) - there's no
-    longer a separate RGB-only Kelvin floor to diverge it from colour-temp
-    bulbs' target."""
+    the shape of what gets computed here ever changed. One copy now."""
     brightness = brightness_for_phase(
         day_phase,
         now_ts,
@@ -244,6 +238,5 @@ def targets_for_phase(
     return {
         "brightness": brightness,
         "kelvin": kelvin,
-        "kelvin_rgb": kelvin,
         "rgb_color": kelvin_to_rgb(kelvin),
     }

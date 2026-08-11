@@ -169,21 +169,29 @@ def _read_sensor_targets(hass: HomeAssistant, sensor_entity_id: str) -> tuple[in
     attribute names, not hardcoded to this integration's own
     sensor.adaptive_lighting. See README's "Bring your own sensor"
     section for the exact contract and a template-sensor example.
-    Defaults (0 brightness, 3000K) match what the blueprint's own
-    sensor_brightness/sensor_color_temp_kelvin variables used before this
-    service existed."""
+
+    brightness/color_temp are required by that contract, and a sensor
+    missing them (wrong entity picked, or the sensor is unavailable and
+    its attributes are gone) raises rather than falling back to a quiet
+    default - the old fallback (brightness 0, later floored to 1 by
+    grouping) meant a broken sensor silently dimmed every light to
+    minimum instead of surfacing anywhere."""
     state = hass.states.get(sensor_entity_id)
     if state is None:
         raise ServiceValidationError(f"Sensor entity not found: {sensor_entity_id}")
 
-    def _as_int(value, default):
+    def _require_int(attr: str) -> int:
+        value = state.attributes.get(attr)
         try:
             return int(value)
         except (TypeError, ValueError):
-            return default
+            raise ServiceValidationError(
+                f"{sensor_entity_id} has no usable '{attr}' attribute (got {value!r}) - "
+                f"apply_lighting needs brightness and color_temp on the sensor it reads"
+            )
 
-    brightness = _as_int(state.attributes.get("brightness"), 0)
-    color_temp_kelvin = _as_int(state.attributes.get("color_temp"), 3000)
+    brightness = _require_int("brightness")
+    color_temp_kelvin = _require_int("color_temp")
     rgb = state.attributes.get("rgb_color")
     rgb_color = tuple(rgb) if isinstance(rgb, (list, tuple)) and len(rgb) == 3 else None
     return brightness, color_temp_kelvin, rgb_color
@@ -428,7 +436,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         for instance in instances:
             coordinator = ScheduleCoordinator(hass, instance)
             await coordinator.async_config_entry_first_refresh()
-            hass.data.setdefault(DOMAIN, {})[instance.key] = coordinator
+            hass.data.setdefault(DOMAIN, {})[instance.subentry_id] = coordinator
 
         @callback
         def _refresh_all(event) -> None:
@@ -442,22 +450,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             # event loop" RuntimeError in production - undecorated sync
             # listeners are silently unsafe here, not just a lint nit.
             for instance in instances:
-                hass.async_create_task(hass.data[DOMAIN][instance.key].async_request_refresh())
+                hass.async_create_task(hass.data[DOMAIN][instance.subentry_id].async_request_refresh())
 
-        # Evening tracks sun.sun; each instance's phase-override select
-        # can change at any moment and should take effect immediately
-        # rather than waiting for the next 60s poll. The five schedule
-        # times themselves don't need tracking - they're static config,
-        # only changed via the reconfigure flow, which reloads the entry
-        # (rebuilding every coordinator from scratch) on its own. Every
-        # instance's coordinator is refreshed on any tracked change
-        # rather than mapping specific entities to specific coordinators
-        # - simpler, and refreshing extra ones is cheap pure computation.
-        entry.async_on_unload(
-            async_track_state_change_event(
-                hass, ["sun.sun", *(instance.override_entity_id for instance in instances)], _refresh_all
-            )
-        )
+        # Evening tracks sun.sun, so a sunset update should take effect
+        # without waiting for the next 60s poll. This is the only entity
+        # tracked here: the five schedule times are static config (the
+        # reconfigure flow reloads the entry, rebuilding every
+        # coordinator), and each instance's phase-override select
+        # refreshes its own coordinator itself (see select.py) - it's
+        # the only writer of its own state, so routing its changes back
+        # through the state machine here would just be a second, global
+        # copy of a refresh the entity already owns.
+        entry.async_on_unload(async_track_state_change_event(hass, ["sun.sun"], _refresh_all))
 
         await hass.config_entries.async_forward_entry_setups(entry, SCHEDULE_PLATFORMS)
 
@@ -478,7 +482,7 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if instances:
         unloaded = await hass.config_entries.async_unload_platforms(entry, SCHEDULE_PLATFORMS)
         for instance in instances:
-            hass.data.get(DOMAIN, {}).pop(instance.key, None)
+            hass.data.get(DOMAIN, {}).pop(instance.subentry_id, None)
         return unloaded
 
     return True

@@ -48,7 +48,7 @@ from .coordinator import ScheduleCoordinator, ScheduleInstance, schedule_instanc
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
     for instance in schedule_instances(entry):
-        coordinator: ScheduleCoordinator = hass.data[DOMAIN][instance.key]
+        coordinator: ScheduleCoordinator = hass.data[DOMAIN][instance.subentry_id]
         async_add_entities([_PhaseOverrideSelect(coordinator, instance)], config_subentry_id=instance.subentry_id)
 
 
@@ -60,7 +60,7 @@ class _PhaseOverrideSelect(CoordinatorEntity[ScheduleCoordinator], SelectEntity,
 
     def __init__(self, coordinator: ScheduleCoordinator, instance: ScheduleInstance) -> None:
         super().__init__(coordinator)
-        self._attr_unique_id = f"{instance.key}_phase_override"
+        self._attr_unique_id = f"{instance.subentry_id}_phase_override"
         self.entity_id = f"select.{instance.prefix}adaptive_lighting_phase"
         # Every instance gets a device (coordinator.py's
         # ScheduleInstance.device_info) - HA prefixes the plain name
@@ -88,6 +88,12 @@ class _PhaseOverrideSelect(CoordinatorEntity[ScheduleCoordinator], SelectEntity,
             # make a non-sticky override outlive the next boundary by
             # more than one restart's worth of slack.
             self._baseline_phase = self.coordinator.data.get("computed_phase")
+            # The coordinator's first refresh ran before this entity
+            # existed in the state machine, so its data doesn't reflect
+            # the restored override yet. async_request_refresh is
+            # debounced, so this lands after the entity's initial state
+            # write rather than racing it.
+            await self.coordinator.async_request_refresh()
 
     def _handle_coordinator_update(self) -> None:
         if (
