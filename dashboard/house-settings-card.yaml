@@ -6,11 +6,13 @@
 #      resource: Settings -> Dashboards -> Resources -> Add Resource
 #        URL:  /local/adaptive-lighting-curve-card.js
 #        Type: JavaScript Module
-#   2. The sensors it reads to exist with these exact entity_ids and
+#   2. The sensors it reads to exist with these entity_ids and
 #      attribute shapes (produced by the adaptive_lighting_helpers
-#      integration's optional day-phase/curve sensors - see its README
-#      "Optional: day-phase/curve sensors" section):
-#        sensor.adaptive_lighting        - state: Morning/Day/Evening/Night
+#      integration's day-phase/curve sensors - see docs/HELPERS.md's
+#      "Optional: day-phase/curve sensors" section). The defaults are
+#      the auto-seeded "Default" sensor's entities; point the card at
+#      any other sensor via the `entities` map shown below.
+#        sensor.default_adaptive_lighting - state: Morning/Day/Evening/Night
 #                                           attributes.brightness (0-255),
 #                                           attributes.color_temp (Kelvin),
 #                                           attributes.morning_start/day_start/
@@ -19,7 +21,7 @@
 #                                           evening_latest (unix seconds,
 #                                           optional - only used to explain
 #                                           *why* evening starts when it does)
-#        sensor.adaptive_lighting_curve  - attributes.points: [{t, brightness, kelvin}, ...]
+#        sensor.default_adaptive_lighting_curve - attributes.points: [{t, brightness, kelvin}, ...]
 #        sun.sun (optional, same reason as evening's earliest/latest)
 
 type: heading
@@ -28,3 +30,8 @@ heading_style: title
 icon: mdi:chart-bell-curve
 ---
 type: custom:adaptive-lighting-curve-card
+# Uncomment to point at a differently-named sensor (the slugified name,
+# i.e. "Living Room" -> living_room); defaults to the auto-seeded
+# "Default" sensor. Individual entity_ids can still be overridden via
+# an `entities` map if you're using a hand-written sensor instead.
+# sensor: living_room

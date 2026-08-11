@@ -19,7 +19,7 @@ blueprint:
     together. Prefer RGB Color (if enabled) sends RGB colour instead of
     colour temperature to lights that support it.
   domain: automation
-  source_url: https://github.com/danspencer
+  source_url: https://github.com/danrspencer/adaptive_lighting/blob/main/blueprints/automation/danspencer/adaptive_lighting.yaml
   author: Dan Spencer
   input:
     motion_entity:
@@ -95,10 +95,10 @@ blueprint:
       description: >
         For lights that support it (auto-detected), send the Adaptive
         Lighting Sensor's rgb_color attribute instead of colour
-        temperature - lets a light go warmer at night than its native
-        colour-temperature range allows, and can render more accurately
-        on some RGB bulbs. Lights without RGB support, or if the sensor
-        has no rgb_color attribute, are unaffected either way.
+        temperature - some RGB bulbs render colour more accurately in
+        RGB mode than colour-temperature mode. Lights without RGB
+        support, or if the sensor has no rgb_color attribute, are
+        unaffected either way.
       default: false
       selector:
         boolean: {}
@@ -161,20 +161,14 @@ trigger_variables:
   light_target: !input light_target
 
 trigger:
-  # The live brightness/colour-temperature sensor; fires roughly once a minute
+  # The live brightness/colour-temperature sensor; fires roughly once a
+  # minute. With no to:/from:/attribute: filter, a state trigger fires on
+  # attribute-only changes too - which is the usual case here, since the
+  # sensor's state (the phase name) only changes four times a day while
+  # its brightness/color_temp attributes tick every minute.
   - platform: state
     entity_id: !input adaptive_sensor
     id: adaptive
-  # Same sensor, but also catches attribute-only changes (no bare state-string change)
-  - id: adaptive_attr
-    platform: template
-    value_template: >
-      {# `trigger` doesn't exist yet during HA's initial dependency-check
-         render, so `trigger is defined` must short-circuit before any
-         attribute access on it. #}
-      {% set old_attrs = trigger.from_state.attributes if trigger is defined and trigger.from_state else {} %}
-      {% set new_attrs = trigger.to_state.attributes if trigger is defined and trigger.to_state else {} %}
-      {{ old_attrs != new_attrs }}
   # Anything named in Additional Triggers changed - e.g. a TV for a
   # brightness multiplier, or whatever the scene template depends on
   - id: extra

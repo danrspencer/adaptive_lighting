@@ -1144,6 +1144,100 @@ migration - the user's existing default sensor still needs removing
 and re-adding by hand to actually pick up the new "Default" naming and
 device grouping; only new installs get it automatically.
 
+**Full-repo review pass (cleanup / architecture / polish), at the
+user's request - not yet deployed live.** Three real bugs found by
+reading, all fixed:
+
+- **Sunset rollover in `coordinator.py`'s `_compute_boundaries`**:
+  `sun.sun`'s `next_setting` is exactly that - *next* - so the moment
+  today's sunset passes it points at tomorrow's, ~24h ahead, and
+  `max(earliest, min(sunset, latest))` clamps it to `latest`. Net
+  effect: any day sunset lands before the latest bound, the Evening
+  boundary jumped *later* right after Evening started and the phase
+  flipped back to Day until the latest bound (in winter, Day until
+  20:00 despite a 16:00 sunset). The card already knew about and
+  corrected this exact rollover for display (`sunTimeInWindow`); the
+  coordinator didn't. Fixed by projecting the sunset's local
+  time-of-day onto today (same style as `_time_str_to_today_timestamp`).
+  Never caught live because the sensors have only run live for short
+  stretches, mostly around midday config-flow testing.
+- **The blueprint's `adaptive_attr` trigger was dead code that would
+  have bypassed occupancy gating if it ever fired.** A template trigger
+  only re-evaluates when entities its template references change - that
+  template referenced none (only `trigger.*`), so it rendered once at
+  startup (false) and never again. It was also redundant: a bare
+  `platform: state` trigger with no to:/from:/attribute: fires on
+  attribute-only changes, which is exactly how the `adaptive` trigger
+  already ticks every minute (the sensor's state string - the phase -
+  only changes 4x/day; corroborated by live traces of the per-minute
+  tick). And had it ever fired, `condition:` doesn't list
+  `adaptive_attr` in the occupied-gated branch, so it would have run
+  the default action in an empty room. Removed; the `adaptive`
+  trigger's comment now documents the attribute-change behaviour.
+- **`apply_lighting` silently dimmed every light to brightness 1 on a
+  broken sensor**: `_read_sensor_targets` defaulted a missing
+  `brightness` attribute to 0, which grouping's minimum-1 floor turned
+  into "all lights on at brightness 1" with nothing logged anywhere.
+  Now raises `ServiceValidationError` naming the missing attribute
+  (brightness/color_temp are required by the documented contract;
+  rgb_color stays optional). Behaviour change worth knowing: a
+  motion-on against an unavailable sensor now errors in the trace
+  instead of barely-turning-on the lights.
+
+Cleanup in the same pass:
+
+- **`kelvin_rgb` fully removed** - it was the vestige of the binned
+  night_floor feature, always equal to `kelvin`, and its documented
+  justification ("sensor.py and apply_lighting already read it") was
+  no longer true: its only real consumer was the card's RGB-divergence
+  display (caps/ring/legend/tooltip), which existed solely to visualise
+  the same removed feature. Gone from `targets_for_phase`, the curve
+  points, the card, the preview generator, and the docs.
+- **The card's DEFAULT_ENTITIES pointed at entity_ids a fresh install
+  no longer creates** - the auto-seeded sensor is named "Default", so
+  its entities are `sensor.default_adaptive_lighting`(_curve). Card
+  defaults, preview.html's fake states, and house-settings-card.yaml
+  all updated to match; the card also gained a `sensor: living_room`
+  config shorthand (slugified name) so pointing a card at another named
+  sensor doesn't take four entity overrides. NOTE: the live instance's
+  pre-rename blank-titled subentry produces bare entity_ids - its card
+  will need `sensor:`/`entities:` config or (better) the
+  already-planned remove-and-re-add of the Default sensor.
+- **Override refresh collapsed to one mechanism**: __init__.py's state
+  listener now tracks only `sun.sun`; the phase select refreshes its
+  own coordinator (it's the only writer of its own state), including a
+  new refresh after restart-restore of a pinned phase - previously the
+  restore path only worked because the global listener happened to
+  catch the entity's initial state write.
+- `ScheduleInstance.key`/`subentry_id` (always identical) collapsed
+  into `subentry_id`. Stale docs fixed: preview.html's "pyscript"/
+  night-floor comments and wrong serve instructions (must serve the
+  repo root, not dashboard/), the card's "updates every 10 minutes"
+  footnote (it's 60s), the blueprint's `prefer_rgb_color` description
+  still claiming warmer-than-native-range (night-floor era), blueprint
+  `source_url` (was a bare github user page), README's Status/layout
+  (sensors are live-tested; scenes.py is tested too), HELPERS.md's
+  "two entities" (it's three).
+
+Architecture review conclusions (assessed, deliberately NOT changed):
+the four-service shape is right (two pure planners, one dispatcher,
+one generic scene helper); the blueprint/integration split and the
+parked scene-port (design 1) stand as documented above - design 1
+remains the right next step only if the blueprint should shrink
+further, with the already-accepted loss of `condition:`-level
+scene_active suppression. `hass.data` could become
+`entry.runtime_data` someday; not worth churn. The blank-title
+defensive fallbacks in coordinator.py stay until the live blank-titled
+subentry is re-added as "Default", then can go. Card distribution:
+bundling the card into the integration (manifest depends on
+frontend+http, JSModuleRegistration) still looks better than a second
+HACS repo - unstarted either way.
+
+Verified: 43/43 pytest, py_compile on every integration/dashboard
+module, `node --check` on the card, and preview.html screenshotted in
+a browser (bars/boundaries/clamp band/sun markers/now marker all
+rendering, zero console errors).
+
 ## Open question: dashboard card as a HACS plugin?
 
 The integration half of this used to be an open question - now

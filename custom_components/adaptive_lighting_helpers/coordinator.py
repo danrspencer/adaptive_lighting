@@ -101,14 +101,13 @@ class ScheduleInstance:
     subentry. Always named, always gets its own device - see
     device_info below."""
 
-    key: str  # hass.data storage key: the subentry_id
+    subentry_id: str  # hass.data storage key; also passed to async_add_entities(config_subentry_id=...)
     prefix: str  # "<slug>_" - entity_id prefix, derived from the (required) name
     # A blank/empty slug is defensive only, not reachable via the
     # config_flow form (name is required there) - kept so an existing
     # subentry saved before that requirement (if any) still gets a
     # valid, if unprefixed, entity_id instead of a broken "sensor._foo".
     config: Mapping[str, Any]  # subentry.data
-    subentry_id: str  # passed to async_add_entities(config_subentry_id=...)
     override_entity_id: str  # select.<prefix>adaptive_lighting_phase
     title: str  # the subentry's name (required - see SensorSubentryFlow)
 
@@ -145,10 +144,9 @@ def schedule_instances(entry: ConfigEntry) -> list[ScheduleInstance]:
         prefix = f"{slug}_" if slug else ""
         instances.append(
             ScheduleInstance(
-                key=subentry_id,
+                subentry_id=subentry_id,
                 prefix=prefix,
                 config=subentry.data,
-                subentry_id=subentry_id,
                 override_entity_id=f"select.{prefix}adaptive_lighting_phase",
                 title=subentry.title,
             )
@@ -182,7 +180,24 @@ def _compute_boundaries(hass: HomeAssistant, config: Mapping[str, Any]) -> dict[
     sun_state = hass.states.get("sun.sun")
     next_setting = sun_state.attributes.get("next_setting") if sun_state else None
     sunset_dt = dt_util.parse_datetime(next_setting) if next_setting else None
-    sunset_ts = sunset_dt.timestamp() if sunset_dt else latest_ts
+    if sunset_dt is not None:
+        # next_setting is exactly that - "next" - so once today's sunset
+        # has passed it points at tomorrow's, a full day ahead of today's
+        # schedule. Naively clamping that against today's earliest/latest
+        # bounds always lands on latest, which yanks the Evening boundary
+        # later *after* Evening has already started (phase flips back to
+        # Day until the latest bound). Project the sunset's time-of-day
+        # onto today instead - tomorrow's sunset time differs from
+        # today's by at most a couple of minutes, well inside the
+        # earliest/latest clamp's tolerance for caring.
+        sunset_local = dt_util.as_local(sunset_dt)
+        sunset_ts = (
+            dt_util.now()
+            .replace(hour=sunset_local.hour, minute=sunset_local.minute, second=sunset_local.second, microsecond=0)
+            .timestamp()
+        )
+    else:
+        sunset_ts = latest_ts
 
     if earliest_ts is not None and latest_ts is not None and sunset_ts is not None:
         evening_ts = max(earliest_ts, min(sunset_ts, latest_ts))
@@ -217,7 +232,6 @@ def _compute_curve_points(boundaries: dict[str, float | None], curve_kwargs: dic
                 "t": int(t),
                 "brightness": targets["brightness"],
                 "kelvin": targets["kelvin"],
-                "kelvin_rgb": targets["kelvin_rgb"],
             }
         )
     return points
