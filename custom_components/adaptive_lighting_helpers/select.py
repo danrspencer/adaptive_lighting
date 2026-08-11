@@ -53,15 +53,19 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
 
 
 class _PhaseOverrideSelect(CoordinatorEntity[ScheduleCoordinator], SelectEntity, RestoreEntity):
-    _attr_has_entity_name = False
     _attr_icon = "mdi:sun-clock"
     _attr_options = PHASE_OPTIONS
+    _attr_name = "Adaptive Lighting Phase"
 
     def __init__(self, coordinator: ScheduleCoordinator, instance: ScheduleInstance) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = f"{instance.key}_phase_override"
         self.entity_id = f"select.{instance.prefix}adaptive_lighting_phase"
-        self._attr_name = f"{instance.title} Adaptive Lighting Phase" if instance.title else "Adaptive Lighting Phase"
+        # Named instance -> device, has_entity_name=True, HA prefixes the
+        # plain name above with the device's name for display - see
+        # sensor.py's _ScheduleSensorBase for the full reasoning.
+        self._attr_device_info = instance.device_info
+        self._attr_has_entity_name = instance.device_info is not None
         self._attr_current_option = "Auto"
         self._sticky = bool(instance.config.get("sticky_phase_override", False))
         # The computed (non-override) phase at the moment this was last

@@ -56,11 +56,12 @@ from typing import Any, Mapping
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import slugify
 import homeassistant.util.dt as dt_util
 
-from .const import SUBENTRY_TYPE_SENSOR
+from .const import DOMAIN, SUBENTRY_TYPE_SENSOR
 from .curve import phase_at, targets_for_phase
 
 _LOGGER = logging.getLogger(__name__)
@@ -105,7 +106,27 @@ class ScheduleInstance:
     config: Mapping[str, Any]  # subentry.data
     subentry_id: str  # passed to async_add_entities(config_subentry_id=...)
     override_entity_id: str  # select.<prefix>adaptive_lighting_phase
-    title: str  # "" (blank name) or the subentry's name - prefixes entity friendly names too, not just entity_ids
+    title: str  # "" (blank name) or the subentry's name
+
+    @property
+    def device_info(self) -> DeviceInfo | None:
+        """None for a blank-named (bare-entity-ID) instance - those stay
+        standalone entities, unchanged from before devices existed here.
+        A named instance gets one device, named exactly what the user
+        typed - has_entity_name=True on its entities (see sensor.py/
+        select.py) then lets HA prefix their displayed names with this
+        automatically, so renaming the sensor is a single action
+        (Settings -> Devices -> rename) instead of us reconstructing a
+        name via string concatenation (which used to just lowercase-
+        concatenate whatever was typed, e.g. "upstairs Adaptive
+        Lighting" - the actual complaint that prompted this)."""
+        if not self.title:
+            return None
+        return DeviceInfo(
+            identifiers={(DOMAIN, self.subentry_id)},
+            name=self.title,
+            entry_type=DeviceEntryType.SERVICE,
+        )
 
 
 def schedule_instances(entry: ConfigEntry) -> list[ScheduleInstance]:

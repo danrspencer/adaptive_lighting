@@ -1015,6 +1015,85 @@ the preview over HTTP and screenshotting it in the browser afterward,
 not just by reading the diff - boundary lines, labels, and the evening
 clamp-band footnote all rendered correctly with zero console errors.
 
+**Second live thread-safety crash, same session, same root cause class
+as the coordinator logger bug.** Logs showed a repeating
+`RuntimeError: Detected that custom integration 'adaptive_lighting_helpers'
+calls hass.async_create_task from a thread other than the event loop`
+from `_refresh_all` - the listener that refreshes every schedule
+instance's coordinator on `sun.sun`/override-select changes. Confirmed
+against HA core source (`homeassistant/core.py`'s
+`get_hassjob_callable_job_type`) before fixing: a plain `def` with no
+`@callback` marker gets classified `HassJobType.Executor` and run in
+the worker thread pool, where `hass.async_create_task()` isn't safe to
+call. Fixed by decorating `_refresh_all` with `@callback` from
+`homeassistant.core`. Same underlying lesson as the logger bug -
+dormant until a real schedule instance existed to register this
+listener for the first time live; neither bug could have been caught
+by unit tests, both needed an actual live HA event loop.
+
+**Live troubleshooting also surfaced a real, unrelated entity-naming
+collision** - `sensor.adaptive_lighting_curve` got suffixed to `_2`
+because a pre-existing `template`-platform sensor (not from this
+integration, not the old `solar_adaptive_lighting` package either -
+some other leftover template) already occupied that bare entity_id.
+Confirmed via `ha_get_entity`'s `platform`/`config_entry_id` fields
+before concluding it wasn't a bug in this integration. Not fixed here -
+it's the user's own unrelated entity to rename or remove.
+
+**Device-per-sensor grouping, prompted directly by the user disliking
+the naming**: "I don't like how we create the sensor names currently -
+can't we just let the user name the sensor whatever they want?" The
+actual complaint traced to a concrete symptom: friendly names were
+built by string-concatenating the typed name with `" Adaptive
+Lighting"` (e.g. typing "upstairs" produced "upstairs Adaptive
+Lighting" - lowercase and all, no proper title-casing). First checked
+whether this was actually a renaming-doesn't-persist bug by reading
+`entity_platform.py`'s registration flow directly - it isn't: an
+explicitly-set `entity.entity_id` only seeds `suggested_object_id` on
+first creation, and `entity_registry.async_get_or_create` looks up by
+`unique_id` first, so a user rename via Settings → Entities already
+persists across restarts. The real fix was giving each **named**
+sensor its own HA **device** (`ScheduleInstance.device_info`, a new
+property - `None` for a blank-named/bare-entity-ID instance, which
+keeps its device-less bare name unchanged) with `has_entity_name=True`
+on its entities and a bare `_attr_name` ("Adaptive Lighting", "Adaptive
+Lighting Curve", "Adaptive Lighting Phase") - HA prefixes the device's
+own name for display automatically, so renaming a sensor is now one
+action (Settings → Devices → rename) instead of us reconstructing a
+name via string concatenation. Confirmed against HA core source
+(`entity_platform.py`'s `_async_add_entity`) that setting
+`entity.device_info` is sufficient - HA auto-creates the device via
+`device_registry.async_get_or_create`, correctly threading through the
+same `config_subentry_id` already passed to `async_add_entities`, no
+manual device-registry calls needed. Entity_id derivation deliberately
+left unchanged (still forced, still stable) - only the *displayed*
+name construction changed, so no existing automation/dashboard
+reference breaks.
+
+**Curve sensor: explored having the dashboard card fetch it directly
+instead of reading a stored sensor, at the user's request** (prompted
+by the "State attributes... exceed maximum size of 16384 bytes"
+recorder warning showing up in the same log check). Worked through the
+mechanics concretely rather than estimating: `compute_curve` returns
+one instant, not a day - getting the full 289-point curve the card
+needs would mean either 289 separate service calls per render (clearly
+impractical) or a new curve-returning service, which would just move
+the same computation from "coordinator computes once/60s, pushed as
+state" to "card requests it every ~30s via its own render timer" -
+more total computation, not less, plus a WS/service round-trip on
+every render the current design doesn't have. The one real win a
+service-based fetch would offer - avoiding the recorder-size warning,
+since recorder doesn't store service responses - turned out to be
+achievable directly on the existing sensor anyway, via HA's real
+`_unrecorded_attributes` mechanism (confirmed present in
+`homeassistant/helpers/entity.py`). Added
+`_unrecorded_attributes = frozenset({"points"})` to `_CurveSensor` -
+one line, keeps the sensor available to automations, no card changes,
+no new service. Recommended against pursuing the fetch-directly
+direction after this - the concrete exploration didn't surface an
+actual win it would provide that the existing design couldn't already
+get more simply.
+
 ## Open question: dashboard card as a HACS plugin?
 
 The integration half of this used to be an open question - now
