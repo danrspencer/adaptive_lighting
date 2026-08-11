@@ -35,12 +35,11 @@ Schedule instances: the config entry itself never carries a schedule -
 it only registers the services (see __init__.py). Every schedule is a
 "sensor" subentry, added via the "Add Sensor" flow (config_flow.py's
 SensorSubentryFlow) - so there's exactly one mechanism for adding a
-schedule, not "the first one is special". A subentry's name is
-optional, though: leave it blank for bare, unprefixed entity IDs
-(sensor.adaptive_lighting etc, matching the original single-sensor
-naming) or give it a name for prefixed ones (sensor.living_room_
-adaptive_lighting) - at most one blank-named subentry is allowed,
-enforced the same way a duplicate name is (see SensorSubentryFlow).
+schedule, not "the first one is special". Every instance is named
+(required - see SensorSubentryFlow) and gets both a prefixed entity_id
+(sensor.living_room_adaptive_lighting) and its own device (Settings ->
+Devices, renamable there - see ScheduleInstance.device_info), including
+the first sensor auto-seeded when the integration is added ("Default").
 schedule_instances() is the one place that enumerates all of them -
 __init__.py, sensor.py, and select.py all iterate its output rather
 than each re-deriving the subentry lookup.
@@ -99,32 +98,36 @@ CURVE_KEYS = (
 @dataclass
 class ScheduleInstance:
     """One sensor's schedule/curve setup, derived from a "sensor"
-    subentry - named (prefixed) or blank (bare names)."""
+    subentry. Always named, always gets its own device - see
+    device_info below."""
 
     key: str  # hass.data storage key: the subentry_id
-    prefix: str  # "<slug>_" (named) or "" (blank name - bare entity IDs)
+    prefix: str  # "<slug>_" - entity_id prefix, derived from the (required) name
+    # A blank/empty slug is defensive only, not reachable via the
+    # config_flow form (name is required there) - kept so an existing
+    # subentry saved before that requirement (if any) still gets a
+    # valid, if unprefixed, entity_id instead of a broken "sensor._foo".
     config: Mapping[str, Any]  # subentry.data
     subentry_id: str  # passed to async_add_entities(config_subentry_id=...)
     override_entity_id: str  # select.<prefix>adaptive_lighting_phase
-    title: str  # "" (blank name) or the subentry's name
+    title: str  # the subentry's name (required - see SensorSubentryFlow)
 
     @property
-    def device_info(self) -> DeviceInfo | None:
-        """None for a blank-named (bare-entity-ID) instance - those stay
-        standalone entities, unchanged from before devices existed here.
-        A named instance gets one device, named exactly what the user
-        typed - has_entity_name=True on its entities (see sensor.py/
-        select.py) then lets HA prefix their displayed names with this
-        automatically, so renaming the sensor is a single action
-        (Settings -> Devices -> rename) instead of us reconstructing a
-        name via string concatenation (which used to just lowercase-
-        concatenate whatever was typed, e.g. "upstairs Adaptive
-        Lighting" - the actual complaint that prompted this)."""
-        if not self.title:
-            return None
+    def device_info(self) -> DeviceInfo:
+        """Every instance gets its own device, named exactly what the
+        user typed. Combined with has_entity_name=True on every entity
+        (see sensor.py/select.py), HA prefixes each entity's short name
+        with this device's name for display automatically, so renaming
+        the sensor is a single action (Settings -> Devices -> rename)
+        instead of us reconstructing a name via string concatenation
+        (which used to just lowercase-concatenate whatever was typed,
+        e.g. "upstairs Adaptive Lighting" - the actual complaint that
+        prompted all of this). The "Adaptive Lighting" fallback below is
+        defensive only (an empty title isn't reachable via the
+        config_flow form - name is required there)."""
         return DeviceInfo(
             identifiers={(DOMAIN, self.subentry_id)},
-            name=self.title,
+            name=self.title or "Adaptive Lighting",
             entry_type=DeviceEntryType.SERVICE,
         )
 

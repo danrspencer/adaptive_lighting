@@ -114,16 +114,15 @@ times/numbers stored directly on the sensor's own subentry, editable later from 
 Adding the integration itself needs no configuration and sets up nothing beyond the services above — a schedule
 only exists once you add a sensor.
 
-You can add any number of sensors this way, each independent, each with its own schedule and curve. Entities are
-prefixed with the sensor's slugified name — naming one "Living Room" gets you
-`sensor.living_room_adaptive_lighting`, `select.living_room_adaptive_lighting_phase`, and so on, grouped under
-their own device (also named "Living Room") so their displayed names read "Living Room Adaptive Lighting" etc. —
-rename the device later (Settings → Devices → the sensor's device → rename) and every entity under it updates at
-once. **Leave the name blank** to get bare, unprefixed entity IDs instead (`sensor.adaptive_lighting` etc.), with
-no device — matching what a Jinja `packages/*.yaml` day-phase setup would typically use, so this is a drop-in
-replacement for one if you're migrating away from it (remove that package first, or these will get suffixed
-`_2`). At most one sensor may leave the name blank — adding a second one is treated as a name collision, the same
-as reusing an existing name.
+You can add any number of sensors this way, each independent, each with its own schedule and curve, and each
+grouped under its own device — naming one "Living Room" gets you a device called "Living Room" containing
+`sensor.living_room_adaptive_lighting` (displayed as just "Living Room", since it's the entity that represents
+the device), `sensor.living_room_adaptive_lighting_curve` (displayed as "Living Room Curve"), and
+`select.living_room_adaptive_lighting_phase` (displayed as "Living Room Phase"). Rename the device later
+(Settings → Devices → the sensor's device → rename) and every entity under it updates at once — that's the only
+place the sensor's *displayed* name lives; its entity_ids stay as originally created (see below). The very first
+sensor - seeded automatically when you add the integration - is named "Default"; add more from the same page any
+time, each with its own name.
 
 Each sensor produces two entities, computed the same way `compute_curve` computes them and refreshed every 60
 seconds:

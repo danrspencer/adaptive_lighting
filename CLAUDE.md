@@ -1094,6 +1094,56 @@ direction after this - the concrete exploration didn't surface an
 actual win it would provide that the existing design couldn't already
 get more simply.
 
+**Device grouping fixed twice more, same live-testing session - both
+times the user caught a real gap immediately.** First: the device
+change above only applied to *named* instances - a blank-named
+instance (including the auto-seeded first sensor everyone actually
+gets) stayed device-less, on the old flat-name style. Caught the moment
+the user looked at their own default sensor ("that's just a plain old
+sensor... that must mean we've got a bunch of code supporting the old
+style still hanging around"). Fixed by making `device_info` unconditional
+- every instance gets a device, blank-named ones falling back to
+"Adaptive Lighting" - and switching entity naming to the idiomatic HA
+pattern throughout: the primary sensor sets `_attr_name = None` (displays
+as just the device's name, not a repeat of it) while the curve
+sensor/phase select get short names ("Curve"/"Phase") that HA
+concatenates with the device name for display. This also explained a
+second observation ("when I rename the device I don't get an offer to
+update entity names") - that offer is specific to the *old*
+`has_entity_name=False` style, where each entity's full name is a
+static string that needs a one-time bulk update when the device is
+renamed; with `has_entity_name=True` throughout, the displayed name is
+computed live from the device name every time, so there's nothing to
+offer - renaming just works instantly, which is correct, not a missing
+feature.
+
+Second: once every instance had a device, the user immediately
+questioned whether the blank-name/bare-entity-ID special case still
+made sense at all ("it doesn't make sense to have a blank named
+device"). Agreed and removed it - `SUBENTRY_FIELDS`'s `name` field went
+back to `vol.Required`, and the auto-seeded first sensor is now named
+"Default" (`DEFAULT_SENSOR_NAME` in `config_flow.py`) instead of "".
+Named "Default" specifically, not "Adaptive Lighting" - the latter
+would have produced a stuttering `sensor.adaptive_lighting_adaptive_lighting`
+entity_id once every instance is unconditionally prefixed. This
+does give up byte-identical bare-name compatibility with the old Jinja
+`packages/*.yaml` naming (`sensor.adaptive_lighting` with no prefix at
+all) that was one of the original motivations for the blank-name
+option - judged a reasonable trade once it became clear that same bare
+name was *already* causing live friction anyway (see the unrelated
+`sensor.adaptive_lighting_curve` collision noted above, which happened
+precisely because nothing enforces bare names being actually free).
+`coordinator.py`'s `slugify(...) or ""` prefix fallback and
+`device_info`'s `self.title or "Adaptive Lighting"` fallback were both
+deliberately left in place rather than ripped out - harmless defensive
+code, and specifically what keeps the live instance's existing
+blank-titled subentry (created before this change, still on disk)
+working unmodified on its next reload rather than picking up a broken
+`sensor._adaptive_lighting`-style single-underscore prefix. Not a full
+migration - the user's existing default sensor still needs removing
+and re-adding by hand to actually pick up the new "Default" naming and
+device grouping; only new installs get it automatically.
+
 ## Open question: dashboard card as a HACS plugin?
 
 The integration half of this used to be an open question - now

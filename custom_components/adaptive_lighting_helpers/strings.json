@@ -20,9 +20,9 @@
       "step": {
         "user": {
           "title": "Add an Adaptive Lighting sensor",
-          "description": "Adds a day-phase/curve sensor and phase-override select. Entities are prefixed with the name (e.g. \"Living Room\" -> sensor.living_room_adaptive_lighting) - leave it blank for bare entity IDs instead (sensor.adaptive_lighting). At most one sensor may leave the name blank.",
+          "description": "Adds a day-phase/curve sensor and phase-override select, grouped under a device with this name. Entities are prefixed with it too (e.g. \"Living Room\" -> sensor.living_room_adaptive_lighting).",
           "data": {
-            "name": "Name (blank for bare entity IDs)",
+            "name": "Name",
             "morning_time": "Morning start time",
             "day_time": "Day start time",
             "evening_earliest_time": "Evening earliest start time",
@@ -61,7 +61,7 @@
         }
       },
       "error": {
-        "already_configured": "A sensor with this name (or another blank-named sensor) already exists"
+        "already_configured": "A sensor with this name already exists"
       },
       "abort": {
         "reconfigure_successful": "Reconfiguration successful"

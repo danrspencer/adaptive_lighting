@@ -3,17 +3,16 @@
 The main entry needs no configuration at all - adding it just registers
 the compute_lighting_groups/compute_curve/compute_scene_coverage/
 apply_lighting services (see __init__.py), plus a single default
-"sensor" subentry (blank name -> bare entity IDs, DEFAULT_SENSOR_TIMES,
-curve.py's own brightness/Kelvin defaults) so there's something usable
-immediately rather than an empty integration you have to remember to
-add a sensor to. Every day-phase/curve sensor + phase-override select
-beyond that is a "sensor" subentry too (SensorSubentryFlow below),
-added afterwards from this integration's own page - one mechanism for
-every sensor, not a separate main-entry path alongside named ones. A
-subentry's name is optional: leave it blank for bare entity IDs
-(sensor.adaptive_lighting etc), or name it for prefixed ones
-(sensor.living_room_adaptive_lighting) - see coordinator.py's
-ScheduleInstance/schedule_instances().
+"sensor" subentry named "Default" (DEFAULT_SENSOR_TIMES, curve.py's own
+brightness/Kelvin defaults) so there's something usable immediately
+rather than an empty integration you have to remember to add a sensor
+to. Every day-phase/curve sensor + phase-override select beyond that is
+a "sensor" subentry too (SensorSubentryFlow below), added afterwards
+from this integration's own page - one mechanism for every sensor, not
+a separate main-entry path alongside named ones. A subentry's name is
+required and becomes both its device's name (Settings -> Devices,
+renamable later) and its entity_id prefix (sensor.living_room_adaptive_lighting
+etc) - see coordinator.py's ScheduleInstance/schedule_instances().
 
 Subentry values are plain HH:MM:SS times/plain numbers stored directly
 on the subentry - no separate input_datetime helpers to create first
@@ -80,11 +79,9 @@ CURVE_AND_BEHAVIOR_FIELDS = {
 # would change the slugified entity_id prefix, not something a
 # reconfigure form should do silently).
 SUBENTRY_SCHEDULE_FIELDS = {**TIME_FIELDS, **CURVE_AND_BEHAVIOR_FIELDS}
-# Optional, not Required - blank means "no prefix", giving bare entity
-# IDs (sensor.adaptive_lighting etc). At most one subentry may leave
-# this blank - see async_step_user's collision check, which treats a
-# second blank name the same as a duplicate name.
-SUBENTRY_FIELDS = {vol.Optional("name", default=""): selector.TextSelector(), **SUBENTRY_SCHEDULE_FIELDS}
+SUBENTRY_FIELDS = {vol.Required("name"): selector.TextSelector(), **SUBENTRY_SCHEDULE_FIELDS}
+
+DEFAULT_SENSOR_NAME = "Default"
 
 # Seeded onto the single default sensor subentry created alongside the
 # main entry (see async_step_user below). Derived from curve.py's
@@ -105,16 +102,16 @@ class AdaptiveLightingHelpersConfigFlow(config_entries.ConfigFlow, domain=DOMAIN
         self._abort_if_unique_id_configured()
         # No fields to ask for - see module docstring. Creates
         # immediately rather than showing an empty form to click through,
-        # seeding one default (blank-named, bare-entity-ID) sensor so
-        # there's something usable right away.
+        # seeding one sensor named "Default" so there's something usable
+        # right away.
         return self.async_create_entry(
             title="Adaptive Lighting Helpers",
             data={},
             subentries=[
                 {
                     "subentry_type": SUBENTRY_TYPE_SENSOR,
-                    "title": "",
-                    "unique_id": None,
+                    "title": DEFAULT_SENSOR_NAME,
+                    "unique_id": slugify(DEFAULT_SENSOR_NAME),
                     "data": DEFAULT_SENSOR_TIMES,
                 }
             ],
@@ -128,23 +125,21 @@ class AdaptiveLightingHelpersConfigFlow(config_entries.ConfigFlow, domain=DOMAIN
 
 class SensorSubentryFlow(ConfigSubentryFlow):
     """Adds one adaptive lighting sensor - its own schedule and
-    (optionally) its own brightness/Kelvin curve. Produces a
-    sensor.<slug>_adaptive_lighting + select.<slug>_adaptive_lighting_phase
-    pair, namespaced by the slugified name so multiple sensors can
-    coexist - see coordinator.py's schedule_instances(). Leaving name
-    blank drops the prefix entirely (bare sensor.adaptive_lighting etc);
-    at most one subentry may do this."""
+    (optionally) its own brightness/Kelvin curve. Produces a device
+    named after it, containing sensor.<slug>_adaptive_lighting +
+    sensor.<slug>_adaptive_lighting_curve + select.<slug>_adaptive_lighting_phase,
+    namespaced by the slugified name so multiple sensors can coexist -
+    see coordinator.py's schedule_instances()."""
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
         errors: dict[str, str] = {}
         if user_input is not None:
-            name = user_input.get("name", "").strip()
+            name = user_input["name"].strip()
             slug = slugify(name)
             # Compares slugified titles rather than trusting stored
-            # unique_ids directly, so a second blank name collides with
-            # an existing blank-named subentry exactly the same way a
-            # second "Living Room" would - one collision check handles
-            # both cases, matching coordinator.py's own prefix derivation.
+            # unique_ids directly - matches coordinator.py's own prefix
+            # derivation exactly, so this can't disagree with what
+            # schedule_instances() would actually consider a collision.
             for subentry in self._get_entry().subentries.values():
                 if slugify(subentry.title) == slug:
                     errors["name"] = "already_configured"

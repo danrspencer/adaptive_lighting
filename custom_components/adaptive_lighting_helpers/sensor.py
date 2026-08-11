@@ -8,13 +8,18 @@ schedule_instances) - one per named "sensor" subentry.
 Entity IDs are prefixed with the sensor's slugified name (e.g.
 sensor.living_room_adaptive_lighting), or bare if the name was left
 blank when the sensor was added - see coordinator.py's
-schedule_instances(). A named sensor also gets its own device (see
-ScheduleInstance.device_info) - has_entity_name=True lets HA prefix
-each entity's plain name ("Adaptive Lighting", "Adaptive Lighting
-Curve") with the device's name for display, so renaming the sensor is
-one action (Settings -> Devices -> rename) rather than us
-reconstructing a name via string concatenation. A blank-named sensor
-has no device and keeps its bare name as-is.
+schedule_instances(). Every sensor also gets its own device (see
+ScheduleInstance.device_info) regardless of whether its entity_ids are
+prefixed - device grouping and entity_id prefixing are independent.
+has_entity_name=True plus a short per-entity name ("Curve") lets HA
+prefix it with the device's own name for display ("Upstairs Curve", or
+"Adaptive Lighting Curve" for the default device), so renaming the
+sensor is one action (Settings -> Devices -> rename) rather than us
+reconstructing a name via string concatenation. The main sensor sets
+its own name to None - the idiomatic HA pattern for "the entity that
+represents the device" - so it displays as just the device's name
+alone ("Upstairs", or "Adaptive Lighting" by default), not a repeat of
+it.
 
 Day-phase, the brightness/colour-temperature "right now" values, and
 today's four phase-boundary timestamps are all combined into a single
@@ -67,24 +72,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
 
 
 class _ScheduleSensorBase(CoordinatorEntity[ScheduleCoordinator], SensorEntity):
+    _attr_has_entity_name = True
+
     def __init__(self, coordinator: ScheduleCoordinator, instance: ScheduleInstance, unique_id_suffix: str, forced_object_id: str) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = f"{instance.key}_{unique_id_suffix}"
         self.entity_id = f"sensor.{instance.prefix}{forced_object_id}"
-        # A named instance gets a device (see ScheduleInstance.device_info)
-        # and has_entity_name=True, so HA prefixes the plain name below
-        # with the device's own name for display - rename the device
-        # (Settings -> Devices) and every entity under it updates at
-        # once, rather than us reconstructing a name via string
-        # concatenation. A blank-named instance has no device and keeps
-        # the bare name as-is, unchanged from before devices existed here.
         self._attr_device_info = instance.device_info
-        self._attr_has_entity_name = instance.device_info is not None
 
 
 class _AdaptiveLightingSensor(_ScheduleSensorBase):
     _attr_icon = "mdi:home-lightbulb"
-    _attr_name = "Adaptive Lighting"
+    _attr_name = None  # the entity that represents the device - displays as just the device's own name
 
     def __init__(self, coordinator: ScheduleCoordinator, instance: ScheduleInstance) -> None:
         super().__init__(coordinator, instance, "adaptive_lighting", "adaptive_lighting")
@@ -121,7 +120,7 @@ class _AdaptiveLightingSensor(_ScheduleSensorBase):
 
 class _CurveSensor(_ScheduleSensorBase):
     _attr_icon = "mdi:chart-bell-curve"
-    _attr_name = "Adaptive Lighting Curve"
+    _attr_name = "Curve"
     # 289 samples is comfortably over the recorder's 16384-byte attribute
     # limit (it was warning and silently dropping this attribute in
     # storage every update) - "points" is only ever read live off
