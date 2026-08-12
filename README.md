@@ -119,6 +119,18 @@ custom_components/adaptive_lighting_helpers/
 hacs.json
     HACS repository metadata for the integration.
 
+brand/
+    generate_icon.py  renders brand/icon.svg from the real curve module
+                      (same pattern as the dashboard preview generators):
+                      the icon is the day's actual brightness/colour
+                      curve as bars, with a sun in the evening gap
+    icon.svg, icon.png, icon@2x.png
+                      the integration's icon, sized (256/512, alpha) for
+                      a home-assistant/brands submission - HA and HACS
+                      only show integration icons served from that repo,
+                      so the icon appears in the UI once it's submitted
+                      there (custom_integrations/adaptive_lighting_helpers/)
+
 blueprints/automation/danspencer/adaptive_lighting.yaml
     The automation blueprint: triggers, conditions, target resolution,
     and the action sequence (which service to call, with what target).
