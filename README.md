@@ -123,7 +123,7 @@ brand/
     generate_icon.py  renders brand/icon.svg from the real curve module
                       (same pattern as the dashboard preview generators):
                       the icon is the day's actual brightness/colour
-                      curve as bars, with a sun in the evening gap
+                      curve as bars
     icon.svg, icon.png, icon@2x.png
                       the integration's icon, sized (256/512, alpha) for
                       a home-assistant/brands submission - HA and HACS

@@ -1316,10 +1316,11 @@ heights from `brightness_for_phase`, bar colours from
 `DEFAULT_SCHEDULE_HOURS`) - the icon IS the curve, regenerate and it
 follows the defaults. Design iterated visually in a browser (several
 rejected: an area-silhouette that read as a slab, 16 bars that read as
-a barcode, a sun overlapping bars that read as a lollipop) and landed
-on: dark night-blue rounded tile, 7 rounded bars tracing the
-night/morning/day/evening/night silhouette, and a `kelvin_to_rgb(2200)`
-sun disc floating in the open sky of the evening step-down. PNGs
+a barcode, a sun overlapping bars that read as a lollipop, then a
+floating sun disc dropped at the user's request - "just the bars are
+good enough") and landed on: dark night-blue rounded tile, 7 rounded
+bars tracing the night/morning/day/evening/night silhouette, nothing
+else. PNGs
 (256 `icon.png` / 512 `icon@2x.png`, alpha preserved) rendered with
 `qlmanage -t -s <size>` (the only SVG rasteriser on this machine -
 verified pixel-faithful to the SVG in a browser side-by-side before

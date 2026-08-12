@@ -3,14 +3,10 @@
 Generates brand/icon.svg - the integration's icon - from the actual
 curve module, the same way dashboard/generate_preview_data.py builds
 the card preview: the icon IS the day's brightness/colour curve, not an
-artist's impression of it. Heights come from brightness_for_phase, the
-horizontal colour ramp from kelvin_for_phase run through kelvin_to_rgb,
-and the schedule is curve.py's own DEFAULT_SCHEDULE_HOURS - change the
+artist's impression of it. Bar heights come from brightness_for_phase,
+bar colours from kelvin_for_phase run through kelvin_to_rgb, and the
+schedule is curve.py's own DEFAULT_SCHEDULE_HOURS - change the
 defaults and a regenerated icon follows.
-
-The white-ringed dot on the evening slope echoes the dashboard card's
-"now" marker - the one element of visual identity this project already
-has.
 
 Home Assistant doesn't read icons from the integration directory -
 they're served from the home-assistant/brands repo (custom_integrations/
@@ -59,23 +55,6 @@ NIGHT = DEFAULT_SCHEDULE_HOURS["night"] * 3600
 # of which is a flat night shelf that wastes icon real estate.
 T_START = MORNING - 3 * 3600
 T_END = NIGHT + 3 * 3600
-STEP = 300
-
-
-def sample():
-    points = []
-    t = T_START
-    while t <= T_END:
-        phase = phase_at(t, MORNING, DAY, EVENING, NIGHT)
-        b = brightness_for_phase(phase, t, NIGHT)
-        k = kelvin_for_phase(phase, t, EVENING, DAY, NIGHT)
-        points.append((t, b, k))
-        t += STEP
-    return points
-
-
-def x_of(t):
-    return PAD_X + (t - T_START) / (T_END - T_START) * CHART_W
 
 
 def y_of(brightness):
@@ -105,33 +84,8 @@ def main():
             f'rx="{bar_w / 2:.1f}" fill="rgb({r},{g},{bl})" />'
         )
 
-    # A sun disc setting behind the evening bar - Evening tracking
-    # sunset is the schedule's signature feature, and it's what turns
-    # "some bars" into a lighting icon. Centred over the first Evening
-    # bar, in the open sky to the right of the full-height Day bars,
-    # dipping just behind the bar's top so it reads as setting into the
-    # skyline.
-    evening_i = next(
-        i
-        for i in range(N_BARS)
-        if phase_at(T_START + (T_END - T_START) * (i + 0.5) / N_BARS, MORNING, DAY, EVENING, NIGHT) == "Evening"
-    )
-    evening_t = T_START + (T_END - T_START) * (evening_i + 0.5) / N_BARS
-    evening_top = y_of(brightness_for_phase("Evening", evening_t, NIGHT))
-    SUN_R = 20
-    # Floating in the open sky the evening step-down leaves - centred
-    # between the Evening and Night bars, halfway between the Day bars'
-    # tops and the Evening bar's top, clear of every bar so nothing
-    # slices through the disc.
-    evening_center = PAD_X + evening_i * slot_w + slot_w / 2
-    night_center = PAD_X + (N_BARS - 1) * slot_w + slot_w / 2
-    sun_x = (evening_center + night_center) / 2
-    sun_y = (PAD_TOP + evening_top) / 2
-    sr, sg, sb = kelvin_to_rgb(2200)  # low-sun colour, warmer than any bar
-
     svg = f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {SIZE} {SIZE}">
   <rect x="0" y="0" width="{SIZE}" height="{SIZE}" rx="{CORNER_R}" fill="{BG}" />
-  <circle cx="{sun_x:.1f}" cy="{sun_y:.1f}" r="{SUN_R}" fill="rgb({sr},{sg},{sb})" />
   {chr(10).join('  ' + b for b in bars).strip()}
 </svg>
 """
