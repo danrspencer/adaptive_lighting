@@ -12,10 +12,11 @@ touch any light); `apply_lighting` wraps the same grouping logic and
 actually dispatches light.turn_on/turn_off, reading its brightness/
 colour target off any sensor entity you point it at - see README's
 "Bring your own sensor" section. Optionally also sets up day-phase/curve
-sensors (sensor.py) and a phase-override select (select.py) per named
-sensor added afterwards (Settings -> Devices & Services -> Adaptive
-Lighting Helpers -> Add Sensor) - a native replacement for a Jinja
-packages/*.yaml setup - see config_flow.py.
+sensors (sensor.py), a phase-override select (select.py), and the
+schedule/curve config as live entities (time.py, number.py, switch.py)
+per named sensor added afterwards (Settings -> Devices & Services ->
+Adaptive Lighting Helpers -> Add Sensor) - a native replacement for a
+Jinja packages/*.yaml setup - see config_flow.py.
 
 Designed to work with the adaptive_lighting blueprint in this repo,
 but not coupled to it: call any of the services directly from your own
@@ -24,9 +25,10 @@ services.yaml (visible in Developer Tools -> Actions) for the full
 contract of each service on its own terms.
 
 curve.py, grouping.py, and scenes.py have no Home Assistant
-dependency - this file, sensor.py, select.py, and coordinator.py are
-the only places that touch `hass`, translating between real HA
-state/registries and the plain functions those modules expose.
+dependency - this file, sensor.py, select.py, number.py, time.py,
+switch.py, and coordinator.py are the only places that touch `hass`,
+translating between real HA state/registries and the plain functions
+those modules expose.
 """
 
 from __future__ import annotations
@@ -51,7 +53,7 @@ from .curve import phase_at, targets_for_phase
 from .grouping import EntityLookup, Group, build_groups
 from .scenes import SceneLookup, compute_scene_coverage
 
-SCHEDULE_PLATFORMS = [Platform.SENSOR, Platform.SELECT]
+SCHEDULE_PLATFORMS = [Platform.SENSOR, Platform.SELECT, Platform.NUMBER, Platform.TIME, Platform.SWITCH]
 
 
 COMPUTE_LIGHTING_GROUPS_SCHEMA = vol.Schema(
@@ -76,11 +78,11 @@ COMPUTE_CURVE_SCHEMA = vol.Schema(
         vol.Required("evening"): vol.Coerce(float),
         vol.Required("night"): vol.Coerce(float),
         vol.Optional("at"): vol.Coerce(float),
-        # Same optional curve fields as config_flow.py's
-        # CURVE_AND_BEHAVIOR_FIELDS, built from the same CURVE_KEYS
-        # (coordinator.py) rather than listing the 7 names a third time -
-        # left unset, targets_for_phase's own defaults apply, matching
-        # this service's original behaviour.
+        # Same eight curve fields a sensor's number.* entities expose
+        # (see number.py), built from the same CURVE_KEYS (coordinator.py)
+        # rather than listing the names again - left unset,
+        # targets_for_phase's own defaults apply, matching this
+        # service's original behaviour.
         **{vol.Optional(key): vol.Coerce(int) for key in CURVE_KEYS},
     }
 )

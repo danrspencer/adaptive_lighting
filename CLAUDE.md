@@ -1238,6 +1238,76 @@ module, `node --check` on the card, and preview.html screenshotted in
 a browser (bars/boundaries/clamp band/sun markers/now marker all
 rendering, zero console errors).
 
+**Schedule/curve config moved off the config flow entirely, onto live
+entities - the user's own framing**: "all of the config like time
+boundaries, brightness, etc... could just be more entities on the
+device - that would be much nicer than the way it's currently kinda
+hidden on the device config." Correct, and a bigger, genuinely
+architectural change, not a tweak - the "Add Sensor" form now asks for
+*only* a name; the five schedule times and eight brightness/Kelvin
+curve values that used to be config-flow fields (editable only via
+Configure) are now real `time.*`/`number.*` entities on the sensor's
+device, plus a new `switch.*` for `sticky_phase_override` (previously
+a boolean config-flow field). `entity_category: config` groups all
+fourteen under the device's collapsed "Configuration" section rather
+than cluttering the main entity list - the same complaint that killed
+the old boundary sensors, addressed structurally this time instead of
+by removing entities.
+
+Verified the persistence mechanism against HA core source before
+building on it, not assumed: `number` has a built-in `RestoreNumber`
+mixin (`homeassistant.components.number`); `time` and `switch` do not,
+so `time.py`/`switch.py` hand-roll restoration via `RestoreEntity` +
+`async_get_last_state()` in `async_added_to_hass` - the exact pattern
+`select.py`'s phase-override already used, now extended to three more
+platforms instead of being a one-off. Each entity starts at a sensible
+default (`curve.DEFAULT_SCHEDULE_HOURS`/`DEFAULT_CURVE_VALUES`) on
+first creation, then persists whatever the user sets across restarts.
+Changing any of them calls `coordinator.async_request_refresh()`
+immediately (`async_set_native_value`/`async_set_value`) rather than
+waiting up to 60s for the next poll - same immediacy the phase-override
+select already had.
+
+**Real architectural shift, not just new entities**: config now lives
+in entity state, not config-entry data. `coordinator.py`'s
+`_compute_boundaries`/`_curve_kwargs` read `hass.states.get(...)` for
+each `time.*`/`number.*` entity instead of `subentry.data` - considered
+and rejected the alternative (entities write back into subentry.data
+via `async_update_subentry`) specifically because every subentry data
+change triggers the update-listener's full entry reload (added earlier
+this session for a different reason - picking up new/removed
+subentries) - reloading every coordinator and recreating every entity
+just to tweak one brightness number would have been exactly the kind
+of thing this session already fixed once (see the thread-safety crash
+above) waiting to happen again, and a needless one at that.
+`ScheduleInstance.config` (the `subentry.data` passthrough) is gone
+entirely - nothing reads it any more.
+
+**Real crash caught before shipping, not after, this time**: reasoned
+through the startup ordering rather than assuming it was fine.
+`__init__.py`'s `async_setup_entry` runs each `ScheduleCoordinator`'s
+*first* refresh *before* forwarding platforms (this order is load-
+bearing - swapping it would leave `sensor.py`/`select.py`'s
+`CoordinatorEntity`-based entities reading `coordinator.data` while
+it's still `None`, a different crash). That means on a sensor's very
+first-ever refresh, its `time.*` entities don't exist in the state
+machine yet - `hass.states.get(...)` returns `None` for every boundary,
+and `curve.phase_at()` takes plain positional floats with no None
+handling (`t < morning_ts` raises `TypeError` if `morning_ts` is
+`None`). Fixed in `coordinator.py`'s `_time_ts()`: a genuinely missing
+entity (state is `None`) falls back to the same default the entity
+will report moments later anyway; `"unknown"`/`"unavailable"` (entity
+exists but has no value - not actually reachable given `_BoundaryTime`
+always seeds a default in `__init__`, but a real "not configured"
+signal if it ever were) still returns `None` and isn't papered over the
+same way. `_curve_kwargs` needed no equivalent fix - missing number
+entities are simply omitted from the kwargs dict, and
+`targets_for_phase`'s own keyword defaults (the same numbers) apply
+automatically, no crash-prone required positional args involved there.
+
+Not yet deployed live as of this note - `pytest` (43/43) and
+`py_compile` only so far.
+
 ## Open question: dashboard card as a HACS plugin?
 
 The integration half of this used to be an open question - now

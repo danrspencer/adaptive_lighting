@@ -106,36 +106,35 @@ response_variable: coverage
 ## Optional: day-phase/curve sensors
 
 If you'd rather have this running continuously as sensors than call `compute_curve` yourself, add a sensor from
-the integration's own page (Settings → Devices & Services → Adaptive Lighting Helpers → Add Sensor) — a required
-name plus the five schedule times (start times for Morning, Day, and Night, and Evening's earliest/latest bound),
-and the same optional brightness/Kelvin fields `compute_curve` takes (see above; blank means curve.py's own
-defaults, identical to the numbers shown there). No separate helper entities to create first — these are plain
-times/numbers stored directly on the sensor's own subentry, editable later from the same page (Configure).
-Adding the integration itself needs no configuration and sets up nothing beyond the services above — a schedule
-only exists once you add a sensor.
+the integration's own page (Settings → Devices & Services → Adaptive Lighting Helpers → Add Sensor) — just a
+name. Adding the integration itself needs no configuration and sets up nothing beyond the services above; a
+schedule only exists once you add a sensor.
 
-You can add any number of sensors this way, each independent, each with its own schedule and curve, and each
-grouped under its own device — naming one "Living Room" gets you a device called "Living Room" containing
-`sensor.living_room_adaptive_lighting` (displayed as just "Living Room", since it's the entity that represents
-the device), `sensor.living_room_adaptive_lighting_curve` (displayed as "Living Room Curve"), and
-`select.living_room_adaptive_lighting_phase` (displayed as "Living Room Phase"). Rename the device later
-(Settings → Devices → the sensor's device → rename) and every entity under it updates at once — that's the only
-place the sensor's *displayed* name lives; its entity_ids stay as originally created (see below). The very first
-sensor - seeded automatically when you add the integration - is named "Default"; add more from the same page any
-time, each with its own name.
+You can add any number of sensors this way, each independent, each grouped under its own device — naming one
+"Living Room" gets you a device called "Living Room". Rename the device later (Settings → Devices → the sensor's
+device → rename) and every entity under it updates its displayed name at once — that's the only place the
+sensor's *displayed* name lives; its entity_ids stay as originally created. The very first sensor - seeded
+automatically when you add the integration - is named "Default"; add more from the same page any time, each with
+its own name.
 
-Each sensor produces three entities, computed the same way `compute_curve` computes them and refreshed every 60
-seconds:
+Each sensor's device contains, computed the same way `compute_curve` computes them and refreshed every 60 seconds:
 
 | Entity | What it is |
 |---|---|
 | `sensor.<name_>adaptive_lighting` | Combined "right now" reading — state is the phase (Morning/Day/Evening/Night), `attributes.brightness` (0-255), `attributes.color_temp` (Kelvin), and `attributes.rgb_color` (`[r, g, b]`) are exactly the attribute names `apply_lighting`'s `sensor_entity_id` and the blueprint's `adaptive_sensor` input already read, so this can be pointed at directly. Also carries today's four phase-boundary timestamps as `attributes.morning_start`/`day_start`/`evening_start`/`night_start`, plus `attributes.evening_earliest`/`evening_latest` (the two configured bounds Evening was actually clamped between) — no separate boundary sensors, since a phase-change automation only needs a `platform: state, attribute: phase` trigger on this same entity, and anything that specifically wants a boundary time (the dashboard card, in particular) can read it straight off these attributes |
 | `sensor.<name_>adaptive_lighting_curve` | `attributes.points`: the full day as 289 `{t, brightness, kelvin}` samples — what the [dashboard card](../README.md#previewing-the-dashboard-card) reads. Deliberately does **not** follow a manual phase override (see below) — it's a full-day schedule, not a "right now" value |
-| `select.<name_>adaptive_lighting_phase` | Manual override — `Auto` (default) or a specific phase. Pinning a phase holds it until the *schedule itself* next moves on (e.g. override to `Day` during `Evening` and it still becomes `Night` once Evening would naturally have ended, rather than staying on `Day` forever) — tick "Keep a manual phase override until cleared by hand" when adding/reconfiguring the sensor to disable that and keep an override until you clear it yourself instead |
+| `select.<name_>adaptive_lighting_phase` | Manual override — `Auto` (default) or a specific phase. Pinning a phase holds it until the *schedule itself* next moves on (e.g. override to `Day` during `Evening` and it still becomes `Night` once Evening would naturally have ended, rather than staying on `Day` forever) — see the sticky-override switch below to disable that and keep an override until you clear it yourself instead |
+| `time.<name_>morning_time` / `day_time` / `evening_earliest_time` / `evening_latest_time` / `night_time` | The five schedule boundaries — start times for Morning, Day, and Night, and Evening's earliest/latest bound. Each starts at a representative default (06:00/08:00/17:00/20:00/22:00) and is adjustable at any time; the change applies within seconds, not on the next 60s poll |
+| `number.<name_>morning_brightness` / `morning_kelvin` / `day_brightness` / `day_end_kelvin` / `evening_brightness` / `evening_kelvin` / `night_brightness` / `night_kelvin` | The eight brightness (0-255)/colour-temperature (1000-10000K) curve values, one pair per phase (`day_end_kelvin` is what Day ramps down to by the time Evening starts). Each starts at the value shown in `compute_curve`'s own field list above, and is adjustable at any time |
+| `switch.<name_>sticky_phase_override` | Off by default (an override self-clears at the next phase boundary). Turn on to keep a manual phase override pinned until you clear it back to `Auto` yourself instead |
+
+`time.*`/`number.*`/`switch.*` are all tagged as configuration entities, so Home Assistant groups them under the
+device's collapsed "Configuration" section rather than mixing them into the main entity list — present, and
+usable from dashboards/automations, without being sixteen always-visible entities cluttering the device page.
+This replaces what used to be a config-flow form only reachable via Configure - the schedule/curve values are now
+just entities like anything else, immediately visible and editable from the device page, no separate step needed.
 
 Point `apply_lighting`'s `sensor_entity_id` (or the blueprint's Adaptive Lighting Sensor input) at whichever
-sensor's `sensor.<name_>adaptive_lighting` you want. Each sensor's schedule/curve is editable or removable later
-from the integration's page; changing its *entity_id prefix* isn't supported from the reconfigure form since
-existing automations/dashboards would silently break — remove and re-add instead if a sensor needs a new prefix.
-The *displayed* name is different, though — that's just the device name (see above), renamable freely at any
-time with no such caveat.
+sensor's `sensor.<name_>adaptive_lighting` you want. A sensor's whole device is removable later from the
+integration's page; there's no reconfigure form since there's nothing left to reconfigure that way - edit the
+`time.*`/`number.*`/`switch.*` entities directly, or rename the device, instead.

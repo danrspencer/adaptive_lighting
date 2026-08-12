@@ -28,9 +28,11 @@ override Evening -> Day) and it holds there, but only until the
 from whatever it was at override time) - at that point the override
 clears back to Auto on its own, rather than staying pinned forever, so
 overriding "Day" during Evening still ends up at Night once Evening
-would naturally have ended, not stuck on Day indefinitely. Set
-"sticky_phase_override" (a config_flow.py field) to disable this and
-keep an override until manually cleared instead.
+would naturally have ended, not stuck on Day indefinitely. Toggle
+switch.<prefix>sticky_phase_override (see switch.py) to disable this
+and keep an override until manually cleared instead - read fresh off
+that entity's live state each time, not a cached value, the same "check
+now, don't remember" style everything else here already uses.
 """
 
 from __future__ import annotations
@@ -68,7 +70,7 @@ class _PhaseOverrideSelect(CoordinatorEntity[ScheduleCoordinator], SelectEntity,
         # _ScheduleSensorBase for the full reasoning.
         self._attr_device_info = instance.device_info
         self._attr_current_option = "Auto"
-        self._sticky = bool(instance.config.get("sticky_phase_override", False))
+        self._sticky_entity_id = instance.sticky_entity_id
         # The computed (non-override) phase at the moment this was last
         # pinned to something other than Auto - once computed_phase
         # moves on from this, the override has "seen its boundary" and
@@ -94,6 +96,11 @@ class _PhaseOverrideSelect(CoordinatorEntity[ScheduleCoordinator], SelectEntity,
             # debounced, so this lands after the entity's initial state
             # write rather than racing it.
             await self.coordinator.async_request_refresh()
+
+    @property
+    def _sticky(self) -> bool:
+        state = self.hass.states.get(self._sticky_entity_id)
+        return state is not None and state.state == "on"
 
     def _handle_coordinator_update(self) -> None:
         if (

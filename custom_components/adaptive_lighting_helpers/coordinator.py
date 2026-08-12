@@ -1,18 +1,24 @@
 """
 Shared schedule coordinator for the optional day-phase/curve sensors
-(sensor.py) and the phase-override select (select.py) - the two
-platforms share one coordinator instance per schedule instance (see
-ScheduleInstance below), created once in __init__.py and stashed in
-hass.data, rather than each computing independently.
+(sensor.py), the phase-override select (select.py), and the schedule/
+curve config entities (number.py, time.py, switch.py) - all share one
+coordinator instance per schedule instance (see ScheduleInstance
+below), created once in __init__.py and stashed in hass.data, rather
+than each computing independently.
 
 Boundary computation mirrors what used to be the live
 packages/adaptive_lighting.yaml Jinja setup: morning/day/night are
 today's configured time-of-day; evening is sunset (sun.sun's
-next_setting), clamped between earliest/latest bounds. The five times
-themselves live directly on the config entry or subentry (plain
-HH:MM:SS strings from a TimeSelector - see config_flow.py) rather than
-being read from separate input_datetime helpers the user had to create
-first.
+next_setting), clamped between earliest/latest bounds. The five times,
+and the eight brightness/Kelvin curve values, are read live off this
+instance's own time.*/number.* entities (see time.py/number.py) rather
+than from static config-entry data - the config_flow.py "Add Sensor"
+form only ever asks for a name; every other value is a real HA entity,
+adjustable at any time, with its own default and its own persisted
+state (RestoreEntity/RestoreNumber). This is the same "check live
+state fresh, don't read a frozen snapshot" pattern _phase_override()
+below already used for the phase-override select - now applied
+uniformly to the rest of the schedule/curve config too.
 
 Override: each instance's own select.<prefix>adaptive_lighting_phase
 can pin the phase used for "right now" - _phase_override() reads its
@@ -41,8 +47,9 @@ schedule, not "the first one is special". Every instance is named
 Devices, renamable there - see ScheduleInstance.device_info), including
 the first sensor auto-seeded when the integration is added ("Default").
 schedule_instances() is the one place that enumerates all of them -
-__init__.py, sensor.py, and select.py all iterate its output rather
-than each re-deriving the subentry lookup.
+__init__.py, sensor.py, select.py, number.py, time.py, and switch.py
+all iterate its output rather than each re-deriving the subentry
+lookup.
 """
 
 from __future__ import annotations
@@ -51,7 +58,7 @@ import logging
 import time
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Any, Mapping
+from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -61,14 +68,14 @@ from homeassistant.util import slugify
 import homeassistant.util.dt as dt_util
 
 from .const import DOMAIN, SUBENTRY_TYPE_SENSOR
-from .curve import phase_at, targets_for_phase
+from .curve import DEFAULT_SCHEDULE_HOURS, phase_at, targets_for_phase
 
 _LOGGER = logging.getLogger(__name__)
 
 UPDATE_INTERVAL = timedelta(seconds=60)
 
-# The five required time fields every "sensor" subentry has - see
-# config_flow.py's TIME_FIELDS.
+# The five schedule-time entities every instance gets (time.py) - also
+# each one's entity_id suffix (time.<prefix><key>).
 TIME_KEYS = (
     "morning_time",
     "day_time",
@@ -77,12 +84,14 @@ TIME_KEYS = (
     "night_time",
 )
 
-# The optional brightness/Kelvin curve fields - see config_flow.py's
-# CURVE_AND_BEHAVIOR_FIELDS. Left unset, targets_for_phase's own
-# defaults (curve.py's DEFAULT_CURVE_VALUES) apply. Grouped by phase
-# (brightness then Kelvin, Morning through Night) rather than by
-# attribute type - this order also drives the config_flow.py form and
-# the compute_curve service schema, both built from this tuple.
+# The eight brightness/Kelvin curve entities every instance gets
+# (number.py) - also each one's entity_id suffix (number.<prefix><key>).
+# Left unset (entity unavailable, e.g. mid-startup before platforms
+# have loaded), targets_for_phase's own defaults (curve.py's
+# DEFAULT_CURVE_VALUES) apply. Grouped by phase (brightness then
+# Kelvin, Morning through Night) rather than by attribute type - this
+# order also drives the compute_curve service schema, built from this
+# tuple.
 CURVE_KEYS = (
     "morning_brightness",
     "morning_kelvin",
@@ -107,33 +116,40 @@ class ScheduleInstance:
     # config_flow form (name is required there) - kept so an existing
     # subentry saved before that requirement (if any) still gets a
     # valid, if unprefixed, entity_id instead of a broken "sensor._foo".
-    config: Mapping[str, Any]  # subentry.data
     override_entity_id: str  # select.<prefix>adaptive_lighting_phase
+    sticky_entity_id: str  # switch.<prefix>sticky_phase_override
     title: str  # the subentry's name (required - see SensorSubentryFlow)
 
     @property
     def device_info(self) -> DeviceInfo:
         """Every instance gets its own device, named exactly what the
         user typed. Combined with has_entity_name=True on every entity
-        (see sensor.py/select.py), HA prefixes each entity's short name
-        with this device's name for display automatically, so renaming
-        the sensor is a single action (Settings -> Devices -> rename)
-        instead of us reconstructing a name via string concatenation
-        (which used to just lowercase-concatenate whatever was typed,
-        e.g. "upstairs Adaptive Lighting" - the actual complaint that
-        prompted all of this). The "Adaptive Lighting" fallback below is
-        defensive only (an empty title isn't reachable via the
-        config_flow form - name is required there)."""
+        (see sensor.py/select.py/number.py/time.py/switch.py), HA
+        prefixes each entity's short name with this device's name for
+        display automatically, so renaming the sensor is a single
+        action (Settings -> Devices -> rename) instead of us
+        reconstructing a name via string concatenation (which used to
+        just lowercase-concatenate whatever was typed, e.g. "upstairs
+        Adaptive Lighting" - the actual complaint that prompted all of
+        this). The "Adaptive Lighting" fallback below is defensive only
+        (an empty title isn't reachable via the config_flow form - name
+        is required there)."""
         return DeviceInfo(
             identifiers={(DOMAIN, self.subentry_id)},
             name=self.title or "Adaptive Lighting",
             entry_type=DeviceEntryType.SERVICE,
         )
 
+    def time_entity_id(self, key: str) -> str:
+        return f"time.{self.prefix}{key}"
+
+    def number_entity_id(self, key: str) -> str:
+        return f"number.{self.prefix}{key}"
+
 
 def schedule_instances(entry: ConfigEntry) -> list[ScheduleInstance]:
-    """Every schedule instance this entry should set up sensors/select
-    for - one per "sensor" subentry (see config_flow.py's
+    """Every schedule instance this entry should set up sensors/select/
+    config entities for - one per "sensor" subentry (see config_flow.py's
     SensorSubentryFlow). The entry itself never carries a schedule -
     it only registers the services (see __init__.py)."""
     instances = []
@@ -146,21 +162,31 @@ def schedule_instances(entry: ConfigEntry) -> list[ScheduleInstance]:
             ScheduleInstance(
                 subentry_id=subentry_id,
                 prefix=prefix,
-                config=subentry.data,
                 override_entity_id=f"select.{prefix}adaptive_lighting_phase",
+                sticky_entity_id=f"switch.{prefix}sticky_phase_override",
                 title=subentry.title,
             )
         )
     return instances
 
 
-def _curve_kwargs(config: Mapping[str, Any]) -> dict[str, int]:
-    return {key: config[key] for key in CURVE_KEYS if config.get(key) is not None}
+def _curve_kwargs(hass: HomeAssistant, instance: ScheduleInstance) -> dict[str, int]:
+    kwargs: dict[str, int] = {}
+    for key in CURVE_KEYS:
+        state = hass.states.get(instance.number_entity_id(key))
+        if state is None or state.state in ("unknown", "unavailable"):
+            continue
+        try:
+            kwargs[key] = round(float(state.state))
+        except (TypeError, ValueError):
+            continue
+    return kwargs
 
 
 def _time_str_to_today_timestamp(time_str: str | None) -> float | None:
-    """A TimeSelector value ("HH:MM:SS") -> today's timestamp for that
-    time-of-day, in the local timezone."""
+    """A time.py entity's state ("HH:MM:SS", TimeEntity's own string
+    format) -> today's timestamp for that time-of-day, in the local
+    timezone."""
     if not time_str:
         return None
     t = dt_util.parse_time(time_str)
@@ -170,12 +196,34 @@ def _time_str_to_today_timestamp(time_str: str | None) -> float | None:
     return now_local.replace(hour=t.hour, minute=t.minute, second=t.second, microsecond=0).timestamp()
 
 
-def _compute_boundaries(hass: HomeAssistant, config: Mapping[str, Any]) -> dict[str, float | None]:
-    morning_ts = _time_str_to_today_timestamp(config.get("morning_time"))
-    day_ts = _time_str_to_today_timestamp(config.get("day_time"))
-    night_ts = _time_str_to_today_timestamp(config.get("night_time"))
-    earliest_ts = _time_str_to_today_timestamp(config.get("evening_earliest_time"))
-    latest_ts = _time_str_to_today_timestamp(config.get("evening_latest_time"))
+def _time_ts(hass: HomeAssistant, instance: ScheduleInstance, key: str) -> float | None:
+    state = hass.states.get(instance.time_entity_id(key))
+    if state is None:
+        # The entity hasn't been created yet - specifically, the
+        # coordinator's very first refresh runs before platforms are
+        # forwarded (see __init__.py's async_setup_entry), so on that
+        # one call every time.* entity is still missing from the state
+        # machine. Falling back to the same default the entity itself
+        # will report moments later (time.py's _DEFAULTS) avoids ever
+        # handing phase_at() below a None boundary, which it can't
+        # compare against a timestamp. "unknown"/"unavailable" (the
+        # entity exists but genuinely has no value) is different and
+        # stays None - shouldn't actually happen given _BoundaryTime
+        # always seeds a default in __init__, but if it ever did, that's
+        # a real "not configured" state worth surfacing, not masking.
+        default_hour = DEFAULT_SCHEDULE_HOURS[key[: -len("_time")]]
+        return _time_str_to_today_timestamp(f"{default_hour:02d}:00:00")
+    if state.state in ("unknown", "unavailable"):
+        return None
+    return _time_str_to_today_timestamp(state.state)
+
+
+def _compute_boundaries(hass: HomeAssistant, instance: ScheduleInstance) -> dict[str, float | None]:
+    morning_ts = _time_ts(hass, instance, "morning_time")
+    day_ts = _time_ts(hass, instance, "day_time")
+    night_ts = _time_ts(hass, instance, "night_time")
+    earliest_ts = _time_ts(hass, instance, "evening_earliest_time")
+    latest_ts = _time_ts(hass, instance, "evening_latest_time")
 
     sun_state = hass.states.get("sun.sun")
     next_setting = sun_state.attributes.get("next_setting") if sun_state else None
@@ -247,15 +295,14 @@ def _phase_override(hass: HomeAssistant, override_entity_id: str) -> str | None:
 class ScheduleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def __init__(self, hass: HomeAssistant, instance: ScheduleInstance) -> None:
         super().__init__(hass, _LOGGER, name=f"Adaptive Lighting schedule ({instance.title})", update_interval=UPDATE_INTERVAL)
-        self._config = instance.config
-        self._override_entity_id = instance.override_entity_id
+        self._instance = instance
 
     async def _async_update_data(self) -> dict[str, Any]:
-        boundaries = _compute_boundaries(self.hass, self._config)
-        curve_kwargs = _curve_kwargs(self._config)
+        boundaries = _compute_boundaries(self.hass, self._instance)
+        curve_kwargs = _curve_kwargs(self.hass, self._instance)
         now_ts = time.time()
         computed_phase = phase_at(now_ts, boundaries["morning_ts"], boundaries["day_ts"], boundaries["evening_ts"], boundaries["night_ts"])
-        phase = _phase_override(self.hass, self._override_entity_id) or computed_phase
+        phase = _phase_override(self.hass, self._instance.override_entity_id) or computed_phase
         targets = targets_for_phase(
             phase, now_ts, boundaries["evening_ts"], boundaries["day_ts"], boundaries["night_ts"], **curve_kwargs
         )
