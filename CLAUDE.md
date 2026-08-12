@@ -1308,6 +1308,28 @@ automatically, no crash-prone required positional args involved there.
 Not yet deployed live as of this note - `pytest` (43/43) and
 `py_compile` only so far.
 
+**Integration icon designed and generated (`brand/`), at the user's
+request.** Same philosophy as the dashboard previews: `brand/
+generate_icon.py` renders `icon.svg` from the real `curve.py` (bar
+heights from `brightness_for_phase`, bar colours from
+`kelvin_for_phase` -> `kelvin_to_rgb`, schedule from
+`DEFAULT_SCHEDULE_HOURS`) - the icon IS the curve, regenerate and it
+follows the defaults. Design iterated visually in a browser (several
+rejected: an area-silhouette that read as a slab, 16 bars that read as
+a barcode, a sun overlapping bars that read as a lollipop, then a
+floating sun disc dropped at the user's request - "just the bars are
+good enough") and landed on: dark night-blue rounded tile, 7 rounded
+bars tracing the night/morning/day/evening/night silhouette, nothing
+else. PNGs
+(256 `icon.png` / 512 `icon@2x.png`, alpha preserved) rendered with
+`qlmanage -t -s <size>` (the only SVG rasteriser on this machine -
+verified pixel-faithful to the SVG in a browser side-by-side before
+trusting it) and checked for legibility at 24/40/64px on light and
+dark backgrounds. NOTE: HA/HACS only display icons served from the
+`home-assistant/brands` repo - the PNGs are sized/named for a
+`custom_integrations/adaptive_lighting_helpers/` submission there,
+which hasn't been made yet; nothing shows in the UI until it is.
+
 ## Open question: dashboard card as a HACS plugin?
 
 The integration half of this used to be an open question - now
