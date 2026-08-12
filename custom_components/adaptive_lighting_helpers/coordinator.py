@@ -196,29 +196,36 @@ def _time_str_to_today_timestamp(time_str: str | None) -> float | None:
     return now_local.replace(hour=t.hour, minute=t.minute, second=t.second, microsecond=0).timestamp()
 
 
-def _time_ts(hass: HomeAssistant, instance: ScheduleInstance, key: str) -> float | None:
+def _time_ts(hass: HomeAssistant, instance: ScheduleInstance, key: str) -> float:
+    """Today's timestamp for one boundary time entity, never None.
+
+    Falls back to the entity's own default (time.py's _DEFAULTS) whenever
+    a real value can't be read - either the entity doesn't exist yet
+    (the coordinator's very first refresh runs before platforms are
+    forwarded, see __init__.py's async_setup_entry) or it exists but has
+    no value ("unknown"/"unavailable"). The second case is not
+    hypothetical: unloading a config entry does NOT remove its
+    registered entities from the state machine, it leaves them as
+    "unavailable" - so on every reload (which adding/removing a sensor
+    subentry triggers via the update listener) the first refresh sees
+    exactly that. An earlier version returned None there "to surface a
+    real not-configured state", which phase_at() can't compare against a
+    timestamp - crashing the first refresh, failing the whole entry's
+    setup, and wedging it permanently since the retry saw the same
+    unavailable states. The restored real value lands moments later when
+    the platform loads; async_setup_entry refreshes again after
+    forwarding platforms to pick it up."""
     state = hass.states.get(instance.time_entity_id(key))
-    if state is None:
-        # The entity hasn't been created yet - specifically, the
-        # coordinator's very first refresh runs before platforms are
-        # forwarded (see __init__.py's async_setup_entry), so on that
-        # one call every time.* entity is still missing from the state
-        # machine. Falling back to the same default the entity itself
-        # will report moments later (time.py's _DEFAULTS) avoids ever
-        # handing phase_at() below a None boundary, which it can't
-        # compare against a timestamp. "unknown"/"unavailable" (the
-        # entity exists but genuinely has no value) is different and
-        # stays None - shouldn't actually happen given _BoundaryTime
-        # always seeds a default in __init__, but if it ever did, that's
-        # a real "not configured" state worth surfacing, not masking.
+    # parse_time("unknown"/"unavailable") is None, so both no-entity and
+    # no-value roads lead through the same default fallback.
+    ts = _time_str_to_today_timestamp(state.state) if state is not None else None
+    if ts is None:
         default_hour = DEFAULT_SCHEDULE_HOURS[key[: -len("_time")]]
-        return _time_str_to_today_timestamp(f"{default_hour:02d}:00:00")
-    if state.state in ("unknown", "unavailable"):
-        return None
-    return _time_str_to_today_timestamp(state.state)
+        ts = _time_str_to_today_timestamp(f"{default_hour:02d}:00:00")
+    return ts
 
 
-def _compute_boundaries(hass: HomeAssistant, instance: ScheduleInstance) -> dict[str, float | None]:
+def _compute_boundaries(hass: HomeAssistant, instance: ScheduleInstance) -> dict[str, float]:
     morning_ts = _time_ts(hass, instance, "morning_time")
     day_ts = _time_ts(hass, instance, "day_time")
     night_ts = _time_ts(hass, instance, "night_time")
@@ -247,10 +254,7 @@ def _compute_boundaries(hass: HomeAssistant, instance: ScheduleInstance) -> dict
     else:
         sunset_ts = latest_ts
 
-    if earliest_ts is not None and latest_ts is not None and sunset_ts is not None:
-        evening_ts = max(earliest_ts, min(sunset_ts, latest_ts))
-    else:
-        evening_ts = None
+    evening_ts = max(earliest_ts, min(sunset_ts, latest_ts))
 
     return {
         "morning_ts": morning_ts,
@@ -262,7 +266,7 @@ def _compute_boundaries(hass: HomeAssistant, instance: ScheduleInstance) -> dict
     }
 
 
-def _compute_curve_points(boundaries: dict[str, float | None], curve_kwargs: dict[str, int]) -> list[dict[str, Any]]:
+def _compute_curve_points(boundaries: dict[str, float], curve_kwargs: dict[str, int]) -> list[dict[str, Any]]:
     morning_ts, day_ts, evening_ts, night_ts = (
         boundaries["morning_ts"],
         boundaries["day_ts"],
