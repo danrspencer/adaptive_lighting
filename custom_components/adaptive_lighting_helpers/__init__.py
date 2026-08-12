@@ -456,16 +456,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         # Evening tracks sun.sun, so a sunset update should take effect
         # without waiting for the next 60s poll. This is the only entity
-        # tracked here: the five schedule times are static config (the
-        # reconfigure flow reloads the entry, rebuilding every
-        # coordinator), and each instance's phase-override select
-        # refreshes its own coordinator itself (see select.py) - it's
-        # the only writer of its own state, so routing its changes back
-        # through the state machine here would just be a second, global
-        # copy of a refresh the entity already owns.
+        # tracked here: the schedule/curve config entities and the
+        # phase-override select each refresh their own coordinator
+        # themselves on change (see time.py/number.py/select.py) - each
+        # is the only writer of its own state, so routing their changes
+        # back through the state machine here would just be a second,
+        # global copy of a refresh the entity already owns.
         entry.async_on_unload(async_track_state_change_event(hass, ["sun.sun"], _refresh_all))
 
         await hass.config_entries.async_forward_entry_setups(entry, SCHEDULE_PLATFORMS)
+
+        # The first refresh above ran before the time.*/number.* entities
+        # existed (or while a reload had left them "unavailable"), so it
+        # computed from defaults - see coordinator._time_ts(). Now that
+        # the platforms are loaded and every config entity has restored
+        # its real value, recompute once so the sensors reflect the
+        # user's actual schedule immediately instead of up to 60s later.
+        for instance in instances:
+            await hass.data[DOMAIN][instance.subentry_id].async_refresh()
 
     return True
 
