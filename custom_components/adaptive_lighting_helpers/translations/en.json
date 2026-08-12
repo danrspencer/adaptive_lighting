@@ -14,57 +14,19 @@
     "sensor": {
       "entry_type": "Sensor",
       "initiate_flow": {
-        "user": "Add Sensor",
-        "reconfigure": "Reconfigure Sensor"
+        "user": "Add Sensor"
       },
       "step": {
         "user": {
           "title": "Add an Adaptive Lighting sensor",
-          "description": "Adds a day-phase/curve sensor and phase-override select, grouped under a device with this name. Entities are prefixed with it too (e.g. \"Living Room\" -> sensor.living_room_adaptive_lighting).",
+          "description": "Adds a day-phase/curve sensor and phase-override select, grouped under a device with this name. Entities are prefixed with it too (e.g. \"Living Room\" -> sensor.living_room_adaptive_lighting). The schedule times and brightness/colour curve aren't set here - they're separate entities on the device once it's created, each starting at a sensible default and adjustable any time.",
           "data": {
-            "name": "Name",
-            "morning_time": "Morning start time",
-            "day_time": "Day start time",
-            "evening_earliest_time": "Evening earliest start time",
-            "evening_latest_time": "Evening latest start time",
-            "night_time": "Night start time",
-            "morning_brightness": "Morning brightness",
-            "morning_kelvin": "Morning colour temperature",
-            "day_brightness": "Day brightness",
-            "day_end_kelvin": "Day end colour temperature",
-            "evening_brightness": "Evening brightness",
-            "evening_kelvin": "Evening colour temperature",
-            "night_brightness": "Night brightness",
-            "night_kelvin": "Night colour temperature",
-            "sticky_phase_override": "Keep a manual phase override until cleared by hand (instead of self-clearing at the next phase boundary)"
-          }
-        },
-        "reconfigure": {
-          "title": "Reconfigure sensor",
-          "description": "Renaming isn't supported here since it would change this sensor's entity IDs - remove and re-add instead if it needs a new name.",
-          "data": {
-            "morning_time": "Morning start time",
-            "day_time": "Day start time",
-            "evening_earliest_time": "Evening earliest start time",
-            "evening_latest_time": "Evening latest start time",
-            "night_time": "Night start time",
-            "morning_brightness": "Morning brightness",
-            "morning_kelvin": "Morning colour temperature",
-            "day_brightness": "Day brightness",
-            "day_end_kelvin": "Day end colour temperature",
-            "evening_brightness": "Evening brightness",
-            "evening_kelvin": "Evening colour temperature",
-            "night_brightness": "Night brightness",
-            "night_kelvin": "Night colour temperature",
-            "sticky_phase_override": "Keep a manual phase override until cleared by hand (instead of self-clearing at the next phase boundary)"
+            "name": "Name"
           }
         }
       },
       "error": {
         "already_configured": "A sensor with this name already exists"
-      },
-      "abort": {
-        "reconfigure_successful": "Reconfiguration successful"
       }
     }
   }

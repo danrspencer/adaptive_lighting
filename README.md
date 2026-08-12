@@ -98,6 +98,10 @@ custom_components/adaptive_lighting_helpers/
                    integration's "Add Sensor" flow
     sensor.py      day-phase/curve sensors (see docs/HELPERS.md)
     select.py      phase-override select (same doc)
+    number.py      brightness/colour-temperature curve config, as
+                   entities (same doc)
+    time.py        schedule boundary times, as entities (same doc)
+    switch.py      sticky-phase-override toggle, as an entity (same doc)
     curve.py       brightness/colour-temperature schedule + Kelvin -> RGB
     grouping.py    reachability, multiplier bucketing, tolerance checks,
                    manual-override protection, two-step/combined and
@@ -109,8 +113,8 @@ custom_components/adaptive_lighting_helpers/
     curve.py, grouping.py, and scenes.py are pure Python, no Home
     Assistant dependency - testable directly, and usable from anywhere
     that wants the math without the HA service/sensor wrapper around
-    it. __init__.py, coordinator.py, sensor.py, and select.py are the
-    only files that touch `hass`.
+    it. __init__.py, coordinator.py, sensor.py, select.py, number.py,
+    time.py, and switch.py are the only files that touch `hass`.
 
 hacs.json
     HACS repository metadata for the integration.
