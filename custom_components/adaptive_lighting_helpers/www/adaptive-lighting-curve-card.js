@@ -373,19 +373,19 @@ class AdaptiveLightingCurveCard extends HTMLElement {
     // than "Morning 06:00" - the exact time is a native hover tooltip
     // (`title`) instead of always-on text, which is what made four of
     // these side by side illegible in a narrow card in the first place.
-    // Anchored start/middle/end so Morning and Night don't run past the
-    // chart's own edges; Evening centres over its bracket instead of
-    // its boundary line, since the bracket is what it's labelling.
+    // All four centre on their marker (Evening on its bracket, not its
+    // boundary line, since the bracket is what it's labelling) - kept
+    // uniform rather than anchoring Morning/Night to avoid edge overflow,
+    // since centred reads more clearly as "this label belongs to that line".
     const topLabels = [
-      ['Morning', xOf(b.morning), 'start', fmtTime(b.morning)],
-      ['Day', xOf(b.day), 'middle', fmtTime(b.day)],
-      ['Evening', eveningLabelX, 'middle', eveningLabelTitle],
-      ['Night', xOf(b.night), 'end', fmtTime(b.night)],
+      ['Morning', xOf(b.morning), fmtTime(b.morning)],
+      ['Day', xOf(b.day), fmtTime(b.day)],
+      ['Evening', eveningLabelX, eveningLabelTitle],
+      ['Night', xOf(b.night), fmtTime(b.night)],
     ]
-      .map(([name, x, anchor, title]) => {
+      .map(([name, x, title]) => {
         const leftPct = ((x / VB_W) * 100).toFixed(2);
-        const translateX = anchor === 'start' ? '0' : anchor === 'end' ? '-100%' : '-50%';
-        return `<span class="boundary-label" style="left:${leftPct}%;transform:translateX(${translateX})" title="${title}">${name}</span>`;
+        return `<span class="boundary-label" style="left:${leftPct}%" title="${title}">${name}</span>`;
       })
       .join('');
 
@@ -488,6 +488,7 @@ class AdaptiveLightingCurveCard extends HTMLElement {
         .boundary-label {
           position: absolute;
           top: 2px;
+          transform: translateX(-50%);
           color: var(--secondary-text-color);
           font-size: 11px;
           white-space: nowrap;
