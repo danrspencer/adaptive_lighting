@@ -17,11 +17,16 @@ The [dashboard curve card](../README.md#previewing-the-dashboard-card) also plot
 (from `sun.sun`) against the schedule, so it's easy to see at a glance how far the configured boundaries and
 Evening's earliest/latest clamp are actually tracking the sun.
 
-## Motion-driven on/off
+## Occupancy-driven on/off
 
-Turns a room on when motion starts and off `no_motion_wait` seconds after it stops. A motion/occupancy sensor is
-optional — without one, the blueprint still keeps already-on lights updated with the adaptive curve, it just
-won't turn anything on by itself.
+Turns a room on when occupancy is detected and off `no_motion_wait` seconds after it clears. The Occupancy Sensor
+input is optional — without one, the blueprint still keeps already-on lights updated with the adaptive curve, it
+just won't turn anything on by itself. It's an entity/device/area/floor/label target, not a single sensor: it uses
+Home Assistant's built-in Occupancy triggers/conditions to aggregate every occupancy-class `binary_sensor` within
+that target automatically, so pointing it at a room's area covers every occupancy sensor in that area, including
+ones added later. Only `binary_sensor` entities with `device_class: occupancy` are counted — motion-class sensors
+aren't picked up by Home Assistant's own aggregation, so a room with only motion sensors won't have anything to
+target here (Additional Triggers can still cover that case manually).
 
 ## Manual override detection
 
@@ -89,9 +94,9 @@ Add an automation using the "Adaptive Lighting" blueprint per room, and set:
 
 | Input | Required | Description |
 |---|---|---|
-| Light | yes | Entities, a device, or an area to control |
 | Adaptive Lighting Sensor | yes | Sensor providing brightness/colour temperature |
-| Motion Sensor | no | Enables motion-driven on/off |
+| Occupancy Sensor | no | Entity/device/area/floor/label whose occupancy sensors enable occupancy-driven on/off |
+| Light | yes | Entities, a device, or an area to control |
 | Additional Triggers | no | Entities that trigger immediate re-evaluation (see [Additional triggers](#additional-triggers)) |
 | Scene Template | no | Template returning a scene entity_id to hand the room over to |
 | Brightness Multiplier Template | no | Per-light brightness scaling |
