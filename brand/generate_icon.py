@@ -8,12 +8,25 @@ bar colours from kelvin_for_phase run through kelvin_to_rgb, and the
 schedule is curve.py's own DEFAULT_SCHEDULE_HOURS - change the
 defaults and a regenerated icon follows.
 
-Home Assistant doesn't read icons from the integration directory -
-they're served from the home-assistant/brands repo (custom_integrations/
-adaptive_lighting_helpers/{icon.png,icon@2x.png}), which wants square
-PNGs at 256 and 512 with transparency allowed. icon.svg here is the
-source of truth for that submission; render it at 256/512 (e.g.
-qlmanage -t -s <size>, or any SVG rasteriser) to produce the PNGs.
+This file (and icon.svg, its output) is design/authoring tooling only -
+it lives here, not inside the integration package, and is NOT what HA
+actually reads. Since HA 2026.3.0, a custom integration ships its own
+brand icon directly inside its own folder - see
+`custom_components/adaptive_lighting_helpers/brand/` (icon.png,
+icon@2x.png), served automatically via HA's local brands API with no
+manifest.json changes and no external submission needed.
+`home-assistant/brands` (the previous mechanism, a central repo custom
+integrations used to submit icons to) has since stopped accepting PRs
+for custom integrations entirely, so that path is no longer viable even
+as a fallback - confirmed live, 2026-08-13: no
+`custom_integrations/adaptive_lighting_helpers/` entry and no open PR
+for one exist there.
+
+This script only regenerates icon.svg; the served PNGs need re-
+rendering separately after a design change (e.g. `qlmanage -t -s 256`
+and `-s 512` for the two sizes, transparency preserved) into
+`custom_components/adaptive_lighting_helpers/brand/{icon.png,icon@2x.png}`
+- there's no automated step for that yet.
 
 Run from the repo root: python3 brand/generate_icon.py
 """

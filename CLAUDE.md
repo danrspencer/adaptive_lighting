@@ -1325,10 +1325,32 @@ else. PNGs
 `qlmanage -t -s <size>` (the only SVG rasteriser on this machine -
 verified pixel-faithful to the SVG in a browser side-by-side before
 trusting it) and checked for legibility at 24/40/64px on light and
-dark backgrounds. NOTE: HA/HACS only display icons served from the
-`home-assistant/brands` repo - the PNGs are sized/named for a
-`custom_integrations/adaptive_lighting_helpers/` submission there,
-which hasn't been made yet; nothing shows in the UI until it is.
+dark backgrounds.
+
+**Icon wasn't showing up live - investigated rather than assumed, since
+the original NOTE above turned out to be wrong.** The `home-assistant/
+brands` submission path this was originally written for no longer
+applies at all: since HA 2026.3.0, a custom integration ships its own
+brand icon directly inside its own folder
+(`custom_components/<domain>/brand/{icon.png,icon@2x.png}`, no
+`manifest.json` changes, served automatically via HA's local brands
+API) - confirmed against the dev-docs announcement before acting on it.
+Separately, and confirmed live via the GitHub API before concluding
+either way: `home-assistant/brands` has actually stopped accepting PRs
+for custom integrations at all, so the old submission path wasn't just
+"not yet done," it's no longer viable even as a fallback. The actual
+bug was simply that the PNGs lived in this repo's root-level `brand/`
+folder instead of inside `custom_components/adaptive_lighting_helpers/brand/`
+- moved to fix. `brand/` at the repo root is now design/authoring
+tooling only (`generate_icon.py` + `icon.svg`, the source of truth) -
+the served PNGs live inside the integration folder and need re-rendering
+there by hand after any design change (no scripted step for that yet).
+Note also a separate, unrelated gap that's out of this repo's control:
+even once the integration folder is correct, HACS's own dashboard/store
+icon has a known open bug (`hacs/integration#5171`) - it only checks an
+external service that doesn't carry custom-integration icons at all,
+ignoring HA's local brands API entirely. HA's own native UI (Settings →
+Devices & Services, entity/device pages) is unaffected by that bug.
 
 ## Open question: dashboard card as a HACS plugin?
 
