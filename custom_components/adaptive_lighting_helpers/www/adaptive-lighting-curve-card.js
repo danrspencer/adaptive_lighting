@@ -36,8 +36,13 @@ const VB_W = 960;
 const VB_H = 220;
 const PAD_L = 34;
 const PAD_R = 12;
-const PAD_TOP = 20;
+const PAD_TOP = 34;
 const PAD_BOTTOM = 26;
+// Evening's range bracket (see eveningBracket below) sits between the
+// phase-name labels (near the very top) and PAD_TOP, where the rest of
+// the chart's markers start.
+const BRACKET_Y = 26;
+const BRACKET_TICK = 4;
 const CHART_W = VB_W - PAD_L - PAD_R;
 const CHART_H = VB_H - PAD_TOP - PAD_BOTTOM;
 const BASELINE_Y = VB_H - PAD_BOTTOM;
@@ -336,28 +341,54 @@ class AdaptiveLightingCurveCard extends HTMLElement {
       hourLabels.push(`<span class="axis-label" style="left:${leftPct}%">${String(h).padStart(2, '0')}:00</span>`);
     }
 
-    // Shaded band + edge lines showing where Evening is allowed to land
-    // (clamped between earliest/latest, tracking sunset in between) -
-    // makes it visible at a glance why Evening's own boundary line is
-    // where it is, rather than only explained in the footnote text.
-    let clampBand = '';
+    // Evening's boundary is a *range* (clamped between earliest/latest,
+    // tracking sunset in between), not a single instant like the other
+    // three phases - shown as a dimension-line bracket (two end ticks
+    // + a connecting line) rather than a filled overlay, so it doesn't
+    // read as a colour effect layered on the bars beneath it the way a
+    // translucent band did. Falls back to a plain point (no bracket,
+    // same as Morning/Day/Night) if earliest/latest aren't configured.
+    let eveningBracket = '';
+    let eveningLabelX;
+    let eveningLabelTitle;
     if (b.eveningEarliest != null && b.eveningLatest != null) {
       const xEarliest = xOf(b.eveningEarliest);
       const xLatest = xOf(b.eveningLatest);
-      clampBand = `
-        <rect x="${Math.min(xEarliest, xLatest).toFixed(2)}" y="${PAD_TOP}" width="${Math.abs(xLatest - xEarliest).toFixed(2)}" height="${(BASELINE_Y - PAD_TOP).toFixed(2)}" class="clamp-band" />
-        <line x1="${xEarliest.toFixed(1)}" y1="${PAD_TOP}" x2="${xEarliest.toFixed(1)}" y2="${BASELINE_Y}" class="clamp-edge" />
-        <line x1="${xLatest.toFixed(1)}" y1="${PAD_TOP}" x2="${xLatest.toFixed(1)}" y2="${BASELINE_Y}" class="clamp-edge" />
+      const xLo = Math.min(xEarliest, xLatest);
+      const xHi = Math.max(xEarliest, xLatest);
+      eveningBracket = `
+        <line x1="${xLo.toFixed(1)}" y1="${BRACKET_Y - BRACKET_TICK}" x2="${xLo.toFixed(1)}" y2="${BRACKET_Y + BRACKET_TICK}" class="evening-bracket" />
+        <line x1="${xHi.toFixed(1)}" y1="${BRACKET_Y - BRACKET_TICK}" x2="${xHi.toFixed(1)}" y2="${BRACKET_Y + BRACKET_TICK}" class="evening-bracket" />
+        <line x1="${xLo.toFixed(1)}" y1="${BRACKET_Y}" x2="${xHi.toFixed(1)}" y2="${BRACKET_Y}" class="evening-bracket" />
       `;
+      eveningLabelX = (xLo + xHi) / 2;
+      eveningLabelTitle = `${fmtTime(b.eveningEarliest)} – ${fmtTime(b.eveningLatest)}`;
+    } else {
+      eveningLabelX = xOf(b.evening);
+      eveningLabelTitle = fmtTime(b.evening);
     }
 
-    // Phase/time labels used to render as static text above the chart,
-    // but four of them side by side got squashed illegibly in any card
-    // narrower than roughly half a desktop dashboard width. The hover
-    // tooltip already reports phase/time for wherever the pointer is,
-    // so the boundaries now show as bare marker lines only - the
-    // information didn't disappear, it moved to a place that doesn't
-    // run out of horizontal room.
+    // Phase name labels - real HTML text for the same squishing reason
+    // the hour ticks are (see hourLabels above), and name-only rather
+    // than "Morning 06:00" - the exact time is a native hover tooltip
+    // (`title`) instead of always-on text, which is what made four of
+    // these side by side illegible in a narrow card in the first place.
+    // Anchored start/middle/end so Morning and Night don't run past the
+    // chart's own edges; Evening centres over its bracket instead of
+    // its boundary line, since the bracket is what it's labelling.
+    const topLabels = [
+      ['Morning', xOf(b.morning), 'start', fmtTime(b.morning)],
+      ['Day', xOf(b.day), 'middle', fmtTime(b.day)],
+      ['Evening', eveningLabelX, 'middle', eveningLabelTitle],
+      ['Night', xOf(b.night), 'end', fmtTime(b.night)],
+    ]
+      .map(([name, x, anchor, title]) => {
+        const leftPct = ((x / VB_W) * 100).toFixed(2);
+        const translateX = anchor === 'start' ? '0' : anchor === 'end' ? '-100%' : '-50%';
+        return `<span class="boundary-label" style="left:${leftPct}%;transform:translateX(${translateX})" title="${title}">${name}</span>`;
+      })
+      .join('');
+
     const boundaryLines = [b.morning, b.day, b.evening, b.night]
       .map((t) => `<line x1="${xOf(t).toFixed(1)}" y1="${PAD_TOP}" x2="${xOf(t).toFixed(1)}" y2="${BASELINE_Y}" class="boundary-line" />`)
       .join('');
@@ -404,12 +435,13 @@ class AdaptiveLightingCurveCard extends HTMLElement {
       <div class="chart-wrap">
         <svg viewBox="0 0 ${VB_W} ${VB_H}" preserveAspectRatio="none" class="chart">
           ${bars}
-          ${clampBand}
+          ${eveningBracket}
           ${boundaryLines}
           ${sunMarkers}
           ${nowMarker}
           <line x1="${PAD_L}" y1="${BASELINE_Y}" x2="${VB_W - PAD_R}" y2="${BASELINE_Y}" class="axis-line" />
         </svg>
+        ${topLabels}
         ${hourLabels.join('')}
       </div>
     `;
@@ -442,11 +474,9 @@ class AdaptiveLightingCurveCard extends HTMLElement {
           font-size: 11px;
           white-space: nowrap;
         }
-        .clamp-band { fill: var(--secondary-text-color); opacity: 0.18; }
-        .clamp-edge {
+        .evening-bracket {
           stroke: var(--secondary-text-color);
           stroke-width: 1;
-          stroke-dasharray: 1 3;
           opacity: 0.6;
         }
         .boundary-line {
@@ -454,6 +484,14 @@ class AdaptiveLightingCurveCard extends HTMLElement {
           stroke-width: 1;
           stroke-dasharray: 3 3;
           opacity: 0.6;
+        }
+        .boundary-label {
+          position: absolute;
+          top: 2px;
+          color: var(--secondary-text-color);
+          font-size: 11px;
+          white-space: nowrap;
+          cursor: default;
         }
         .now-line { stroke: var(--primary-text-color); stroke-width: 1.5; }
         .now-dot { stroke: var(--card-background-color); stroke-width: 1.5; }
