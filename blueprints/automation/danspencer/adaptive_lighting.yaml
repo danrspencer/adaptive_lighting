@@ -19,9 +19,8 @@ blueprint:
       name: Lights & Occupancy
       description: >
         Entity, device, area, floor, or label - lights within it are
-        controlled, occupancy-class sensors within it decide when. Leave
-        blank to control nothing. Details:
-        [docs](https://github.com/danrspencer/adaptive_lighting/blob/main/docs/BLUEPRINT.md#one-target-two-jobs).
+        controlled, occupancy-class sensors within it decide when.
+        [Details](https://github.com/danrspencer/adaptive_lighting/blob/main/docs/BLUEPRINT.md#one-target-two-jobs).
       default: {}
       selector:
         target:
