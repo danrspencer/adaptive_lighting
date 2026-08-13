@@ -287,6 +287,24 @@ re-propose without new information changing this trade-off.
     that URL as immutable and never serves it stale - use one when
     testing a just-pushed change against a live instance.
 
+13. **`ha_import_blueprint` derives the installed path from the GitHub
+    repo *owner* in the URL, not from this repo's own blueprint folder
+    name.** This repo's blueprint lives at
+    `blueprints/automation/danspencer/adaptive_lighting.yaml` (no 'r'),
+    but the actual GitHub account is `danrspencer` (with an 'r') - a
+    mismatch that predates this file. Importing from this repo's GitHub
+    URL installs to `danrspencer/adaptive_lighting.yaml` on the live
+    instance, a *different* path from the `danspencer/...` one already
+    in use, rather than overwriting it - `overrides_existing: false` in
+    the response is the tell. The same "danspencer" vs "danrspencer"
+    collision lesson 6 warns about, surfacing here through a tool's own
+    path-derivation logic instead of a symlink. `blueprints/` is
+    read-only through every available file-editing tool, so there's no
+    way to fix the orphaned old path directly - repoint the automation's
+    `use_blueprint.path` at the new, correctly-updated file instead, and
+    leave the old one as a harmless (not domain-scanned, unlike lesson
+    9's `.bak-*` incident) orphaned leftover.
+
 ## Current status
 
 **Services** (`custom_components/adaptive_lighting_helpers/`,
@@ -309,9 +327,17 @@ working against the live instance:
   (see "Multi-sensor schedule architecture" below). This is what the
   blueprint calls - see README's "Bring your own sensor" section for
   the full attribute contract.
-- RGB colour (`prefer_rgb_color`) is implemented and unit tested but
-  **not yet exercised live against an actual RGB-capable bulb** - only
-  colour-temperature lights have been confirmed live so far.
+- RGB colour (`prefer_rgb_color`) is implemented and unit tested, and
+  the *routing decision* is confirmed live - `compute_lighting_groups`
+  correctly bucketed a real bulb into `combined_rgb` based on its actual
+  `supported_color_modes`, not just test fakes. What's **not** yet
+  confirmed live is `apply_lighting`'s own `rgb_color` dispatch call
+  itself (the `light.turn_on` with `rgb_color` data) - no live sensor
+  has exposed an `rgb_color` attribute yet to point `sensor_entity_id`
+  at. Judged low-risk to leave that specific gap unverified for now,
+  since it's the identical dispatch pattern already confirmed live for
+  `color_temp_kelvin`, just a different data key - worth actually
+  exercising once a sensor with `rgb_color` exists live.
 
 **Multi-sensor schedule architecture** (`coordinator.py`, `sensor.py`,
 `select.py`, `number.py`, `time.py`, `switch.py`) - the config entry
