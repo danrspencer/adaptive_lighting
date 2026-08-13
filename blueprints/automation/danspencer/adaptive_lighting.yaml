@@ -3,24 +3,8 @@ blueprint:
   description: >
     Adaptive lighting: sets brightness/colour temperature from a sensor,
     keeping lights updated as it changes, and turns them off a while
-    after motion stops. Room is a single entity/device/area/floor/label
-    target that does double duty - the light entities within it are what
-    gets controlled, and any occupancy-class sensors within it (native
-    Home Assistant Occupancy triggers/conditions) govern occupancy,
-    updates only applying while occupied. A periodic check retries
-    turning lights off if one didn't take. Already-correct lights are
-    skipped to avoid redundant network traffic. A Scene Template can
-    activate a matching scene instead of the adaptive brightness/colour;
-    a Brightness Multiplier Template can scale individual lights'
-    brightness. Both are re-rendered on every run, so add whatever
-    entities they depend on to Additional Triggers for an immediate
-    update instead of waiting for the next adaptive tick. Self-contained
-    - running it manually (Run button, or automation.trigger from
-    elsewhere) always turns lights on correctly. Lights labelled
-    `no_combined_transition` get brightness and colour temperature sent
-    as two sequential calls instead of one, for bulbs that can't do both
-    together. Prefer RGB Color (if enabled) sends RGB colour instead of
-    colour temperature to lights that support it.
+    after occupancy clears. Full details on every input:
+    [docs/BLUEPRINT.md](https://github.com/danrspencer/adaptive_lighting/blob/main/docs/BLUEPRINT.md).
   domain: automation
   source_url: https://github.com/danrspencer/adaptive_lighting/blob/main/blueprints/automation/danspencer/adaptive_lighting.yaml
   author: Dan Spencer
@@ -32,26 +16,12 @@ blueprint:
         entity:
           domain: sensor
     room_target:
-      name: Room
+      name: Lights & Occupancy
       description: >
-        Entity, device, area, floor, or label - does double duty as both
-        what to light and what governs occupancy. Light entities within
-        it are controlled; any binary_sensor entities within it with
-        device_class "occupancy" are aggregated automatically (via Home
-        Assistant's built-in Occupancy triggers/conditions) to decide
-        when to turn on/off - no need to name one specific sensor, and
-        sensors added to the area/device later count for free.
-        Motion-class sensors aren't picked up this way; pick those
-        directly as an Entity here instead if you want one to count.
-        Area/device/floor/label selections only resolve *lights* via
-        entity/device/area (not floor/label) - pick specific entities
-        directly if you need a floor/label-scoped sensor to count.
-        Picking specific entities (rather than relying on area
-        membership) is also how to add a "virtual occupancy" sensor -
-        e.g. a template binary_sensor with device_class "occupancy" that
-        you flip on for a nightlight-style override - without pulling in
-        every other sensor in the room. Leave blank to control nothing
-        and skip occupancy gating entirely.
+        Entity, device, area, floor, or label - lights within it are
+        controlled, occupancy-class sensors within it decide when. Leave
+        blank to control nothing. Details:
+        [docs](https://github.com/danrspencer/adaptive_lighting/blob/main/docs/BLUEPRINT.md#one-target-two-jobs).
       default: {}
       selector:
         target:
@@ -62,13 +32,9 @@ blueprint:
     extra_triggers:
       name: Additional Triggers (Optional)
       description: >
-        Extra entities that should cause an immediate re-evaluation - e.g.
-        a TV entity for a Brightness Multiplier Template that dims this
-        room when it's on, or whatever a Scene Template depends on.
-        Everything is re-rendered fresh on every run regardless of what
-        triggered it, so adding an entity here is all that's needed for
-        it to take effect immediately instead of waiting for the next
-        adaptive tick.
+        Entities that trigger an immediate re-evaluation, e.g. a
+        dependency of Scene Template or Brightness Multiplier Template.
+        [Details](https://github.com/danrspencer/adaptive_lighting/blob/main/docs/BLUEPRINT.md#additional-triggers).
       default: []
       selector:
         entity:
@@ -76,41 +42,27 @@ blueprint:
     scene_template:
       name: Scene Template (Optional)
       description: >
-        Template returning the entity_id of a scene to activate instead
-        of the adaptive brightness/colour (e.g. based on a day-phase
-        sensor's state). Only used if that scene exists and covers just
-        entities within this automation's scope (lights being
-        controlled, plus any other entities on the same devices/area -
-        e.g. a lightstrip's gradient-effect selector); otherwise treated
-        as if no scene were returned. Leave blank, or have the template
-        return nothing, to skip scenes entirely.
+        Template returning a scene entity_id to hand the room over to
+        instead of the adaptive brightness/colour.
+        [Details](https://github.com/danrspencer/adaptive_lighting/blob/main/docs/BLUEPRINT.md#scene-handoff).
       default: ""
       selector:
         template: {}
     brightness_multiplier_template:
       name: Brightness Multiplier Template (Optional)
       description: >
-        Template returning a dict of entity_id to brightness multiplier,
-        applied only during adaptive lighting (not to scene-covered lights).
-        0 turns a light off; other numbers scale its brightness, floored to
-        a minimum of 1. null (or false) skips the light entirely during
-        power-on — no command is sent at all, letting something else (e.g.
-        a dedicated automation) own it — but it is still included when this
-        automation turns lights off, since this automation remains the
-        source of truth for that. Lights not listed use full adaptive
-        brightness.
+        Template returning entity_id → brightness multiplier (0 = off,
+        null = skip entirely).
+        [Details](https://github.com/danrspencer/adaptive_lighting/blob/main/docs/BLUEPRINT.md#per-light-brightness-scaling).
       default: "{{ {} }}"
       selector:
         template: {}
     prefer_rgb_color:
       name: Prefer RGB Color (Optional)
       description: >
-        For lights that support it (auto-detected), send the Adaptive
-        Lighting Sensor's rgb_color attribute instead of colour
-        temperature - some RGB bulbs render colour more accurately in
-        RGB mode than colour-temperature mode. Lights without RGB
-        support, or if the sensor has no rgb_color attribute, are
-        unaffected either way.
+        Send RGB colour instead of colour temperature to lights that
+        support it (auto-detected).
+        [Details](https://github.com/danrspencer/adaptive_lighting/blob/main/docs/BLUEPRINT.md#rgb-colour).
       default: false
       selector:
         boolean: {}
@@ -126,11 +78,8 @@ blueprint:
     reconcile_interval:
       name: Reconcile Interval (Optional)
       description: >
-        How often to check for lights left on with no occupancy and retry
-        turning them off — a safety net for commands that don't land (e.g.
-        a dropped Zigbee message). time_pattern syntax, e.g. '/5' for every
-        5 minutes. Only relevant when Room contains an occupancy sensor;
-        ignored otherwise.
+        How often to retry turning off lights left on with no occupancy.
+        time_pattern syntax, e.g. '/5' for every 5 minutes.
       default: "/5"
       selector:
         text: {}
