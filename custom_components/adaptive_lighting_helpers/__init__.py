@@ -10,8 +10,8 @@ a scene, then a default for whatever it doesn't cover" (scenes.py).
 `compute_lighting_groups` is a pure planner (returns groups, doesn't
 touch any light); `apply_lighting` wraps the same grouping logic and
 actually dispatches light.turn_on/turn_off, reading its brightness/
-colour target off any sensor entity you point it at - see README's
-"Bring your own sensor" section. Optionally also sets up day-phase/curve
+colour target off any sensor entity you point it at - see
+docs/HELPERS.md's "Bring your own sensor" section. Optionally also sets up day-phase/curve
 sensors (sensor.py), a phase-override select (select.py), and the
 schedule/curve config as live entities (time.py, number.py, switch.py)
 per named sensor added afterwards (Settings -> Devices & Services ->
@@ -169,8 +169,8 @@ def _read_sensor_targets(hass: HomeAssistant, sensor_entity_id: str) -> tuple[in
     """Reads brightness/color_temp/rgb_color off sensor_entity_id for
     apply_lighting - fully generic, works with any entity exposing those
     attribute names, not hardcoded to this integration's own
-    sensor.adaptive_lighting. See README's "Bring your own sensor"
-    section for the exact contract and a template-sensor example.
+    sensor.adaptive_lighting. See docs/HELPERS.md's "Bring your own
+    sensor" section for the exact contract and a template-sensor example.
 
     brightness/color_temp are required by that contract, and a sensor
     missing them (wrong entity picked, or the sensor is unavailable and

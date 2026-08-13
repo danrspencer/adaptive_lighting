@@ -340,8 +340,9 @@ working against the live instance:
   generically - it never assumes it's reading this integration's own
   sensor, since multiple independent named sensor instances can exist
   (see "Multi-sensor schedule architecture" below). This is what the
-  blueprint calls - see README's "Bring your own sensor" section for
-  the full attribute contract.
+  blueprint calls - see `docs/HELPERS.md`'s "Bring your own sensor"
+  section for the full attribute contract (moved there from the README
+  - the user flagged it as not belonging on the main landing page).
 - RGB colour (`prefer_rgb_color`) is implemented and unit tested, and
   the *routing decision* is confirmed live - `compute_lighting_groups`
   correctly bucketed a real bulb into `combined_rgb` based on its actual

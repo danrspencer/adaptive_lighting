@@ -12,6 +12,8 @@ anything about how that service is implemented.
 
 Tracks a target brightness and Kelvin value that follows the [Morning/Day/Evening/Night schedule](../README.md#why-four-phases-not-a-continuous-curve),
 applied roughly once a minute while the room is occupied, so lights drift with the schedule instead of jumping.
+The Adaptive Lighting Sensor input isn't limited to this integration's own sensor - any entity following the
+[attribute contract in docs/HELPERS.md](HELPERS.md#bring-your-own-sensor) works.
 
 The [dashboard curve card](../README.md#previewing-the-dashboard-card) also plots today's actual sunrise/sunset
 (from `sun.sun`) against the schedule, so it's easy to see at a glance how far the configured boundaries and
