@@ -483,10 +483,24 @@ designs were explored:
   `dashboard/` - the card's `fetch()` needs HTTP and `preview.html`
   imports `../www/adaptive-lighting-curve-card.js`) and open
   `dashboard/preview.html`.
-- Integration icon (`brand/`, `generate_icon.py`) exists and is
-  generated from the real curve, but isn't visible in the HA/HACS UI
-  yet - needs a `home-assistant/brands` PR (icons there only, HA/HACS
-  don't read icons from arbitrary repos), not yet submitted.
+- **Integration icon fixed, not just added.** The icon originally
+  shipped from this repo's root-level `brand/` folder, which HA never
+  actually reads - a custom integration's bundled brand icon has to
+  live inside the integration's own folder
+  (`custom_components/adaptive_lighting_helpers/brand/{icon.png,icon@2x.png}`,
+  a mechanism added in HA 2026.3.0, no `manifest.json` changes needed).
+  The original plan to submit to `home-assistant/brands` instead is no
+  longer viable at all, confirmed live via the GitHub API before
+  documenting it - that repo has stopped accepting PRs for custom
+  integrations. `brand/` at the repo root is now design/authoring
+  tooling only (`generate_icon.py` + `icon.svg`, the source of truth);
+  the served PNGs need re-rendering by hand into the integration
+  folder after any design change (no scripted step for that yet).
+  Separate, unrelated gap outside this repo's control: HACS's own
+  store/dashboard icon has an open bug
+  ([hacs/integration#5171](https://github.com/hacs/integration/issues/5171))
+  that ignores HA's local brands API entirely - HA's native UI
+  (Settings → Devices & Services) is unaffected by that bug.
 - A handful of stale `service_not_found` repairs may still be showing
   under Settings → Repairs from the pyscript era - cosmetic only,
   dismiss by hand if still present; HA doesn't auto-clear a repair just

@@ -110,6 +110,10 @@ custom_components/adaptive_lighting_helpers/
                    default for whatever it doesn't cover)
     manifest.json, config_flow.py, services.yaml, strings.json,
     translations/  standard HA integration/HACS scaffolding
+    brand/icon.png, brand/icon@2x.png
+                   the integration's icon (256/512, alpha) - HA reads
+                   this directly from the integration's own folder
+                   (since HA 2026.3.0), no external submission needed
     curve.py, grouping.py, and scenes.py are pure Python, no Home
     Assistant dependency - testable directly, and usable from anywhere
     that wants the math without the HA service/sensor wrapper around
@@ -123,13 +127,12 @@ brand/
     generate_icon.py  renders brand/icon.svg from the real curve module
                       (same pattern as the dashboard preview generators):
                       the icon is the day's actual brightness/colour
-                      curve as bars
-    icon.svg, icon.png, icon@2x.png
-                      the integration's icon, sized (256/512, alpha) for
-                      a home-assistant/brands submission - HA and HACS
-                      only show integration icons served from that repo,
-                      so the icon appears in the UI once it's submitted
-                      there (custom_integrations/adaptive_lighting_helpers/)
+                      curve as bars. Design/authoring tooling only - the
+                      PNGs HA actually reads live at
+                      custom_components/adaptive_lighting_helpers/brand/
+                      (rendered from icon.svg, not scripted yet)
+    icon.svg          the icon's source of truth, regenerate with
+                      generate_icon.py after changing the curve defaults
 
 blueprints/automation/danspencer/adaptive_lighting.yaml
     The automation blueprint: triggers, conditions, target resolution,
