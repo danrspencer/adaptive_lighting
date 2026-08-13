@@ -80,6 +80,15 @@ function rgbToHex([r, g, b]) {
   return '#' + [r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('');
 }
 
+// title unset -> "Adaptive Lighting"; title: "" explicitly -> no header at
+// all (ha-card renders nothing for a falsy header) - lets a dashboard that
+// already labels each sensor elsewhere (a heading card, a section title)
+// suppress the card's own redundant one, while everyone else still gets a
+// sensible default with zero config.
+function cardHeader(config) {
+  return config.title === '' ? '' : config.title || 'Adaptive Lighting';
+}
+
 // brightness_now/kelvin_now default to the same combined entity as
 // phase (state = phase, attributes = brightness/color_temp) - read the
 // named attribute if present, falling back to .state for a custom
@@ -110,7 +119,7 @@ function sunTimeInWindow(isoString, dayStart, dayEnd) {
 
 class AdaptiveLightingCurveCard extends HTMLElement {
   static getStubConfig() {
-    return { title: 'Adaptive Lighting Curve' };
+    return { title: 'Adaptive Lighting' };
   }
 
   setConfig(config) {
@@ -187,14 +196,6 @@ class AdaptiveLightingCurveCard extends HTMLElement {
     const brightnessNowValue = numFromAttrOrState(brightnessNow, 'brightness');
     const kelvinNowValue = numFromAttrOrState(kelvinNow, 'color_temp');
 
-    // Each sensor's device is named by the user ("Ground Floor" etc,
-    // see coordinator.py's ScheduleInstance.device_info) and the phase
-    // entity displays that device name verbatim (has_entity_name=True,
-    // _attr_name=None) - so friendly_name doubles as "which sensor is
-    // this card pointing at", the thing there's otherwise no way to
-    // tell apart when two cards sit side by side with no config.title.
-    const friendlyName = phase.attributes.friendly_name;
-
     const cacheKey = JSON.stringify([
       boundaries,
       phase && phase.state,
@@ -203,7 +204,6 @@ class AdaptiveLightingCurveCard extends HTMLElement {
       pointsRaw,
       brightnessNowValue,
       kelvinNowValue,
-      friendlyName,
     ]);
 
     if (cacheKey === this._cacheKey) {
@@ -213,7 +213,6 @@ class AdaptiveLightingCurveCard extends HTMLElement {
 
     this._boundaries = boundaries;
     this._phaseState = phase && phase.state;
-    this._friendlyName = friendlyName;
     this._sun = sun;
     this._brightnessNow = brightnessNowValue;
     this._kelvinNow = kelvinNowValue;
@@ -244,7 +243,7 @@ class AdaptiveLightingCurveCard extends HTMLElement {
 
   _renderError(message) {
     this.shadowRoot.innerHTML = `
-      <ha-card header="${this._config.title || 'Adaptive Lighting Curve'}">
+      <ha-card header="${cardHeader(this._config)}">
         <div style="padding: 16px; color: var(--error-color, red);">${message}</div>
       </ha-card>
     `;
@@ -463,7 +462,7 @@ class AdaptiveLightingCurveCard extends HTMLElement {
           z-index: 2;
         }
       </style>
-      <ha-card header="${this._config.title || this._friendlyName || 'Adaptive Lighting Curve'}">
+      <ha-card header="${cardHeader(this._config)}">
         <div class="card-content">
           <div class="now-label">${nowLabel}</div>
           ${sunLabel ? `<div class="sun-label">${sunLabel}</div>` : ''}

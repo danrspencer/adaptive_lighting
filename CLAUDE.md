@@ -730,39 +730,59 @@ needed repointing, both confirmed done, not just attempted:
 write tool's own `post_write_verified: true`). `config_check` stayed
 valid throughout.
 
-**Dashboard card header now defaults to the sensor's own name, not a
-static string.** Two identically-titled cards side by side (one per
-sensor, e.g. "Ground Floor" and "First Floor") were indistinguishable
-at a glance - both just said "Adaptive Lighting Curve". Fixed by
-reading `friendly_name` off the phase entity in `set hass()`
-(`www/adaptive-lighting-curve-card.js`): because every sensor gets its
-own device and every entity on it uses `has_entity_name=True` with no
-entity-level name of its own, that entity's displayed name already
-*is* the device name the user picked (e.g. "Ground Floor") - no new
-lookup needed, just reading an attribute already being fetched.
-`config.title` still wins if set explicitly; the hardcoded
-"Adaptive Lighting Curve" string is now only the last-resort fallback,
-used when no entity has loaded yet. `dashboard/preview.html`'s fake
-state gained a `friendly_name` attribute and dropped its explicit
-`title:` card config specifically so the preview exercises this
-default instead of masking it - verified visually via the Browser pane
-against the live preview server (the header read "Ground Floor" from
-`friendly_name` alone, no title config set).
+**Dashboard card title went through two designs before landing** - the
+first (deriving a default from the sensor's own `friendly_name`) was
+tried and explicitly superseded the same session, not layered on top
+of. First pass: two identically-titled cards side by side (one per
+sensor) were indistinguishable at a glance - both just said "Adaptive
+Lighting Curve" - so the header was changed to read `friendly_name`
+off the phase entity, since every sensor's device is named by the user
+and every entity on it uses `has_entity_name=True`, so that name is
+already sitting on an attribute already being fetched. That worked,
+but once a real dashboard actually paired the curve card with a
+heading card naming the same sensor (see `dashboard/adaptive-lighting-section.yaml`
+below), the two headers just repeated each other - worse than the
+original problem in a different way. Final design: `config.title`
+absent defaults to a static **"Adaptive Lighting"** (not derived from
+any entity - simple and predictable); `config.title` explicitly set to
+`""` renders no header at all (`ha-card` treats a falsy `header` as
+"no header"), for exactly the case a heading card above it already
+names the sensor; any other string is used verbatim. The `friendly_name`
+read and the caching of it were removed entirely - dead code once the
+static default replaced it, not left as an unused fallback. The
+computation is a small shared `cardHeader(config)` function used by
+both the error and normal render paths, rather than duplicated inline
+in each (a divergence between the two is exactly how the "Adaptive
+Lighting Curve" vs "Adaptive Lighting" mismatch happened the first
+time). `dashboard/preview.html` renders two cards side by side to
+exercise both ends - one with no `title` (shows "Adaptive Lighting"),
+one with `title: ''` (shows no header) - verified visually via the
+Browser pane against the live preview server.
 
-**`dashboard/adaptive-lighting-section.yaml` added**: a fuller
-copy-paste dashboard section than `house-settings-card.yaml`'s
-curve-graph-only snippet - the curve card plus the phase
-override/sticky-override switch plus all 13 schedule/curve config
-entities, laid out as heading-grouped tile grids. Still just a
+**`dashboard/adaptive-lighting-section.yaml` added, and deployed live**:
+a fuller copy-paste dashboard section than `house-settings-card.yaml`'s
+curve-graph-only snippet - the curve card (`title: ''`, since the
+heading card above it already names the sensor - see above) plus the
+phase override/sticky-override switch plus all 13 schedule/curve
+config entities, laid out as heading-grouped tile grids. Still just a
 find-and-replace-the-slug template (no integration-side dashboard
 auto-creation exists - see the file's own header comment for why), and
 still not the only option: each sensor's own device page (Settings →
 Devices → the sensor's device) already shows the same entities grouped
 for free, since they're tagged `entity_category: config` - the new
 section file is for a main dashboard, the device page needs nothing
-shipped or pasted at all. Not yet deployed to the live house-settings
-dashboard as an actual section - `house-settings-card.yaml`'s
-curve-only card is what's live today.
+shipped or pasted at all. Deployed to the live `lovelace/house-settings`
+dashboard the same session: the old curve-only "Adaptive Lighting
+Curve" section (two bare `custom:adaptive-lighting-curve-card`s) was
+replaced with two full sections built from this template, one for
+`ground_floor` and one for `first_floor` (built via a `python_transform`
+for-loop over both slugs rather than duplicating the section by hand,
+since the config-subentry mode used for the migration above forbids
+`FunctionDef` nodes in that sandbox - a plain for-loop is allowed,
+a `def` is not). The unrelated "Times"/"Harrison Bedtime" sections
+(the older, separate pre-migration schedule helpers - `input_datetime.*`,
+`sensor.day_phase`) were deliberately left untouched - out of scope for
+this change, not part of "the old version of this."
 
 ## Testing
 

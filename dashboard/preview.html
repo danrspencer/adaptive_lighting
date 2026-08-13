@@ -86,9 +86,8 @@
         // Combined entity: state = phase, attributes = brightness/color_temp/
         // morning_start/day_start/evening_start/night_start/
         // evening_earliest/evening_latest - matches sensor.py's
-        // _AdaptiveLightingSensor shape, under the entity_ids the
-        // auto-seeded "Default" sensor actually creates (the card's
-        // DEFAULT_ENTITIES).
+        // _AdaptiveLightingSensor shape, under the entity_ids a sensor
+        // named "Default" would create (the card's DEFAULT_ENTITIES).
         'sensor.default_adaptive_lighting': state(data.now_phase, {
           phase: data.now_phase,
           brightness: data.now_brightness,
@@ -99,19 +98,25 @@
           night_start: data.boundaries.night,
           evening_earliest: data.boundaries.evening_earliest,
           evening_latest: data.boundaries.evening_latest,
-          // Real installs get this from device grouping (the entity's
-          // displayed name IS the device name - see
-          // ScheduleInstance.device_info) - faked here so the preview
-          // exercises the card's default-header-from-friendly_name
-          // behaviour instead of masking it with an explicit title.
-          friendly_name: 'Ground Floor',
         }),
       };
 
-      const card = document.createElement('adaptive-lighting-curve-card');
-      card.setConfig({}); // no title - demonstrates the friendly_name-derived default header
-      card.hass = { states };
-      document.getElementById('card-container').appendChild(card);
+      // Two cards to exercise both ends of the title config: no `title`
+      // at all defaults to "Adaptive Lighting"; `title: ''` hides the
+      // header entirely (for a dashboard that already labels the sensor
+      // elsewhere, e.g. a heading card above it).
+      const defaultTitleCard = document.createElement('adaptive-lighting-curve-card');
+      defaultTitleCard.setConfig({});
+      defaultTitleCard.hass = { states };
+      document.getElementById('card-container').appendChild(defaultTitleCard);
+
+      const noTitleCard = document.createElement('adaptive-lighting-curve-card');
+      noTitleCard.setConfig({ title: '' });
+      noTitleCard.hass = { states };
+      const spacer = document.createElement('div');
+      spacer.style.height = '24px';
+      document.getElementById('card-container').appendChild(spacer);
+      document.getElementById('card-container').appendChild(noTitleCard);
     </script>
   </body>
 </html>
