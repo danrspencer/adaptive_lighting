@@ -25,6 +25,12 @@ blueprint:
   source_url: https://github.com/danrspencer/adaptive_lighting/blob/main/blueprints/automation/danspencer/adaptive_lighting.yaml
   author: Dan Spencer
   input:
+    adaptive_sensor:
+      name: Adaptive Lighting Sensor
+      description: Sensor providing brightness and colour temperature to apply.
+      selector:
+        entity:
+          domain: sensor
     occupancy_target:
       name: Occupancy Sensor (Optional)
       description: >
@@ -42,12 +48,6 @@ blueprint:
           entity:
             domain: binary_sensor
             device_class: occupancy
-    adaptive_sensor:
-      name: Adaptive Lighting Sensor
-      description: Sensor providing brightness and colour temperature to apply.
-      selector:
-        entity:
-          domain: sensor
     light_target:
       name: Light
       description: Light entities, devices, or an area to control. Leave blank to control nothing.

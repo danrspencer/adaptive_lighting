@@ -94,9 +94,9 @@ Add an automation using the "Adaptive Lighting" blueprint per room, and set:
 
 | Input | Required | Description |
 |---|---|---|
-| Light | yes | Entities, a device, or an area to control |
 | Adaptive Lighting Sensor | yes | Sensor providing brightness/colour temperature |
 | Occupancy Sensor | no | Entity/device/area/floor/label whose occupancy sensors enable occupancy-driven on/off |
+| Light | yes | Entities, a device, or an area to control |
 | Additional Triggers | no | Entities that trigger immediate re-evaluation (see [Additional triggers](#additional-triggers)) |
 | Scene Template | no | Template returning a scene entity_id to hand the room over to |
 | Brightness Multiplier Template | no | Per-light brightness scaling |
