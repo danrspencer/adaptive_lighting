@@ -784,6 +784,47 @@ a `def` is not). The unrelated "Times"/"Harrison Bedtime" sections
 `sensor.day_phase`) were deliberately left untouched - out of scope for
 this change, not part of "the old version of this."
 
+**Boundary labels moved from always-on chart text to the hover tooltip;
+sections widened to full page width.** Two related complaints about the
+same live deployment: the "Morning 06:00"/"Day 08:00"/etc. text above
+the chart became illegible once real sections used a narrower
+`column_span`, and the two floor sections (`column_span: 2` each, side
+by side) left a wide dashboard mostly empty either side - "only uses
+half the page." Fixed both, not just the one raised first:
+- `www/adaptive-lighting-curve-card.js`: the four boundary `<text>`
+  labels are gone - only the dashed vertical marker `<line>`s remain.
+  The information didn't disappear, it moved to the chart's existing
+  hover tooltip (`onMove`), which now leads with the phase name (a new
+  `phaseAt()` mirroring `curve.py`'s `phase_at()` exactly - same four
+  half-open-interval boundaries) and also reports sun-up/sun-down (a
+  plain interval check against `sunriseTs`/`sunsetTs`, already computed
+  once per render and closed over by `onMove`). `PAD_TOP` dropped from
+  44 to 20 now that no text needs clearance above the chart, which
+  incidentally makes the bars taller too. The unused `.boundary-label`
+  CSS rule was removed along with the code that used it, not left
+  behind dead.
+- Both `dashboard/adaptive-lighting-section.yaml` and the live
+  `lovelace/house-settings` dashboard: each floor's section
+  `column_span` went from 2 to 4 (`max_columns` on this view) - full
+  width, stacked one below the other rather than side by side - with
+  the Schedule tile grid's `columns` bumped 3→5 (all five boundaries
+  in one row) and the Curve tile grid's 2→4 (two rows of four instead
+  of four rows of two), so the extra width is actually used rather
+  than just stretching existing tiles wider. The template file's own
+  header comment now says to widen the section to fill the row after
+  pasting, rather than leaving that undiscoverable.
+
+Verified visually via the Browser pane both ways: against the local
+preview server (hover tooltip shows e.g. "Day · 12:00" / "Sun up" /
+"255 bri" / "5759K" plus the colour swatch, confirmed at both a
+midday and a night sample) and against the live `lovelace/house-settings`
+dashboard (both floor sections now full-width, tile grids filling out
+5-and-4-across). The card-code half of this (hover tooltip, dropped
+labels) is not live yet as of this note - same as the title-default
+change above, it ships once this branch's PR merges and HACS
+update+restart runs; the dashboard-YAML half (section width, grid
+`columns`) needed no card-code change and is already live.
+
 ## Testing
 
 `pip install pytest && pytest` from the repo root. No Home Assistant
