@@ -1,14 +1,9 @@
 # Adaptive Lighting
 
-Two independent pieces, designed to work together but not coupled to each other:
-
-- **Adaptive Lighting Helpers** — a standalone Home Assistant integration exposing brightness/colour-temperature
-  curve math and per-light grouping (reachability, tolerance, manual-override protection, two-step transitions,
-  optional RGB colour) as plain HA services. Useful in your own automations even if you never touch the blueprint
-  below.
-- **The Adaptive Lighting blueprint** — a per-room automation built on top of those services: brightness and
-  colour temperature follow a four-phase daily schedule, motion controls on/off, scenes can take over partially
-  or entirely, manual changes are respected, and lights that don't reach their target get corrected automatically.
+Your lights, matched to the shape of your day — bright and cool to help you wake up, gradually warming through
+the afternoon, dimming to a relaxed glow as evening sets in, and low and warm once the house is asleep. Rooms
+turn their lights on and off as people come and go, manual changes are left alone until you're done with them,
+and anything a scene already has covered is left to the scene.
 
 ![Adaptive Lighting Curve card, showing brightness and colour temperature through the day](dashboard/curve-preview.svg)
 
@@ -21,12 +16,6 @@ Two independent pieces, designed to work together but not coupled to each other:
   - [1. Install Adaptive Lighting Helpers](#1-install-adaptive-lighting-helpers)
   - [2. Install the blueprint](#2-install-the-blueprint)
   - [3. Add the dashboard card (optional)](#3-add-the-dashboard-card-optional)
-- [Previewing the dashboard card](#previewing-the-dashboard-card)
-- [Testing](#testing)
-- [Status](#status)
-
-For how the code itself is organized, see [docs/REPOSITORY.md](docs/REPOSITORY.md) — not needed just to install
-and use this.
 
 ## Why four phases, not a continuous curve
 
@@ -138,34 +127,7 @@ integration is added — there's no separate HACS entry for it and nothing to ad
    setting as tiles — paste [`dashboard/adaptive-lighting-section.yaml`](dashboard/adaptive-lighting-section.yaml)
    instead (see that file's own header comment for one extra step it needs).
 
-## Previewing the dashboard card
+## Contributing
 
-```bash
-python3 dashboard/generate_preview_data.py
-python3 -m http.server 8934
-# open http://localhost:8934/dashboard/preview.html
-```
-
-Renders the actual card component against generated data, without a Home Assistant instance.
-
-## Testing
-
-```bash
-pip install pytest
-pytest
-```
-
-No Home Assistant dependency for `curve.py`/`grouping.py` themselves; `tests/fakes.py` provides a fake
-state/registry lookup, and `tests/conftest.py` imports them directly (bypassing the integration's `__init__.py`,
-which does need `homeassistant` — see its own comment for why). CI (`.github/workflows/tests.yml`) runs the
-suite on push and PR across Python 3.9 and 3.13.
-
-## Status
-
-The pure-Python core (`curve.py`, `grouping.py`, `scenes.py`) and the integration wrapping it as HA services
-are both written, unit tested, and **installed via HACS and confirmed working against a live Home Assistant
-instance** — `compute_lighting_groups`/`compute_curve`/`compute_scene_coverage` verified registered and
-functionally correct, the blueprint's full compute-groups-then-turn-on-lights path exercised end to end
-against real hardware, and the day-phase/curve sensors deployed and iterated on live (multi-sensor subentries,
-per-sensor devices). `apply_lighting` and RGB colour support (`prefer_rgb_color`) are unit tested but **not yet
-exercised against a live instance**. See CLAUDE.md's "Current status" section for the full rundown.
+Repository layout, running the test suite, previewing the dashboard card without a live Home Assistant instance,
+and current project status all live in [CONTRIBUTING.md](CONTRIBUTING.md).
