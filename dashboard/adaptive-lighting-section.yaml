@@ -26,7 +26,14 @@
 #
 # To use: open the dashboard in the UI -> Edit Dashboard -> Add Section
 # -> the section's "..." menu -> Edit in YAML -> paste everything
-# below `cards:` in as that section's cards list.
+# below `cards:` in as that section's cards list. Then widen the
+# section itself to fill the row - the section's own "..." menu ->
+# Move/resize, or in the dashboard's full YAML mode set this section's
+# `column_span` to your view's `max_columns` (commonly 4). Left at the
+# UI's default width this ends up using well under half a laptop
+# screen, mostly empty space either side - a section this dense reads
+# far better full-width, and the tile grids below are sized (3 and 4
+# columns) assuming it is.
 
 cards:
   - type: heading
@@ -65,7 +72,7 @@ cards:
     heading_style: subtitle
 
   - type: grid
-    columns: 3
+    columns: 5
     square: false
     cards:
       - type: tile
@@ -89,7 +96,7 @@ cards:
     heading_style: subtitle
 
   - type: grid
-    columns: 2
+    columns: 4
     square: false
     cards:
       - type: tile

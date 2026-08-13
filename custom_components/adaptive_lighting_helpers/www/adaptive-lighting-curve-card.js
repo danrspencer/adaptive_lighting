@@ -36,7 +36,7 @@ const VB_W = 960;
 const VB_H = 220;
 const PAD_L = 34;
 const PAD_R = 12;
-const PAD_TOP = 44;
+const PAD_TOP = 20;
 const PAD_BOTTOM = 26;
 const CHART_W = VB_W - PAD_L - PAD_R;
 const CHART_H = VB_H - PAD_TOP - PAD_BOTTOM;
@@ -78,6 +78,17 @@ function kelvinToRgb(kelvin) {
 
 function rgbToHex([r, g, b]) {
   return '#' + [r, g, b].map((v) => v.toString(16).padStart(2, '0')).join('');
+}
+
+// Mirrors curve.py's phase_at() exactly - same four boundaries, same
+// half-open intervals - so the hover tooltip's phase name always agrees
+// with what the real schedule would report for that instant.
+function phaseAt(t, morning, day, evening, night) {
+  if (t < morning) return 'Night';
+  if (t < day) return 'Morning';
+  if (t < evening) return 'Day';
+  if (t < night) return 'Evening';
+  return 'Night';
 }
 
 // title unset -> "Adaptive Lighting"; title: "" explicitly -> no header at
@@ -332,25 +343,15 @@ class AdaptiveLightingCurveCard extends HTMLElement {
       `;
     }
 
-    const boundaryDefs = [
-      ['Morning', b.morning],
-      ['Day', b.day],
-      ['Evening', b.evening],
-      ['Night', b.night],
-    ];
-    const boundaryLines = boundaryDefs
-      .map(([label, t], i) => {
-        const x = xOf(t).toFixed(1);
-        const anchorPos = i === 0 ? 'start' : i === boundaryDefs.length - 1 ? 'end' : 'middle';
-        // Alternate rows so adjacent boundaries (e.g. Morning/Day only 2h
-        // apart, or a short Evening span) don't render their labels on top
-        // of each other.
-        const labelY = i % 2 === 0 ? PAD_TOP - 26 : PAD_TOP - 10;
-        return `
-          <line x1="${x}" y1="${PAD_TOP}" x2="${x}" y2="${BASELINE_Y}" class="boundary-line" />
-          <text x="${x}" y="${labelY}" class="boundary-label" text-anchor="${anchorPos}">${label} ${fmtTime(t)}</text>
-        `;
-      })
+    // Phase/time labels used to render as static text above the chart,
+    // but four of them side by side got squashed illegibly in any card
+    // narrower than roughly half a desktop dashboard width. The hover
+    // tooltip already reports phase/time for wherever the pointer is,
+    // so the boundaries now show as bare marker lines only - the
+    // information didn't disappear, it moved to a place that doesn't
+    // run out of horizontal room.
+    const boundaryLines = [b.morning, b.day, b.evening, b.night]
+      .map((t) => `<line x1="${xOf(t).toFixed(1)}" y1="${PAD_TOP}" x2="${xOf(t).toFixed(1)}" y2="${BASELINE_Y}" class="boundary-line" />`)
       .join('');
 
     const sunriseTs = this._sun && sunTimeInWindow(this._sun.attributes.next_rising, dayStart, dayEnd);
@@ -436,7 +437,6 @@ class AdaptiveLightingCurveCard extends HTMLElement {
           stroke-dasharray: 3 3;
           opacity: 0.6;
         }
-        .boundary-label { fill: var(--primary-text-color); font-size: 11px; }
         .now-line { stroke: var(--primary-text-color); stroke-width: 1.5; }
         .now-dot { stroke: var(--card-background-color); stroke-width: 1.5; }
         .sun-line { stroke: #f5a623; stroke-width: 1.5; opacity: 0.85; }
@@ -497,10 +497,15 @@ class AdaptiveLightingCurveCard extends HTMLElement {
       const s = samples[idx];
       const hex = rgbToHex(kelvinToRgb(s.kelvin));
       const swatch = `<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${hex};vertical-align:middle;"></span>`;
+      const phase = phaseAt(s.t, b.morning, b.day, b.evening, b.night);
+      // sunriseTs/sunsetTs are closed over from _render()'s own scope -
+      // already shifted into this same display window (see
+      // sunTimeInWindow), so a plain interval check is enough.
+      const sunState = sunriseTs != null && sunsetTs != null ? (s.t >= sunriseTs && s.t < sunsetTs ? 'Sun up' : 'Sun down') : '';
       this._tooltipEl.style.display = 'block';
-      this._tooltipEl.style.left = `${clamp((clientX - rect.left), 0, rect.width - 160)}px`;
+      this._tooltipEl.style.left = `${clamp((clientX - rect.left), 0, rect.width - 170)}px`;
       this._tooltipEl.style.top = '4px';
-      this._tooltipEl.innerHTML = `<b>${fmtTime(s.t)}</b> &nbsp; ${s.brightness} bri &nbsp; ${s.kelvin}K ${swatch}`;
+      this._tooltipEl.innerHTML = `<b>${phase} · ${fmtTime(s.t)}</b><br>${sunState ? `${sunState} &nbsp; ` : ''}${s.brightness} bri &nbsp; ${s.kelvin}K ${swatch}`;
     };
     const onLeave = () => {
       this._tooltipEl.style.display = 'none';
