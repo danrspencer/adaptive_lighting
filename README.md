@@ -12,6 +12,22 @@ Two independent pieces, designed to work together but not coupled to each other:
 
 ![Adaptive Lighting Curve card, showing brightness and colour temperature through the day](dashboard/curve-preview.svg)
 
+## Contents
+
+- [Why four phases, not a continuous curve](#why-four-phases-not-a-continuous-curve)
+- [Adaptive Lighting Helpers (the integration)](#adaptive-lighting-helpers-the-integration)
+- [The blueprint](#the-blueprint)
+- [Installation](#installation)
+  - [1. Install Adaptive Lighting Helpers](#1-install-adaptive-lighting-helpers)
+  - [2. Install the blueprint](#2-install-the-blueprint)
+  - [3. Add the dashboard card (optional)](#3-add-the-dashboard-card-optional)
+- [Previewing the dashboard card](#previewing-the-dashboard-card)
+- [Testing](#testing)
+- [Status](#status)
+
+For how the code itself is organized, see [docs/REPOSITORY.md](docs/REPOSITORY.md) — not needed just to install
+and use this.
+
 ## Why four phases, not a continuous curve
 
 Most "adaptive lighting" tools compute one continuous curve straight from the sun's position — brightness and
@@ -58,124 +74,69 @@ colour temperature follow the phase schedule, motion controls on/off, scenes can
 manual changes are respected, and lights that don't reach their target get corrected automatically. Full
 feature-by-feature breakdown and the input reference: **[docs/BLUEPRINT.md](docs/BLUEPRINT.md)**.
 
-## Repository layout
-
-```
-custom_components/adaptive_lighting_helpers/
-    __init__.py    registers the four services against real HA state
-    coordinator.py shared schedule computation behind the sensors/select
-                   below - one instance per sensor added via the
-                   integration's "Add Sensor" flow
-    sensor.py      day-phase/curve sensors (see docs/HELPERS.md)
-    select.py      phase-override select (same doc)
-    number.py      brightness/colour-temperature curve config, as
-                   entities (same doc)
-    time.py        schedule boundary times, as entities (same doc)
-    switch.py      sticky-phase-override toggle, as an entity (same doc)
-    curve.py       brightness/colour-temperature schedule + Kelvin -> RGB
-    grouping.py    reachability, multiplier bucketing, tolerance checks,
-                   manual-override protection, two-step/combined and
-                   RGB-vs-colour-temp routing
-    scenes.py      scene-coverage gap filling (apply a scene, then a
-                   default for whatever it doesn't cover)
-    manifest.json, config_flow.py, services.yaml, strings.json,
-    translations/  standard HA integration/HACS scaffolding
-    brand/icon.png, brand/icon@2x.png
-                   the integration's icon (256/512, alpha) - HA reads
-                   this directly from the integration's own folder
-                   (since HA 2026.3.0), no external submission needed
-    www/adaptive-lighting-curve-card.js
-                   the dashboard card, served and auto-loaded by the
-                   integration itself (see __init__.py's async_setup) -
-                   ships and updates with the integration, no manual
-                   Lovelace resource registration needed
-    curve.py, grouping.py, and scenes.py are pure Python, no Home
-    Assistant dependency - testable directly, and usable from anywhere
-    that wants the math without the HA service/sensor wrapper around
-    it. __init__.py, coordinator.py, sensor.py, select.py, number.py,
-    time.py, and switch.py are the only files that touch `hass`.
-
-hacs.json
-    HACS repository metadata for the integration.
-
-brand/
-    generate_icon.py  renders brand/icon.svg from the real curve module
-                      (same pattern as the dashboard preview generators):
-                      the icon is the day's actual brightness/colour
-                      curve as bars. Design/authoring tooling only - the
-                      PNGs HA actually reads live at
-                      custom_components/adaptive_lighting_helpers/brand/
-                      (rendered from icon.svg, not scripted yet)
-    icon.svg          the icon's source of truth, regenerate with
-                      generate_icon.py after changing the curve defaults
-
-blueprints/automation/danspencer/adaptive_lighting.yaml
-    The automation blueprint: triggers, conditions, target resolution,
-    and the action sequence (which service to call, with what target).
-    Deliberately named differently from any prior "Adaptive Lighting
-    Unified" blueprint so the two can run side by side while rooms are
-    migrated over individually, rather than one replacing the other
-    in place.
-
-dashboard/
-    house-settings-card.yaml   curve card config to add to a view
-    adaptive-lighting-section.yaml
-                                 fuller section: curve card, phase
-                                 override, and every schedule/curve
-                                 config entity, laid out as tiles
-    preview.html                renders the real card against synthetic
-                                 data, no Home Assistant instance needed
-    generate_preview_data.py    generates that synthetic data
-    render_preview_svg.py       renders the screenshot above as a
-                                 standalone SVG
-
-tests/
-    pytest suite for curve.py, grouping.py, and scenes.py.
-
-docs/
-    HELPERS.md     full service/sensor reference for the integration
-    BLUEPRINT.md   full feature/input reference for the blueprint
-```
-
-Triggers, conditions, and target resolution stay in the blueprint; Home Assistant `condition:` blocks can't call
-a service, so anything a condition depends on has to remain template-based. Multiplier bucketing, tolerance
-checks, and transition routing are implemented in the integration and unit tested. See `CLAUDE.md` for further
-implementation notes, including the (fairly involved) history of getting a custom integration to load correctly
-at all.
-
 ## Installation
 
-### Adaptive Lighting Helpers
+Two separate installs, done in order: the integration first, then the blueprint (which depends on it). The
+dashboard card is optional and needs neither a HACS entry of its own nor a manual Lovelace resource — it comes
+along with the integration automatically.
 
-Not yet published to the HACS default store. Add this repository as a HACS custom repository (HACS → the "⋮"
-menu → Custom repositories → this repo's URL, category "Integration"), install, restart Home Assistant (a brand
-new `custom_components` entry needs a restart to be discovered, not just a reload), then add it once via
-Settings → Devices & Services → Add Integration → "Adaptive Lighting Helpers" — nothing to configure, this just
-registers the services above and the dashboard card (see below). Add day-phase/curve sensors afterwards, any
-number of them, from the integration's own page (Add Sensor) — see [docs/HELPERS.md](docs/HELPERS.md).
+### 1. Install Adaptive Lighting Helpers
 
-### The blueprint
+Requires [HACS](https://hacs.xyz) already set up in your Home Assistant instance — this repo isn't (yet)
+published to the HACS default store, so it's added as a *custom repository* first.
 
-Import directly via Home Assistant's own blueprint importer (Settings → Automations & Scenes → Blueprints →
-Import Blueprint, paste this repo's raw URL to
-`blueprints/automation/danspencer/adaptive_lighting.yaml`) — this is a plain HA feature, not something HACS is
-involved in. Requires Adaptive Lighting Helpers to be installed first, since the blueprint calls its
-`apply_lighting` service.
+1. In Home Assistant, open **HACS** in the sidebar.
+2. Click the **⋮** (three-dot) menu in the top-right corner → **Custom repositories**.
+3. Paste this repository's URL, set **Type** to **Integration**, then click **Add**:
+   ```
+   https://github.com/danrspencer/adaptive_lighting
+   ```
+4. Still in HACS, search for **Adaptive Lighting Helpers**, open it, and click **Download**.
+5. Restart Home Assistant: **Settings → System → Restart**. This one-time restart is required because Home
+   Assistant only scans for brand-new custom integrations at startup — every later update installs with just a
+   HACS download, no restart needed.
+6. Go to **Settings → Devices & Services → Add Integration**, search for **Adaptive Lighting Helpers**, and add
+   it. There's nothing to fill in on this screen — it just registers the services and the dashboard card.
+7. *(Optional, but needed for the dashboard card, the phase-schedule sensors, or the blueprint)* Open the
+   integration's page (**Settings → Devices & Services → Adaptive Lighting Helpers**) and click **Add Sensor**.
+   Give it a name (e.g. "Living Room") — this creates one day-phase/curve schedule (brightness, colour
+   temperature, and timings) you can point a room's blueprint automation or dashboard card at. Add as many as
+   you like, one per room or zone. Every field is optional and has a sensible default — see
+   [docs/HELPERS.md](docs/HELPERS.md) if you want to change any of them.
 
-Note: if migrating from an older, pre-rewrite version of this blueprint, the inputs have changed
-(`scene_sensor`/`scene_name_prefix` → `scene_template`/`extra_triggers`) — every room automation using the old
-inputs will show as misconfigured until updated. Worth doing deliberately, room by room, rather than all at once.
+### 2. Install the blueprint
 
-Once imported, add an automation using the "Adaptive Lighting" blueprint per room — see
-[docs/BLUEPRINT.md](docs/BLUEPRINT.md) for the full input reference.
+Requires step 1 to be done first — the blueprint calls the `apply_lighting` service that step registers, so
+importing it beforehand will still work but the automation won't run correctly until the integration exists.
 
-### The dashboard card
+1. Go to **Settings → Automations & Scenes → Blueprints** tab → **Import Blueprint** (top right).
+2. Paste this URL into the box, click **Preview**, then **Import Blueprint**:
+   ```
+   https://github.com/danrspencer/adaptive_lighting/blob/main/blueprints/automation/danspencer/adaptive_lighting.yaml
+   ```
+3. Go to **Settings → Automations & Scenes** → **Create Automation** → **Use existing blueprint** → choose
+   **Adaptive Lighting**. Fill in a room's lights/target and (optionally) the sensor you created in step 1, then
+   save. Repeat once per room — see [docs/BLUEPRINT.md](docs/BLUEPRINT.md) for what every input does.
 
-Ships with the integration and self-registers with the frontend on startup — no separate install step, no
-manual Lovelace resource to add. Just add the card config from `dashboard/house-settings-card.yaml` to a view
-(point it at your sensor with `sensor: <slugified name>`, e.g. `sensor: living_room`). For a full section —
-the curve graph plus the phase override and every schedule/curve config entity, laid out as tiles — see
-`dashboard/adaptive-lighting-section.yaml` instead.
+> **Migrating from an older, pre-rewrite version of this blueprint?** The inputs changed
+> (`scene_sensor`/`scene_name_prefix` → `scene_template`/`extra_triggers`) — every room automation still using the
+> old inputs will show as misconfigured until you update it. Do this deliberately, one room at a time, rather
+> than all at once.
+
+### 3. Add the dashboard card (optional)
+
+The card ships inside the integration and registers itself with Home Assistant's frontend the moment step 1's
+integration is added — there's no separate HACS entry for it and nothing to add under
+**Settings → Dashboards → Resources**.
+
+1. Open the dashboard you want the card on → **Edit Dashboard** → **Add Card** → scroll to the bottom →
+   **Manual** (this lets you paste YAML directly instead of using the visual picker).
+2. Paste in the contents of [`dashboard/house-settings-card.yaml`](dashboard/house-settings-card.yaml), then
+   change `sensor: living_room` to match the sensor you named in step 1 — spaces become underscores and
+   everything is lowercased, so a sensor named "Living Room" becomes `sensor: living_room`.
+3. Click **Save**. For a fuller layout — the curve graph plus the phase-override switch and every schedule/curve
+   setting as tiles — paste [`dashboard/adaptive-lighting-section.yaml`](dashboard/adaptive-lighting-section.yaml)
+   instead (see that file's own header comment for one extra step it needs).
 
 ## Previewing the dashboard card
 
