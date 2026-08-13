@@ -305,6 +305,21 @@ re-propose without new information changing this trade-off.
     leave the old one as a harmless (not domain-scanned, unlike lesson
     9's `.bak-*` incident) orphaned leftover.
 
+14. **A `target:` selector's `entity:` sub-key has a different schema
+    from the plain (non-target) `entity:` selector - the multi-filter
+    list goes directly under `entity:`, with no nested `filter:` key.**
+    `selector: entity: filter: [...]` is correct for a standalone entity
+    selector (`EntitySelectorConfig.filter`), but the identical shape
+    under a `target:` selector (`selector: target: entity: filter: [...]`)
+    fails blueprint import outright with `extra keys not allowed` -
+    `TargetSelectorConfig.entity` (`homeassistant/helpers/selector.py`)
+    *is* the list of filters itself:
+    `selector: target: entity: [{domain: light}, {domain: binary_sensor,
+    device_class: occupancy}]`. Confirmed against HA core source before
+    fixing, not guessed from the error text alone - caught immediately
+    by a live blueprint import failing, not by any local validation
+    (plain `yaml.safe_load` has no opinion on selector schemas).
+
 ## Current status
 
 **Services** (`custom_components/adaptive_lighting_helpers/`,
@@ -466,10 +481,11 @@ designs were explored:
   (2026.4+, HA core-confirmed to filter strictly by
   `device_class: occupancy` - motion-class sensors aren't picked up
   even targeted directly), aggregating every occupancy-class
-  `binary_sensor` within the target automatically. Live-verified once,
-  before the light+occupancy merge (see lesson 12 for a caching gotcha
-  hit while testing that pass) - **not yet re-verified live since the
-  merge**, see the dated note's open item.
+  `binary_sensor` within the target automatically. Live-verified twice
+  now - once before the light+occupancy merge (see lesson 12 for a
+  caching gotcha hit while testing that pass), and again after (see the
+  dated note below for a real selector-schema bug and a transient
+  first-tick blip both caught during that second pass).
 - `apply_lighting` is the only thing `action:` dispatches for adaptive/
   scene lighting - no inline `light.turn_on`/two-step/RGB branching in
   the blueprint itself.
@@ -580,14 +596,46 @@ first place - `room_target`'s picker can now also select occupancy
 sensors directly, so a mixed entity_id list needs filtering before
 either purpose consumes it).
 
-Not yet deployed or tested live as of this note - `pytest` (43/43) and
-YAML-structure validation only so far, consistent with this repo's
-usual verify-locally-first pattern. In particular, `occupancy.is_detected`/
-`occupancy.detected`/`.cleared` attaching to a `room_target` that
-resolves zero occupancy-class entities (the common light-only case) is
-assumed harmless (no warnings, no errors) based on how HA's target
-resolution works generally, not yet confirmed against a live instance -
-verify this specifically before trusting it fully.
+**Deployed and confirmed live, 2026-08-13** (`pytest` 43/43 plus real
+traces against "Living Room Lights (New)", repointed at
+`room_target: {area_id: living_room}`). Two real things caught along
+the way, neither hypothetical:
+
+- **A genuine selector-schema bug, caught by the live import itself
+  failing outright** - the first version wrote the two-domain filter as
+  `entity: filter: [...]`, matching the plain (non-target) `entity:`
+  selector's shape. `target: entity:` has a different schema
+  (`TargetSelectorConfig.entity: EntityFilterSelectorConfig | list[...]`
+  in `homeassistant/helpers/selector.py`) - the list of filters goes
+  directly under `entity:`, no nested `filter:` key at all; the nested
+  form isn't silently ignored, it's a hard `extra keys not allowed`
+  error. Confirmed against HA core source before fixing, not guessed
+  from the error text alone.
+- **A transient false negative on the very first tick right after the
+  automation reload**: `room_occupancy_entities | length > 0` evaluated
+  `false` for `living_room` on the first post-reload trace despite the
+  area demonstrably having two real occupancy sensors (confirmed
+  correct on every subsequent tick, and reproducible standalone via
+  `ha_eval_template` with the identical resolution logic) - looked
+  exactly like a bug at first, but never recurred once the automation
+  had been running a few seconds. Plausibly the same class of
+  reload-timing gap lesson 2's `_time_ts()` incident was about (a
+  registry/cache not fully warm immediately after a reload), just
+  self-healing here since nothing latches a bad value the way a crashed
+  coordinator refresh did there. Worth knowing as a real, if narrow,
+  possibility - not fully root-caused, but not a design flaw in the
+  merge logic either, confirmed by direct comparison of the failing and
+  passing traces' condition results.
+
+Once past that first tick, traces showed the full intended behaviour:
+`room_occupancy_entities` correctly resolved both real occupancy
+sensors in the area, and `occupancy.is_detected` was actually evaluated
+(not short-circuited) and correctly reported the room as unoccupied,
+matching real sensor state confirmed via `ha_get_history` moments
+earlier. `resolved_entities`/`adaptive_target_entities` also confirmed
+correct via a `skip_condition: true` manual trigger, resolving all four
+real living-room lights with the right brightness multipliers.
+`config_check` stayed valid and zero repairs appeared throughout.
 
 ## Open question: dashboard card as a HACS plugin?
 
