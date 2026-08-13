@@ -3,9 +3,13 @@ blueprint:
   description: >
     Adaptive lighting: sets brightness/colour temperature from a sensor,
     keeping lights updated as it changes, and turns them off a while
-    after motion stops. A Motion Sensor (if set) governs occupancy -
-    updates only apply while occupied, and a periodic check retries
-    turning lights off if one didn't take. Already-correct lights are
+    after motion stops. A Motion Sensor or Occupancy Sensor (if set)
+    governs occupancy - updates only apply while occupied, and a
+    periodic check retries turning lights off if one didn't take.
+    Occupancy Sensor (an entity, device, area, floor, or label) takes
+    precedence over Motion Sensor if both are set, and aggregates every
+    matching occupancy sensor automatically rather than needing one named
+    entity. Already-correct lights are
     skipped to avoid redundant network traffic. A Scene Template can
     activate a matching scene instead of the adaptive brightness/colour;
     a Brightness Multiplier Template can scale individual lights'
@@ -24,7 +28,11 @@ blueprint:
   input:
     motion_entity:
       name: Motion Sensor (Optional)
-      description: Motion sensor that triggers the automation. Without one, it only reacts to the Adaptive Lighting Sensor and Additional Triggers.
+      description: >
+        Single motion/occupancy sensor entity that triggers the
+        automation. Superseded by Occupancy Sensor below if that's also
+        set. Without either, it only reacts to the Adaptive Lighting
+        Sensor and Additional Triggers.
       default: null
       selector:
         entity:
@@ -33,6 +41,26 @@ blueprint:
               domain: binary_sensor
             - device_class: motion
               domain: binary_sensor
+    occupancy_target:
+      name: Occupancy Sensor (Optional)
+      description: >
+        Entity, device, area, floor, or label whose occupancy sensors
+        govern occupancy - aggregates every matching sensor automatically
+        (using Home Assistant's built-in Occupancy triggers/conditions),
+        so unlike Motion Sensor above you don't have to name one specific
+        entity, and sensors added to the area/device later count for
+        free. Takes precedence over Motion Sensor if both are set. Only
+        binary_sensor entities with device_class "occupancy" are counted
+        - a motion-class sensor won't trigger this even if picked
+        directly, so use Motion Sensor above for those instead. Leave
+        blank to fall back to Motion Sensor, or no occupancy gating at
+        all if that's blank too.
+      default: {}
+      selector:
+        target:
+          entity:
+            domain: binary_sensor
+            device_class: occupancy
     adaptive_sensor:
       name: Adaptive Lighting Sensor
       description: Sensor providing brightness and colour temperature to apply.
@@ -117,8 +145,8 @@ blueprint:
         How often to check for lights left on with no occupancy and retry
         turning them off — a safety net for commands that don't land (e.g.
         a dropped Zigbee message). time_pattern syntax, e.g. '/5' for every
-        5 minutes. Only relevant when a Motion Sensor is set; ignored
-        otherwise.
+        5 minutes. Only relevant when a Motion Sensor or Occupancy Sensor
+        is set; ignored otherwise.
       default: "/5"
       selector:
         text: {}
@@ -158,6 +186,7 @@ max_exceeded: silent
 # trigger has fired.
 trigger_variables:
   motion_entity: !input motion_entity
+  occupancy_target: !input occupancy_target
   light_target: !input light_target
 
 trigger:
@@ -174,16 +203,36 @@ trigger:
   - id: extra
     platform: state
     entity_id: !input extra_triggers
-  # Motion sensor just reported occupied
+  # Motion sensor just reported occupied - single-entity mode, superseded
+  # by Occupancy Sensor below if that's also set (see its enabled: guard)
   - id: motion_on
     platform: template
     value_template: "{{ motion_entity != None and is_state(motion_entity,'on') }}"
+    enabled: "{{ occupancy_target | length == 0 }}"
   # Motion sensor has been continuously unoccupied for no_motion_wait
   - id: motion_off
     platform: template
     value_template: "{{ motion_entity != None and is_state(motion_entity,'off') }}"
     for:
       seconds: !input no_motion_wait
+    enabled: "{{ occupancy_target | length == 0 }}"
+  # Occupancy Sensor (entity/device/area/floor/label) just reported
+  # occupied - aggregates every matching occupancy sensor automatically
+  # via Home Assistant's built-in Occupancy triggers, so this takes
+  # precedence over the single-entity Motion Sensor triggers above
+  # whenever it's configured (see their enabled: guard)
+  - id: motion_on
+    trigger: occupancy.detected
+    target: !input occupancy_target
+    enabled: "{{ occupancy_target | length > 0 }}"
+  # Occupancy Sensor has been continuously clear for no_motion_wait
+  - id: motion_off
+    trigger: occupancy.cleared
+    target: !input occupancy_target
+    options:
+      for:
+        seconds: !input no_motion_wait
+    enabled: "{{ occupancy_target | length > 0 }}"
   # Periodic safety net - see the `reconcile` branch in action: below
   - id: reconcile
     platform: time_pattern
@@ -259,8 +308,25 @@ condition:
             id:
               - adaptive
               - extra
-          - condition: template
-            value_template: "{{ occupied }}"
+          - condition: or
+            conditions:
+              # Occupancy Sensor configured - trust Home Assistant's own
+              # aggregated occupancy check directly, same precedence as
+              # the trigger block above
+              - condition: and
+                conditions:
+                  - condition: template
+                    value_template: "{{ occupancy_target | length > 0 }}"
+                  - condition: occupancy.is_detected
+                    target: !input occupancy_target
+              # No Occupancy Sensor - fall back to the Motion Sensor/
+              # light-based occupied variable (see variables: below)
+              - condition: and
+                conditions:
+                  - condition: template
+                    value_template: "{{ occupancy_target | length == 0 }}"
+                  - condition: template
+                    value_template: "{{ occupied }}"
           - condition: or
             conditions:
               - condition: not
@@ -327,11 +393,14 @@ variables:
     {{ resolved_entities | reject('is_state', 'unavailable') | reject('is_state', 'unknown') | list }}
   occupied: >
     {#
-      Is the room "in use" right now? With a motion sensor, trust it
-      directly - a light merely being on doesn't mean anyone's still
-      there (that's what caused the original bug this guard fixes).
-      Without a motion sensor, the only signal available is whether
-      we've already turned something on.
+      Is the room "in use" right now, for the no-Occupancy-Sensor case
+      (see condition: above for the Occupancy Sensor branch, which
+      doesn't route through this variable - occupancy.is_detected is a
+      native condition type, not something a template can call). With a
+      Motion Sensor, trust it directly - a light merely being on doesn't
+      mean anyone's still there (that's what caused the original bug
+      this guard fixes). Without either, the only signal available is
+      whether we've already turned something on.
     #}
     {% if motion_entity is not none %}
       {{ is_state(motion_entity, 'on') }}
@@ -413,9 +482,25 @@ action:
         sequence:
           - if:
               - condition: template
-                value_template: >
-                  {{ motion_entity is not none and not is_state(motion_entity, 'on')
-                     and entities_still_on | length > 0 }}
+                value_template: "{{ entities_still_on | length > 0 }}"
+              - condition: or
+                conditions:
+                  # Occupancy Sensor configured and currently not detecting anyone
+                  - condition: and
+                    conditions:
+                      - condition: template
+                        value_template: "{{ occupancy_target | length > 0 }}"
+                      - condition: not
+                        conditions:
+                          - condition: occupancy.is_detected
+                            target: !input occupancy_target
+                  # No Occupancy Sensor - fall back to Motion Sensor being off
+                  - condition: and
+                    conditions:
+                      - condition: template
+                        value_template: "{{ occupancy_target | length == 0 and motion_entity is not none }}"
+                      - condition: template
+                        value_template: "{{ not is_state(motion_entity, 'on') }}"
             then:
               - alias: "Reconcile: retry turning off lights left on with no occupancy"
                 action: light.turn_off
