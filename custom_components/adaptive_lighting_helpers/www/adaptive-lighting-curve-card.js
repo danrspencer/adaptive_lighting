@@ -187,6 +187,14 @@ class AdaptiveLightingCurveCard extends HTMLElement {
     const brightnessNowValue = numFromAttrOrState(brightnessNow, 'brightness');
     const kelvinNowValue = numFromAttrOrState(kelvinNow, 'color_temp');
 
+    // Each sensor's device is named by the user ("Ground Floor" etc,
+    // see coordinator.py's ScheduleInstance.device_info) and the phase
+    // entity displays that device name verbatim (has_entity_name=True,
+    // _attr_name=None) - so friendly_name doubles as "which sensor is
+    // this card pointing at", the thing there's otherwise no way to
+    // tell apart when two cards sit side by side with no config.title.
+    const friendlyName = phase.attributes.friendly_name;
+
     const cacheKey = JSON.stringify([
       boundaries,
       phase && phase.state,
@@ -195,6 +203,7 @@ class AdaptiveLightingCurveCard extends HTMLElement {
       pointsRaw,
       brightnessNowValue,
       kelvinNowValue,
+      friendlyName,
     ]);
 
     if (cacheKey === this._cacheKey) {
@@ -204,6 +213,7 @@ class AdaptiveLightingCurveCard extends HTMLElement {
 
     this._boundaries = boundaries;
     this._phaseState = phase && phase.state;
+    this._friendlyName = friendlyName;
     this._sun = sun;
     this._brightnessNow = brightnessNowValue;
     this._kelvinNow = kelvinNowValue;
@@ -453,7 +463,7 @@ class AdaptiveLightingCurveCard extends HTMLElement {
           z-index: 2;
         }
       </style>
-      <ha-card header="${this._config.title || 'Adaptive Lighting Curve'}">
+      <ha-card header="${this._config.title || this._friendlyName || 'Adaptive Lighting Curve'}">
         <div class="card-content">
           <div class="now-label">${nowLabel}</div>
           ${sunLabel ? `<div class="sun-label">${sunLabel}</div>` : ''}

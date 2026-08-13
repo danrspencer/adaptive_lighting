@@ -99,11 +99,17 @@
           night_start: data.boundaries.night,
           evening_earliest: data.boundaries.evening_earliest,
           evening_latest: data.boundaries.evening_latest,
+          // Real installs get this from device grouping (the entity's
+          // displayed name IS the device name - see
+          // ScheduleInstance.device_info) - faked here so the preview
+          // exercises the card's default-header-from-friendly_name
+          // behaviour instead of masking it with an explicit title.
+          friendly_name: 'Ground Floor',
         }),
       };
 
       const card = document.createElement('adaptive-lighting-curve-card');
-      card.setConfig({ title: 'Adaptive Lighting Curve' });
+      card.setConfig({}); // no title - demonstrates the friendly_name-derived default header
       card.hass = { states };
       document.getElementById('card-container').appendChild(card);
     </script>

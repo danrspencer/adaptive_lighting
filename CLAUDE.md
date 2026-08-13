@@ -681,6 +681,89 @@ correct via a `skip_condition: true` manual trigger, resolving all four
 real living-room lights with the right brightness multipliers.
 `config_check` stayed valid and zero repairs appeared throughout.
 
+**Auto-seeded "Default" sensor removed entirely - "Add Integration" now
+creates zero devices, zero entities.** Prompted by the user noticing
+their live "Default"-titled sensor's device had been renamed to "Ground
+Floor" (Settings → Devices → rename, which only ever changes the
+*displayed* name) but its entity_ids were still `sensor.default_*` -
+tracked back to two real, HA-core-confirmed facts, not assumptions:
+(1) HA's own "integration added" dialog (`step-flow-create-entry.ts` in
+`home-assistant/frontend`) shows an unconditional device-rename +
+area-picker form whenever a config flow creates at least one device -
+no flag exists for an integration to suppress it - so auto-seeding a
+device on "Add Integration" always triggered that popup for a device
+the user hadn't asked to create yet. (2) That same dialog is the *only*
+place HA auto-renames entity_ids to match a device name
+(`getAutomaticEntityIds` + `updateEntityRegistryEntry`, called once at
+that first-run moment) - a later rename via Settings → Devices never
+touches entity_ids again, by design, the same way no HA integration
+auto-propagates entity_id renames later (doing so would silently break
+whatever already references the old ones). Confirmed by reading the
+actual frontend source before concluding either point, not guessed.
+
+Fix: `async_step_user` (the main entry) no longer creates any
+subentry - just `async_create_entry(title=..., data={})`, exactly the
+same "nothing to configure" shape the entry already had, minus the
+auto-seeded device. `DEFAULT_SENSOR_NAME` removed - there's now exactly
+one way to add a sensor (Add Sensor) and exactly one moment its name is
+ever set (what you type there), so getting the name right the first
+time actually matters, rather than a rename-later escape hatch that
+only fixed how it *looked*, not what it was *called*.
+
+**Live migration performed and confirmed the same session.** Before
+deleting anything, all 14 config entities on the old "Default"/"Ground
+Floor" subentry (5 `time.*`, 8 `number.*`, 1 `switch.*`) were checked
+against their documented defaults - every one matched, so nothing
+needed manually preserved. The subentry was then deleted
+(`ha_remove_helpers_integrations`, `helper_type: config_subentry`) and
+recreated via Add Sensor (`ha_config_set_helper`,
+`subentry_type: sensor`) named "Ground Floor" properly this time - a
+follow-up `ha_search` confirmed all 17 entities exist under the
+`ground_floor` prefix, values still at defaults. Two dependents then
+needed repointing, both confirmed done, not just attempted:
+`automation.living_room_lights_new`'s `adaptive_sensor` input from
+`sensor.default_adaptive_lighting` to `sensor.ground_floor_adaptive_lighting`
+(confirmed via a manual `automation.trigger` producing a clean trace -
+`state: stopped`, `execution: finished`, no error), and the
+`lovelace/house-settings` dashboard's curve-card section from
+`sensor: "default"` to `sensor: "ground_floor"` (confirmed via the
+write tool's own `post_write_verified: true`). `config_check` stayed
+valid throughout.
+
+**Dashboard card header now defaults to the sensor's own name, not a
+static string.** Two identically-titled cards side by side (one per
+sensor, e.g. "Ground Floor" and "First Floor") were indistinguishable
+at a glance - both just said "Adaptive Lighting Curve". Fixed by
+reading `friendly_name` off the phase entity in `set hass()`
+(`www/adaptive-lighting-curve-card.js`): because every sensor gets its
+own device and every entity on it uses `has_entity_name=True` with no
+entity-level name of its own, that entity's displayed name already
+*is* the device name the user picked (e.g. "Ground Floor") - no new
+lookup needed, just reading an attribute already being fetched.
+`config.title` still wins if set explicitly; the hardcoded
+"Adaptive Lighting Curve" string is now only the last-resort fallback,
+used when no entity has loaded yet. `dashboard/preview.html`'s fake
+state gained a `friendly_name` attribute and dropped its explicit
+`title:` card config specifically so the preview exercises this
+default instead of masking it - verified visually via the Browser pane
+against the live preview server (the header read "Ground Floor" from
+`friendly_name` alone, no title config set).
+
+**`dashboard/adaptive-lighting-section.yaml` added**: a fuller
+copy-paste dashboard section than `house-settings-card.yaml`'s
+curve-graph-only snippet - the curve card plus the phase
+override/sticky-override switch plus all 13 schedule/curve config
+entities, laid out as heading-grouped tile grids. Still just a
+find-and-replace-the-slug template (no integration-side dashboard
+auto-creation exists - see the file's own header comment for why), and
+still not the only option: each sensor's own device page (Settings →
+Devices → the sensor's device) already shows the same entities grouped
+for free, since they're tagged `entity_category: config` - the new
+section file is for a main dashboard, the device page needs nothing
+shipped or pasted at all. Not yet deployed to the live house-settings
+dashboard as an actual section - `house-settings-card.yaml`'s
+curve-only card is what's live today.
+
 ## Testing
 
 `pip install pytest && pytest` from the repo root. No Home Assistant

@@ -38,15 +38,15 @@ previously an accidental inconsistency in the live Jinja version
 deliberate.
 
 Schedule instances: the config entry itself never carries a schedule -
-it only registers the services (see __init__.py). Every schedule is a
-"sensor" subentry, added via the "Add Sensor" flow (config_flow.py's
-SensorSubentryFlow) - so there's exactly one mechanism for adding a
-schedule, not "the first one is special". Every instance is named
-(required - see SensorSubentryFlow) and gets both a prefixed entity_id
-(sensor.living_room_adaptive_lighting) and its own device (Settings ->
-Devices, renamable there - see ScheduleInstance.device_info), including
-the first sensor auto-seeded when the integration is added ("Default").
-schedule_instances() is the one place that enumerates all of them -
+it only registers the services (see __init__.py), and no sensor is
+auto-created. Every schedule is a "sensor" subentry, added via the
+"Add Sensor" flow (config_flow.py's SensorSubentryFlow) - so there's
+exactly one mechanism for adding a schedule, and exactly one way to
+name it: what you type there. Every instance gets both a prefixed
+entity_id (sensor.living_room_adaptive_lighting) and its own device
+(Settings -> Devices, renamable there - see
+ScheduleInstance.device_info). schedule_instances() is the one place
+that enumerates all of them -
 __init__.py, sensor.py, select.py, number.py, time.py, and switch.py
 all iterate its output rather than each re-deriving the subentry
 lookup.
