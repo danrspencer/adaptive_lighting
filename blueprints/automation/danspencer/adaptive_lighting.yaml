@@ -56,10 +56,9 @@ blueprint:
       selector:
         target:
           entity:
-            filter:
-              - domain: light
-              - domain: binary_sensor
-                device_class: occupancy
+            - domain: light
+            - domain: binary_sensor
+              device_class: occupancy
     extra_triggers:
       name: Additional Triggers (Optional)
       description: >
