@@ -41,6 +41,9 @@ cards:
 
   - type: custom:adaptive-lighting-curve-card
     sensor: living_room
+    # The heading card above already names the sensor - card's own
+    # title would just repeat it, so it's suppressed here.
+    title: ''
 
   - type: heading
     heading: Override
