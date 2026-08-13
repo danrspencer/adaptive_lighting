@@ -36,3 +36,9 @@ icon: mdi:chart-bell-curve
 ---
 type: custom:adaptive-lighting-curve-card
 sensor: living_room
+# Without this, the card renders at whatever its own natural width is
+# (a fraction of the section) rather than the section's full width,
+# even though the heading card above it does span full width by
+# default - a real HA "sections" view quirk, not specific to this card.
+grid_options:
+  columns: full

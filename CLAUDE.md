@@ -320,6 +320,28 @@ re-propose without new information changing this trade-off.
     by a live blueprint import failing, not by any local validation
     (plain `yaml.safe_load` has no opinion on selector schemas).
 
+15. **In a `sections`-view dashboard, a card doesn't inherit its
+    section's full width just because the section itself is
+    full-width.** Each section is its own 12-column grid, and only
+    some card types claim all 12 by default (`heading` cards do); a
+    nested `type: grid` card and a custom card without a
+    `getLayoutOptions()` implementation don't, and render at whatever
+    their own natural size is - about a third of the section, in
+    practice - even with `column_span` correctly maxed out on the
+    section around them. Caught live: `column_span: 4` on both floor
+    sections measured correctly via `getBoundingClientRect()` (1120px
+    of 1184px available), yet the curve card and every nested tile
+    grid inside them measured only 368px - the section was genuinely
+    full-width, its content just wasn't using it. Fixed with
+    `grid_options: {columns: full}` on each of those cards
+    individually (not on the section) - confirmed via the same
+    `getBoundingClientRect()` check, now 1120px across the board. This
+    is a general `sections`-view behavior, not anything specific to
+    this project's custom card - documented in
+    `home-assistant-best-practices`'s dashboard-guide.md under "Card
+    Sizing and Responsive Layout" once found, but not something a
+    plain `column_span` fix on the section makes you suspect exists.
+
 ## Current status
 
 **Services** (`custom_components/adaptive_lighting_helpers/`,

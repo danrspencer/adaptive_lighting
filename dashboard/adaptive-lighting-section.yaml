@@ -32,8 +32,17 @@
 # `column_span` to your view's `max_columns` (commonly 4). Left at the
 # UI's default width this ends up using well under half a laptop
 # screen, mostly empty space either side - a section this dense reads
-# far better full-width, and the tile grids below are sized (3 and 4
+# far better full-width, and the tile grids below are sized (5 and 4
 # columns) assuming it is.
+#
+# Widening the section alone isn't enough, though - a section is its
+# own 12-column grid, and neither the curve card nor a nested `type:
+# grid` card claims the full width of it by default (unlike a heading
+# card, which does) - each renders at whatever its own natural size
+# is, usually a fraction of the section, even though the section
+# around it is full-width. `grid_options: {columns: full}` on both is
+# what actually stretches them - already set below on every card that
+# needs it.
 
 cards:
   - type: heading
@@ -51,6 +60,8 @@ cards:
     # The heading card above already names the sensor - card's own
     # title would just repeat it, so it's suppressed here.
     title: ''
+    grid_options:
+      columns: full
 
   - type: heading
     heading: Override
@@ -59,6 +70,8 @@ cards:
   - type: grid
     columns: 2
     square: false
+    grid_options:
+      columns: full
     cards:
       - type: tile
         entity: select.living_room_adaptive_lighting_phase
@@ -74,6 +87,8 @@ cards:
   - type: grid
     columns: 5
     square: false
+    grid_options:
+      columns: full
     cards:
       - type: tile
         entity: time.living_room_morning_time
@@ -98,6 +113,8 @@ cards:
   - type: grid
     columns: 4
     square: false
+    grid_options:
+      columns: full
     cards:
       - type: tile
         entity: number.living_room_morning_brightness
