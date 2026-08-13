@@ -118,6 +118,12 @@ def main():
         ("Day", boundaries["day"]),
         ("Night", boundaries["night"]),
     ]
+    # Rendered after sun_markers in the svg template below (not right
+    # here where it's built) - Evening commonly starts at exactly
+    # sunset, so the two lines are often pixel-coincident; drawing this
+    # dashed line on top lets the sun-line's solid orange show through
+    # its gaps instead of one flat-out hiding the other. Matches
+    # www/adaptive-lighting-curve-card.js exactly.
     evening_x = x_of(boundaries["evening"])
     boundary_lines = [f'<line x1="{evening_x:.1f}" y1="{PAD_TOP}" x2="{evening_x:.1f}" y2="{BASELINE_Y}" class="boundary-line" />']
     top_labels = [f'<text x="{evening_label_x:.1f}" y="{LABEL_Y}" class="boundary-label" text-anchor="middle">Evening</text>']
@@ -173,9 +179,9 @@ def main():
   <g transform="translate({CARD_PAD}, {TITLE_H + NOW_LABEL_H + SUN_LABEL_H})">
     {"".join(bars)}
     {evening_bracket}
-    {"".join(boundary_lines)}
     {"".join(hour_ticks)}
     {sun_markers}
+    {"".join(boundary_lines)}
     {now_marker}
     <line x1="{PAD_L}" y1="{BASELINE_Y}" x2="{VB_W - PAD_R}" y2="{BASELINE_Y}" class="axis-line" />
     {top_labels}

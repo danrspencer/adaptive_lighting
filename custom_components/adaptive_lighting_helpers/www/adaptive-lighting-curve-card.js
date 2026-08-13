@@ -389,6 +389,14 @@ class AdaptiveLightingCurveCard extends HTMLElement {
       })
       .join('');
 
+    // Rendered after sunMarkers in the svg template below (not right
+    // here where it's built) - Evening commonly starts at exactly
+    // sunset (whenever sunset itself falls inside the earliest/latest
+    // window, Evening just follows it directly), so the two lines are
+    // often pixel-coincident. Drawing this dashed line on top of the
+    // sun-line's solid stroke lets both remain visible - the dashes'
+    // gaps show the orange line underneath instead of one flat-out
+    // hiding the other.
     const boundaryLines = [b.morning, b.day, b.evening, b.night]
       .map((t) => `<line x1="${xOf(t).toFixed(1)}" y1="${PAD_TOP}" x2="${xOf(t).toFixed(1)}" y2="${BASELINE_Y}" class="boundary-line" />`)
       .join('');
@@ -436,8 +444,8 @@ class AdaptiveLightingCurveCard extends HTMLElement {
         <svg viewBox="0 0 ${VB_W} ${VB_H}" preserveAspectRatio="none" class="chart">
           ${bars}
           ${eveningBracket}
-          ${boundaryLines}
           ${sunMarkers}
+          ${boundaryLines}
           ${nowMarker}
           <line x1="${PAD_L}" y1="${BASELINE_Y}" x2="${VB_W - PAD_R}" y2="${BASELINE_Y}" class="axis-line" />
         </svg>
