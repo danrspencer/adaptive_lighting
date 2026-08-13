@@ -2,10 +2,10 @@
 # dashboards aren't files, so this is just the card config to paste in).
 #
 # Requires:
-#   1. www/adaptive-lighting-curve-card.js registered as a dashboard
-#      resource: Settings -> Dashboards -> Resources -> Add Resource
-#        URL:  /local/adaptive-lighting-curve-card.js
-#        Type: JavaScript Module
+#   1. Adaptive Lighting Helpers installed and set up - the card ships
+#      inside the integration and self-registers with the frontend on
+#      startup (see __init__.py's async_setup), no manual Lovelace
+#      resource registration needed.
 #   2. The sensors it reads to exist with these entity_ids and
 #      attribute shapes (produced by the adaptive_lighting_helpers
 #      integration's day-phase/curve sensors - see docs/HELPERS.md's
