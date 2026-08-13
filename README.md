@@ -50,36 +50,6 @@ helper. All usable from your own automations with no blueprint required. Can opt
 continuously as sensors instead of calling `compute_curve` yourself. Full service contracts, YAML examples, and
 the sensor/entity list: **[docs/HELPERS.md](docs/HELPERS.md)**.
 
-## Bring your own sensor
-
-`apply_lighting` and `compute_lighting_groups` don't require this integration's own `sensor.adaptive_lighting` —
-they'll read brightness/colour targets off any sensor entity that exposes the right attributes. That's the whole
-contract, and nothing else about the entity matters (its `state` is never read):
-
-| Attribute | Type | Required |
-|---|---|---|
-| `brightness` | 0-255 | yes |
-| `color_temp` | Kelvin | yes |
-| `rgb_color` | `[r, g, b]` | no — only needed if you're using `prefer_rgb_color` |
-
-A minimal hand-written template sensor satisfying that contract:
-
-```yaml
-template:
-  - sensor:
-      - name: "My Room's Adaptive Lighting"
-        state: "{{ 'Evening' if now().hour >= 18 else 'Day' }}" # anything - not read by these services
-        attributes:
-          brightness: "{{ 180 if now().hour >= 18 else 255 }}"
-          color_temp: "{{ 3200 if now().hour >= 18 else 5500 }}"
-          # Optional - only needed for prefer_rgb_color
-          rgb_color: "{{ [255, 200, 150] if now().hour >= 18 else [255, 255, 255] }}"
-```
-
-Point `apply_lighting`'s `sensor_entity_id` (or the blueprint's Adaptive Lighting Sensor input) at that entity
-and everything else — reachability, tolerance, manual-override protection, two-step transitions, RGB dispatch —
-works exactly the same as with this integration's own sensor.
-
 ## The blueprint
 
 A per-room automation built on the services above (loosely coupled — it calls `apply_lighting` the same way it
