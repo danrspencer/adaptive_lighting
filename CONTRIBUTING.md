@@ -1,8 +1,9 @@
-# Repository layout
+# Contributing
 
-Moved out of the main README since it's mostly of interest to contributors,
-not to someone deciding whether to install this. See [../README.md](../README.md)
-for the pitch and installation instructions.
+Not needed just to install and use this — see [README.md](README.md) for that. This is for working on the
+code itself.
+
+## Repository layout
 
 ```
 custom_components/adaptive_lighting_helpers/
@@ -70,7 +71,7 @@ dashboard/
     preview.html                renders the real card against synthetic
                                  data, no Home Assistant instance needed
     generate_preview_data.py    generates that synthetic data
-    render_preview_svg.py       renders the screenshot above as a
+    render_preview_svg.py       renders the README's screenshot as a
                                  standalone SVG
 
 tests/
@@ -79,7 +80,6 @@ tests/
 docs/
     HELPERS.md     full service/sensor reference for the integration
     BLUEPRINT.md   full feature/input reference for the blueprint
-    REPOSITORY.md  this file
 ```
 
 Triggers, conditions, and target resolution stay in the blueprint; Home Assistant `condition:` blocks can't call
@@ -87,3 +87,35 @@ a service, so anything a condition depends on has to remain template-based. Mult
 checks, and transition routing are implemented in the integration and unit tested. See `CLAUDE.md` for further
 implementation notes, including the (fairly involved) history of getting a custom integration to load correctly
 at all.
+
+## Previewing the dashboard card
+
+```bash
+python3 dashboard/generate_preview_data.py
+python3 -m http.server 8934
+# open http://localhost:8934/dashboard/preview.html
+```
+
+Renders the actual card component against generated data, without a Home Assistant instance.
+
+## Testing
+
+```bash
+pip install pytest
+pytest
+```
+
+No Home Assistant dependency for `curve.py`/`grouping.py` themselves; `tests/fakes.py` provides a fake
+state/registry lookup, and `tests/conftest.py` imports them directly (bypassing the integration's `__init__.py`,
+which does need `homeassistant` — see its own comment for why). CI (`.github/workflows/tests.yml`) runs the
+suite on push and PR across Python 3.9 and 3.13.
+
+## Status
+
+The pure-Python core (`curve.py`, `grouping.py`, `scenes.py`) and the integration wrapping it as HA services
+are both written, unit tested, and **installed via HACS and confirmed working against a live Home Assistant
+instance** — `compute_lighting_groups`/`compute_curve`/`compute_scene_coverage` verified registered and
+functionally correct, the blueprint's full compute-groups-then-turn-on-lights path exercised end to end
+against real hardware, and the day-phase/curve sensors deployed and iterated on live (multi-sensor subentries,
+per-sensor devices). `apply_lighting` and RGB colour support (`prefer_rgb_color`) are unit tested but **not yet
+exercised against a live instance**. See CLAUDE.md's "Current status" section for the full rundown.
