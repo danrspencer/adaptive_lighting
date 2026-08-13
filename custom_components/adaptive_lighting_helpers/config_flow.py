@@ -2,13 +2,26 @@
 
 The main entry needs no configuration at all - adding it just registers
 the compute_lighting_groups/compute_curve/compute_scene_coverage/
-apply_lighting services (see __init__.py), plus a single default
-"sensor" subentry named "Default" so there's something usable
-immediately rather than an empty integration you have to remember to
-add a sensor to. Every day-phase/curve sensor + phase-override select
-beyond that is a "sensor" subentry too (SensorSubentryFlow below),
-added afterwards from this integration's own page - one mechanism for
-every sensor, not a separate main-entry path alongside named ones.
+apply_lighting services (see __init__.py). No sensor is auto-created;
+every day-phase/curve sensor + phase-override select is a "sensor"
+subentry (SensorSubentryFlow below), added explicitly from this
+integration's own page (Add Sensor) - one mechanism for every sensor,
+you name it yourself from the start.
+
+Deliberately does NOT auto-seed a first sensor the way earlier versions
+did (used to be hardcoded to the name "Default", regardless of what a
+user typed anywhere, since there was nowhere to type a name at all for
+it). Two real problems with that, not just a naming quibble: (1) HA's
+own "integration added" dialog shows an unconditional rename+area-picker
+form whenever a config flow creates a device - not something an
+integration can suppress - so adding this integration always popped up
+that form for a device the user hadn't asked to create yet. (2)
+Renaming that device later only ever changes its *displayed* name
+(HA's own entity-id auto-rename only happens once, in that first-run
+dialog, never again) - so the "Default" entity_id prefix was permanent
+regardless of what the device got renamed to, which is exactly the
+confusion this change avoids by never creating anything unnamed in the
+first place.
 
 A subentry only ever asks for one thing: a name. It becomes both the
 sensor's device name (Settings -> Devices, renamable later) and its
@@ -39,8 +52,6 @@ from .const import DOMAIN, SUBENTRY_TYPE_SENSOR
 
 SUBENTRY_FIELDS = {vol.Required("name"): selector.TextSelector()}
 
-DEFAULT_SENSOR_NAME = "Default"
-
 
 class AdaptiveLightingHelpersConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
     VERSION = 1
@@ -48,22 +59,11 @@ class AdaptiveLightingHelpersConfigFlow(config_entries.ConfigFlow, domain=DOMAIN
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         await self.async_set_unique_id(DOMAIN)
         self._abort_if_unique_id_configured()
-        # No fields to ask for - see module docstring. Creates
-        # immediately rather than showing an empty form to click through,
-        # seeding one sensor named "Default" so there's something usable
-        # right away.
-        return self.async_create_entry(
-            title="Adaptive Lighting Helpers",
-            data={},
-            subentries=[
-                {
-                    "subentry_type": SUBENTRY_TYPE_SENSOR,
-                    "title": DEFAULT_SENSOR_NAME,
-                    "unique_id": slugify(DEFAULT_SENSOR_NAME),
-                    "data": {},
-                }
-            ],
-        )
+        # No fields to ask for, no subentry seeded - see module
+        # docstring. Creates immediately rather than showing an empty
+        # form to click through; add a named sensor afterwards via this
+        # integration's own page (Add Sensor).
+        return self.async_create_entry(title="Adaptive Lighting Helpers", data={})
 
     @classmethod
     @callback

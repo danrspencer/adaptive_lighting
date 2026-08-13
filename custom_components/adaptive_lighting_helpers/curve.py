@@ -46,8 +46,9 @@ DEFAULT_CURVE_VALUES = {
 # A representative day schedule (hour-of-day), not read by anything
 # below - a single shared "sensible starting point" for anything that
 # wants to seed or preview a schedule without real user input yet
-# (config_flow.py's auto-seeded default sensor, dashboard/generate_preview_data.py's
-# synthetic preview data). The one place these numbers are literals.
+# (time.py's default value for every new sensor's boundary-time
+# entities, dashboard/generate_preview_data.py's synthetic preview
+# data). The one place these numbers are literals.
 DEFAULT_SCHEDULE_HOURS = {
     "morning": 6,
     "day": 8,

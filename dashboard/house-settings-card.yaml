@@ -6,13 +6,15 @@
 #      inside the integration and self-registers with the frontend on
 #      startup (see __init__.py's async_setup), no manual Lovelace
 #      resource registration needed.
-#   2. The sensors it reads to exist with these entity_ids and
-#      attribute shapes (produced by the adaptive_lighting_helpers
-#      integration's day-phase/curve sensors - see docs/HELPERS.md's
-#      "Optional: day-phase/curve sensors" section). The defaults are
-#      the auto-seeded "Default" sensor's entities; point the card at
-#      any other sensor via the `entities` map shown below.
-#        sensor.default_adaptive_lighting - state: Morning/Day/Evening/Night
+#   2. A sensor added (Settings -> Devices & Services -> Adaptive
+#      Lighting Helpers -> Add Sensor - just a name) with these
+#      entity_ids and attribute shapes (produced by the
+#      adaptive_lighting_helpers integration's day-phase/curve sensors
+#      - see docs/HELPERS.md's "Optional: day-phase/curve sensors"
+#      section). Substitute your sensor's own slugified name for
+#      "living_room" below (or point individual entity_ids at a
+#      hand-written sensor instead via the `entities` map).
+#        sensor.living_room_adaptive_lighting - state: Morning/Day/Evening/Night
 #                                           attributes.brightness (0-255),
 #                                           attributes.color_temp (Kelvin),
 #                                           attributes.morning_start/day_start/
@@ -21,8 +23,11 @@
 #                                           evening_latest (unix seconds,
 #                                           optional - only used to explain
 #                                           *why* evening starts when it does)
-#        sensor.default_adaptive_lighting_curve - attributes.points: [{t, brightness, kelvin}, ...]
+#        sensor.living_room_adaptive_lighting_curve - attributes.points: [{t, brightness, kelvin}, ...]
 #        sun.sun (optional, same reason as evening's earliest/latest)
+#
+# For the curve graph plus the override and every config entity in one
+# section, see adaptive-lighting-section.yaml instead.
 
 type: heading
 heading: Adaptive Lighting Curve
@@ -30,8 +35,4 @@ heading_style: title
 icon: mdi:chart-bell-curve
 ---
 type: custom:adaptive-lighting-curve-card
-# Uncomment to point at a differently-named sensor (the slugified name,
-# i.e. "Living Room" -> living_room); defaults to the auto-seeded
-# "Default" sensor. Individual entity_ids can still be overridden via
-# an `entities` map if you're using a hand-written sensor instead.
-# sensor: living_room
+sensor: living_room

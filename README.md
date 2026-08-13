@@ -118,7 +118,11 @@ blueprints/automation/danspencer/adaptive_lighting.yaml
     in place.
 
 dashboard/
-    house-settings-card.yaml   card config to add to a view
+    house-settings-card.yaml   curve card config to add to a view
+    adaptive-lighting-section.yaml
+                                 fuller section: curve card, phase
+                                 override, and every schedule/curve
+                                 config entity, laid out as tiles
     preview.html                renders the real card against synthetic
                                  data, no Home Assistant instance needed
     generate_preview_data.py    generates that synthetic data
@@ -168,9 +172,10 @@ Once imported, add an automation using the "Adaptive Lighting" blueprint per roo
 ### The dashboard card
 
 Ships with the integration and self-registers with the frontend on startup — no separate install step, no
-manual Lovelace resource to add. Just add the card config from `dashboard/house-settings-card.yaml` to a view.
-By default the card reads the auto-seeded "Default" sensor's entities; point it at any other named sensor with
-`sensor: <slugified name>` (e.g. `sensor: living_room`) in the card config.
+manual Lovelace resource to add. Just add the card config from `dashboard/house-settings-card.yaml` to a view
+(point it at your sensor with `sensor: <slugified name>`, e.g. `sensor: living_room`). For a full section —
+the curve graph plus the phase override and every schedule/curve config entity, laid out as tiles — see
+`dashboard/adaptive-lighting-section.yaml` instead.
 
 ## Previewing the dashboard card
 

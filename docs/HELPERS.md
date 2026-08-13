@@ -143,9 +143,8 @@ schedule only exists once you add a sensor.
 You can add any number of sensors this way, each independent, each grouped under its own device — naming one
 "Living Room" gets you a device called "Living Room". Rename the device later (Settings → Devices → the sensor's
 device → rename) and every entity under it updates its displayed name at once — that's the only place the
-sensor's *displayed* name lives; its entity_ids stay as originally created. The very first sensor - seeded
-automatically when you add the integration - is named "Default"; add more from the same page any time, each with
-its own name.
+sensor's *displayed* name lives; its entity_ids stay as originally created from whatever you typed here, so it's
+worth getting the name right the first time rather than relying on a later rename to fix it.
 
 Each sensor's device contains, computed the same way `compute_curve` computes them and refreshed every 60 seconds:
 
@@ -168,3 +167,9 @@ Point `apply_lighting`'s `sensor_entity_id` (or the blueprint's Adaptive Lightin
 sensor's `sensor.<name_>adaptive_lighting` you want. A sensor's whole device is removable later from the
 integration's page; there's no reconfigure form since there's nothing left to reconfigure that way - edit the
 `time.*`/`number.*`/`switch.*` entities directly, or rename the device, instead.
+
+For a dashboard, [dashboard/adaptive-lighting-section.yaml](../dashboard/adaptive-lighting-section.yaml) is a
+copy-paste section with the curve graph, the phase override and sticky-override switch, and all thirteen
+schedule/curve entities laid out as tiles - or skip the dashboard entirely and use the sensor's own device page
+(Settings → Devices → the sensor's device), which already shows the same entities grouped for free, since
+they're tagged `entity_category: config`.
