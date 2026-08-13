@@ -1330,6 +1330,74 @@ dark backgrounds. NOTE: HA/HACS only display icons served from the
 `custom_integrations/adaptive_lighting_helpers/` submission there,
 which hasn't been made yet; nothing shows in the UI until it is.
 
+**Motion Sensor replaced entirely by a native-HA Occupancy Sensor
+target, at the user's request** ("newer HA automations let you just
+say, pick a room... can we make that part of our blueprint?"). HA 2026.4
+added a first-class `occupancy` integration - `occupancy.detected`/
+`occupancy.cleared` triggers and an `occupancy.is_detected` condition,
+each taking a `target:` (entity/device/area/floor/label) and aggregating
+every occupancy-class `binary_sensor` within it automatically. Confirmed
+directly against HA core source before building on it (not guessed):
+`homeassistant/components/occupancy/trigger.py`/`condition.py` both
+filter strictly by `device_class: occupancy` (motion-class sensors are
+never picked up, even targeted directly - `filter_by_domain_specs` in
+`homeassistant/helpers/automation.py` applies the same device_class
+check regardless of how an entity was reached), and both trigger/
+condition schemas require `target:` to be present
+(`vol.Required(CONF_TARGET): cv.TARGET_FIELDS` in
+`homeassistant/helpers/trigger.py`) though every field inside it is
+individually optional, so an empty `target: {}` is valid config - it
+just never matches anything. This is why the new `occupancy_target`
+input defaults to `{}`, not `null`: `null` would fail that schema
+outright regardless of whether the trigger is later disabled.
+
+First implementation kept the old single-entity Motion Sensor input
+alongside a new Occupancy Sensor target input (Occupancy Sensor taking
+precedence if both were set), reasoning that motion-class sensors would
+otherwise become unusable. The user pushed back immediately ("I don't
+like having both occupancy and motion") - simplicity won over that edge
+case, so Motion Sensor is gone entirely, not deprecated alongside. A
+room with only motion-class sensors has no occupancy input to target
+today (documented in `docs/BLUEPRINT.md`); Additional Triggers remains
+the escape hatch for wiring one in manually. Only the "Living Room
+Lights (New)" automation used this blueprint at the time, so nothing
+else needed migrating.
+
+`occupancy.is_detected` is a native condition *type*, not a template
+function - it can't be folded into the existing `occupied` Jinja
+variable the way a motion-entity `is_state()` check could, so it's
+spliced into the `condition:`/`action:` trees as real
+`condition: occupancy.is_detected` blocks (gated by a
+`{{ occupancy_target | length > 0 }}` template check), while `occupied`
+itself shrank to just the light-based "is anything already on" fallback
+for rooms with no Occupancy Sensor configured. Same split for the
+trigger side: `occupancy.detected`/`cleared` triggers replace the old
+`motion_on`/`motion_off` template triggers outright, sharing their
+trigger `id:`s (HA allows multiple trigger definitions to share an id;
+whichever one fires sets `trigger.id`) rather than the rest of the
+blueprint needing to know which mechanism is active.
+
+Verified live, not just config-checked. Blueprint changes have no
+pytest coverage, so verification meant re-importing into the real
+instance and reading actual automation traces - and along the way,
+`ha_import_blueprint(..., overwrite=true)` reported success while
+silently still serving a stale, previously-cached copy from GitHub's
+raw CDN (a branch-name raw URL can lag behind a very recent push by a
+few minutes); confirmed by reading the file back with `ha_read_file`
+after import rather than trusting the tool's own echoed response, and
+worked around by importing from the exact commit SHA's raw URL instead
+of the branch name, which resolved instantly since GitHub treats a
+SHA-pinned raw URL as immutable and never serves it stale. Repointed
+"Living Room Lights (New)" at `occupancy_target: {area_id: living_room}`
+and got two real traces for free during testing, not staged: a genuine
+`binary_sensor.living_room_sensor_2_occupancy` on→off transition fired
+the new `occupancy.cleared` trigger (`id: motion_off`) and correctly
+turned the lights off, and a natural adaptive-sensor tick's condition
+trace showed `occupancy.is_detected` evaluating `true` against the real
+`living_room` area, correctly gating the tick through to
+`apply_lighting`. `config_check` stayed valid and zero repairs appeared
+throughout.
+
 ## Open question: dashboard card as a HACS plugin?
 
 The integration half of this used to be an open question - now
