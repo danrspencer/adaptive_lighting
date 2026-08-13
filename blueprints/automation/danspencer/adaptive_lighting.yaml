@@ -3,24 +3,8 @@ blueprint:
   description: >
     Adaptive lighting: sets brightness/colour temperature from a sensor,
     keeping lights updated as it changes, and turns them off a while
-    after motion stops. An Occupancy Sensor (if set) governs occupancy -
-    updates only apply while occupied, and a periodic check retries
-    turning lights off if one didn't take. Occupancy Sensor is an entity,
-    device, area, floor, or label, and aggregates every matching
-    occupancy sensor automatically rather than needing one named entity.
-    Already-correct lights are
-    skipped to avoid redundant network traffic. A Scene Template can
-    activate a matching scene instead of the adaptive brightness/colour;
-    a Brightness Multiplier Template can scale individual lights'
-    brightness. Both are re-rendered on every run, so add whatever
-    entities they depend on to Additional Triggers for an immediate
-    update instead of waiting for the next adaptive tick. Self-contained
-    - running it manually (Run button, or automation.trigger from
-    elsewhere) always turns lights on correctly. Lights labelled
-    `no_combined_transition` get brightness and colour temperature sent
-    as two sequential calls instead of one, for bulbs that can't do both
-    together. Prefer RGB Color (if enabled) sends RGB colour instead of
-    colour temperature to lights that support it.
+    after occupancy clears. Full details on every input:
+    [docs/BLUEPRINT.md](https://github.com/danrspencer/adaptive_lighting/blob/main/docs/BLUEPRINT.md).
   domain: automation
   source_url: https://github.com/danrspencer/adaptive_lighting/blob/main/blueprints/automation/danspencer/adaptive_lighting.yaml
   author: Dan Spencer
@@ -31,41 +15,26 @@ blueprint:
       selector:
         entity:
           domain: sensor
-    occupancy_target:
-      name: Occupancy Sensor (Optional)
+    room_target:
+      name: Lights & Occupancy
       description: >
-        Entity, device, area, floor, or label whose occupancy sensors
-        govern occupancy - aggregates every matching sensor automatically
-        (using Home Assistant's built-in Occupancy triggers/conditions),
-        so you don't have to name one specific entity, and sensors added
-        to the area/device later count for free. Without one, it only
-        reacts to the Adaptive Lighting Sensor and Additional Triggers.
-        Only binary_sensor entities with device_class "occupancy" are
-        counted - motion-class sensors aren't picked up.
+        Entity, device, area, floor, or label - lights within it are
+        controlled, occupancy-class sensors within it decide when. Leave
+        blank to control nothing. Details:
+        [docs](https://github.com/danrspencer/adaptive_lighting/blob/main/docs/BLUEPRINT.md#one-target-two-jobs).
       default: {}
       selector:
         target:
           entity:
-            domain: binary_sensor
-            device_class: occupancy
-    light_target:
-      name: Light
-      description: Light entities, devices, or an area to control. Leave blank to control nothing.
-      default: null
-      selector:
-        target:
-          entity:
-            domain: light
+            - domain: light
+            - domain: binary_sensor
+              device_class: occupancy
     extra_triggers:
       name: Additional Triggers (Optional)
       description: >
-        Extra entities that should cause an immediate re-evaluation - e.g.
-        a TV entity for a Brightness Multiplier Template that dims this
-        room when it's on, or whatever a Scene Template depends on.
-        Everything is re-rendered fresh on every run regardless of what
-        triggered it, so adding an entity here is all that's needed for
-        it to take effect immediately instead of waiting for the next
-        adaptive tick.
+        Entities that trigger an immediate re-evaluation, e.g. a
+        dependency of Scene Template or Brightness Multiplier Template.
+        [Details](https://github.com/danrspencer/adaptive_lighting/blob/main/docs/BLUEPRINT.md#additional-triggers).
       default: []
       selector:
         entity:
@@ -73,41 +42,27 @@ blueprint:
     scene_template:
       name: Scene Template (Optional)
       description: >
-        Template returning the entity_id of a scene to activate instead
-        of the adaptive brightness/colour (e.g. based on a day-phase
-        sensor's state). Only used if that scene exists and covers just
-        entities within this automation's scope (lights being
-        controlled, plus any other entities on the same devices/area -
-        e.g. a lightstrip's gradient-effect selector); otherwise treated
-        as if no scene were returned. Leave blank, or have the template
-        return nothing, to skip scenes entirely.
+        Template returning a scene entity_id to hand the room over to
+        instead of the adaptive brightness/colour.
+        [Details](https://github.com/danrspencer/adaptive_lighting/blob/main/docs/BLUEPRINT.md#scene-handoff).
       default: ""
       selector:
         template: {}
     brightness_multiplier_template:
       name: Brightness Multiplier Template (Optional)
       description: >
-        Template returning a dict of entity_id to brightness multiplier,
-        applied only during adaptive lighting (not to scene-covered lights).
-        0 turns a light off; other numbers scale its brightness, floored to
-        a minimum of 1. null (or false) skips the light entirely during
-        power-on — no command is sent at all, letting something else (e.g.
-        a dedicated automation) own it — but it is still included when this
-        automation turns lights off, since this automation remains the
-        source of truth for that. Lights not listed use full adaptive
-        brightness.
+        Template returning entity_id → brightness multiplier (0 = off,
+        null = skip entirely).
+        [Details](https://github.com/danrspencer/adaptive_lighting/blob/main/docs/BLUEPRINT.md#per-light-brightness-scaling).
       default: "{{ {} }}"
       selector:
         template: {}
     prefer_rgb_color:
       name: Prefer RGB Color (Optional)
       description: >
-        For lights that support it (auto-detected), send the Adaptive
-        Lighting Sensor's rgb_color attribute instead of colour
-        temperature - some RGB bulbs render colour more accurately in
-        RGB mode than colour-temperature mode. Lights without RGB
-        support, or if the sensor has no rgb_color attribute, are
-        unaffected either way.
+        Send RGB colour instead of colour temperature to lights that
+        support it (auto-detected).
+        [Details](https://github.com/danrspencer/adaptive_lighting/blob/main/docs/BLUEPRINT.md#rgb-colour).
       default: false
       selector:
         boolean: {}
@@ -123,11 +78,8 @@ blueprint:
     reconcile_interval:
       name: Reconcile Interval (Optional)
       description: >
-        How often to check for lights left on with no occupancy and retry
-        turning them off — a safety net for commands that don't land (e.g.
-        a dropped Zigbee message). time_pattern syntax, e.g. '/5' for every
-        5 minutes. Only relevant when an Occupancy Sensor is set; ignored
-        otherwise.
+        How often to retry turning off lights left on with no occupancy.
+        time_pattern syntax, e.g. '/5' for every 5 minutes.
       default: "/5"
       selector:
         text: {}
@@ -166,8 +118,7 @@ max_exceeded: silent
 # unlike the variables: block below which isn't computed until after a
 # trigger has fired.
 trigger_variables:
-  occupancy_target: !input occupancy_target
-  light_target: !input light_target
+  room_target: !input room_target
 
 trigger:
   # The live brightness/colour-temperature sensor; fires roughly once a
@@ -183,25 +134,24 @@ trigger:
   - id: extra
     platform: state
     entity_id: !input extra_triggers
-  # Occupancy Sensor (entity/device/area/floor/label) just reported
-  # occupied - aggregates every matching occupancy sensor automatically
-  # via Home Assistant's built-in Occupancy triggers. Disabled entirely
-  # (rather than left to match nothing) when Occupancy Sensor is unset -
-  # target is a required field for this trigger type, and an empty
-  # target dict still passes that schema, but there'd be nothing for it
-  # to ever usefully attach to.
+  # Room's occupancy-class sensors (entity/device/area/floor/label)
+  # just reported occupied - aggregates every matching occupancy sensor
+  # automatically via Home Assistant's built-in Occupancy triggers. Left
+  # unconditionally attached rather than disabled when Room has no
+  # occupancy sensor in it - target is a required field for this trigger
+  # type, but a target matching zero entities is a harmless no-op (see
+  # CLAUDE.md for why this couldn't just be gated the way the old
+  # separate Occupancy Sensor input was).
   - id: motion_on
     trigger: occupancy.detected
-    target: !input occupancy_target
-    enabled: "{{ occupancy_target | length > 0 }}"
-  # Occupancy Sensor has been continuously clear for no_motion_wait
+    target: !input room_target
+  # Room's occupancy-class sensors have been continuously clear for no_motion_wait
   - id: motion_off
     trigger: occupancy.cleared
-    target: !input occupancy_target
+    target: !input room_target
     options:
       for:
         seconds: !input no_motion_wait
-    enabled: "{{ occupancy_target | length > 0 }}"
   # Periodic safety net - see the `reconcile` branch in action: below
   - id: reconcile
     platform: time_pattern
@@ -220,19 +170,19 @@ trigger:
         back after a power/Zigbee outage) leave it null.
       #}
       {% set ns = namespace(entities=[]) %}
-      {% if light_target is not none %}
-        {% if light_target.entity_id is defined %}
-          {% set eids = light_target.entity_id if light_target.entity_id is iterable and light_target.entity_id is not string else [light_target.entity_id] %}
-          {% set ns.entities = ns.entities + eids %}
+      {% if room_target is not none %}
+        {% if room_target.entity_id is defined %}
+          {% set eids = room_target.entity_id if room_target.entity_id is iterable and room_target.entity_id is not string else [room_target.entity_id] %}
+          {% set ns.entities = ns.entities + (eids | select('match', '^light\.') | list) %}
         {% endif %}
-        {% if light_target.device_id is defined %}
-          {% set dids = light_target.device_id if light_target.device_id is iterable and light_target.device_id is not string else [light_target.device_id] %}
+        {% if room_target.device_id is defined %}
+          {% set dids = room_target.device_id if room_target.device_id is iterable and room_target.device_id is not string else [room_target.device_id] %}
           {% for d in dids %}
             {% set ns.entities = ns.entities + (device_entities(d) | select('match', '^light\.') | list) %}
           {% endfor %}
         {% endif %}
-        {% if light_target.area_id is defined %}
-          {% set aids = light_target.area_id if light_target.area_id is iterable and light_target.area_id is not string else [light_target.area_id] %}
+        {% if room_target.area_id is defined %}
+          {% set aids = room_target.area_id if room_target.area_id is iterable and room_target.area_id is not string else [room_target.area_id] %}
           {% for a in aids %}
             {% set ns.entities = ns.entities + (area_entities(a) | select('match', '^light\.') | list) %}
           {% endfor %}
@@ -279,21 +229,27 @@ condition:
               - extra
           - condition: or
             conditions:
-              # Occupancy Sensor configured - trust Home Assistant's own
-              # aggregated occupancy check directly, same precedence as
-              # the trigger block above
+              # Room has an occupancy sensor in it - trust Home
+              # Assistant's own aggregated occupancy check directly,
+              # same precedence as the trigger block above. Gated on
+              # room_occupancy_entities (see variables: below), not on
+              # room_target itself, since room_target is basically
+              # always set (it's what's being lit) - occupancy.is_detected
+              # against a target with zero occupancy-class entities
+              # would otherwise always evaluate false and silently break
+              # the light-only-room fallback below.
               - condition: and
                 conditions:
                   - condition: template
-                    value_template: "{{ occupancy_target | length > 0 }}"
+                    value_template: "{{ room_occupancy_entities | length > 0 }}"
                   - condition: occupancy.is_detected
-                    target: !input occupancy_target
-              # No Occupancy Sensor - fall back to the light-based
-              # occupied variable (see variables: below)
+                    target: !input room_target
+              # No occupancy sensor in Room - fall back to the
+              # light-based occupied variable (see variables: below)
               - condition: and
                 conditions:
                   - condition: template
-                    value_template: "{{ occupancy_target | length == 0 }}"
+                    value_template: "{{ room_occupancy_entities | length == 0 }}"
                   - condition: template
                     value_template: "{{ occupied }}"
           - condition: or
@@ -313,7 +269,7 @@ condition:
             value_template: "{{ resolved_entities | map('states') | select('ne', 'on') | list | count > 0 }}"
 
 variables:
-  light_target: !input light_target
+  room_target: !input room_target
   adaptive_sensor: !input adaptive_sensor
   scene_template: !input scene_template
   adaptive_transition: !input adaptive_transition
@@ -335,22 +291,24 @@ variables:
   # passthrough, were removed here too - dead code: scene.apply's real
   # service schema only accepts entities/transition, not a scene_id
   # field, so that call never actually did anything.)
-  # Every light this automation is allowed to touch, resolved from light_target
+  # Every light this automation is allowed to touch, resolved from
+  # room_target - filtered to ^light\. on every branch, since room_target
+  # can also directly name occupancy-class sensor entities now
   resolved_entities: >
     {% set ns = namespace(entities=[]) %}
-    {% if light_target is not none %}
-      {% if light_target.entity_id is defined %}
-        {% set eids = light_target.entity_id if light_target.entity_id is iterable and light_target.entity_id is not string else [light_target.entity_id] %}
-        {% set ns.entities = ns.entities + eids %}
+    {% if room_target is not none %}
+      {% if room_target.entity_id is defined %}
+        {% set eids = room_target.entity_id if room_target.entity_id is iterable and room_target.entity_id is not string else [room_target.entity_id] %}
+        {% set ns.entities = ns.entities + (eids | select('match', '^light\.') | list) %}
       {% endif %}
-      {% if light_target.device_id is defined %}
-        {% set dids = light_target.device_id if light_target.device_id is iterable and light_target.device_id is not string else [light_target.device_id] %}
+      {% if room_target.device_id is defined %}
+        {% set dids = room_target.device_id if room_target.device_id is iterable and room_target.device_id is not string else [room_target.device_id] %}
         {% for d in dids %}
           {% set ns.entities = ns.entities + (device_entities(d) | select('match', '^light\.') | list) %}
         {% endfor %}
       {% endif %}
-      {% if light_target.area_id is defined %}
-        {% set aids = light_target.area_id if light_target.area_id is iterable and light_target.area_id is not string else [light_target.area_id] %}
+      {% if room_target.area_id is defined %}
+        {% set aids = room_target.area_id if room_target.area_id is iterable and room_target.area_id is not string else [room_target.area_id] %}
         {% for a in aids %}
           {% set ns.entities = ns.entities + (area_entities(a) | select('match', '^light\.') | list) %}
         {% endfor %}
@@ -360,10 +318,38 @@ variables:
   # Entities HA already knows it can't reach right now - no point commanding them
   reachable_entities: >
     {{ resolved_entities | reject('is_state', 'unavailable') | reject('is_state', 'unknown') | list }}
+  # room_target's occupancy-class binary_sensor entities (entity/device/
+  # area only - floor/label aren't resolvable through this hand-rolled
+  # Jinja the way they are through the native occupancy.* trigger/
+  # condition, a pre-existing gap this shares with resolved_entities
+  # above). Only used to decide *whether* Room has an occupancy sensor
+  # at all, for the condition:/reconcile branches below - occupancy.is_detected
+  # itself still does the real detection natively.
+  room_occupancy_entities: >
+    {% set ns = namespace(entities=[]) %}
+    {% if room_target is not none %}
+      {% if room_target.entity_id is defined %}
+        {% set eids = room_target.entity_id if room_target.entity_id is iterable and room_target.entity_id is not string else [room_target.entity_id] %}
+        {% set ns.entities = ns.entities + (eids | select('match', '^binary_sensor\.') | list) %}
+      {% endif %}
+      {% if room_target.device_id is defined %}
+        {% set dids = room_target.device_id if room_target.device_id is iterable and room_target.device_id is not string else [room_target.device_id] %}
+        {% for d in dids %}
+          {% set ns.entities = ns.entities + (device_entities(d) | select('match', '^binary_sensor\.') | list) %}
+        {% endfor %}
+      {% endif %}
+      {% if room_target.area_id is defined %}
+        {% set aids = room_target.area_id if room_target.area_id is iterable and room_target.area_id is not string else [room_target.area_id] %}
+        {% for a in aids %}
+          {% set ns.entities = ns.entities + (area_entities(a) | select('match', '^binary_sensor\.') | list) %}
+        {% endfor %}
+      {% endif %}
+    {% endif %}
+    {{ ns.entities | select('is_state_attr', 'device_class', 'occupancy') | unique | list }}
   occupied: >
     {#
-      Is the room "in use" right now, for the no-Occupancy-Sensor case
-      only (see condition: above for the Occupancy Sensor branch, which
+      Is the room "in use" right now, for the no-occupancy-sensor case
+      only (see condition: above for the occupancy-sensor branch, which
       doesn't route through this variable - occupancy.is_detected is a
       native condition type, not something a template can call).
       Without a sensor, the only signal available is whether we've
@@ -376,25 +362,28 @@ variables:
   entities_still_on: "{{ resolved_entities | select('is_state', 'on') | list }}"
   # Same as resolved_entities, but widened to every entity on each light's
   # device (not just the light itself) - lets scene-compatibility checking
-  # below account for sibling entities, e.g. a light strip's effect selector
+  # below account for sibling entities, e.g. a light strip's effect selector.
+  # entity_id branch filters to ^light\. before widening, same reason as
+  # resolved_entities above - otherwise a directly-picked occupancy sensor's
+  # own device siblings would incorrectly widen into scope too.
   scope_entities: >
     {% set ns = namespace(entities=[]) %}
-    {% if light_target is not none %}
-      {% if light_target.entity_id is defined %}
-        {% set eids = light_target.entity_id if light_target.entity_id is iterable and light_target.entity_id is not string else [light_target.entity_id] %}
-        {% for e in eids %}
+    {% if room_target is not none %}
+      {% if room_target.entity_id is defined %}
+        {% set eids = room_target.entity_id if room_target.entity_id is iterable and room_target.entity_id is not string else [room_target.entity_id] %}
+        {% for e in (eids | select('match', '^light\.') | list) %}
           {% set did = device_id(e) %}
           {% set ns.entities = ns.entities + (device_entities(did) if did else [e]) %}
         {% endfor %}
       {% endif %}
-      {% if light_target.device_id is defined %}
-        {% set dids = light_target.device_id if light_target.device_id is iterable and light_target.device_id is not string else [light_target.device_id] %}
+      {% if room_target.device_id is defined %}
+        {% set dids = room_target.device_id if room_target.device_id is iterable and room_target.device_id is not string else [room_target.device_id] %}
         {% for d in dids %}
           {% set ns.entities = ns.entities + device_entities(d) %}
         {% endfor %}
       {% endif %}
-      {% if light_target.area_id is defined %}
-        {% set aids = light_target.area_id if light_target.area_id is iterable and light_target.area_id is not string else [light_target.area_id] %}
+      {% if room_target.area_id is defined %}
+        {% set aids = room_target.area_id if room_target.area_id is iterable and room_target.area_id is not string else [room_target.area_id] %}
         {% for a in aids %}
           {% set ns.entities = ns.entities + area_entities(a) %}
         {% endfor %}
@@ -446,16 +435,17 @@ action:
             id: reconcile
         sequence:
           - if:
-              # No Occupancy Sensor means no independent "not occupied"
-              # signal at all (see the occupied variable's docstring) -
-              # so there's nothing to reconcile against and this never
-              # fires, matching Reconcile Interval's own description.
+              # No occupancy sensor in Room means no independent "not
+              # occupied" signal at all (see the occupied variable's
+              # docstring) - so there's nothing to reconcile against and
+              # this never fires, matching Reconcile Interval's own
+              # description.
               - condition: template
-                value_template: "{{ occupancy_target | length > 0 }}"
+                value_template: "{{ room_occupancy_entities | length > 0 }}"
               - condition: not
                 conditions:
                   - condition: occupancy.is_detected
-                    target: !input occupancy_target
+                    target: !input room_target
               - condition: template
                 value_template: "{{ entities_still_on | length > 0 }}"
             then:

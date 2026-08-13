@@ -17,16 +17,31 @@ The [dashboard curve card](../README.md#previewing-the-dashboard-card) also plot
 (from `sun.sun`) against the schedule, so it's easy to see at a glance how far the configured boundaries and
 Evening's earliest/latest clamp are actually tracking the sun.
 
+## One target, two jobs
+
+The Room input is a single entity/device/area/floor/label target that does double duty: the light entities within
+it are what gets controlled, and any occupancy-class `binary_sensor` entities within it govern occupancy — no
+separate sensor input to fill in. Pointing Room at a room's area picks up every light *and* every occupancy sensor
+in that area automatically, including ones added later; picking specific entities instead lets you mix and match
+(e.g. your lights plus one specific sensor from elsewhere, or a "virtual occupancy" template sensor — see below).
+
+Occupancy detection uses Home Assistant's built-in Occupancy triggers/conditions, which only count `binary_sensor`
+entities with `device_class: occupancy` — motion-class sensors aren't picked up this way, so a room with only
+motion sensors won't have anything to trigger on here (Additional Triggers can still cover that case manually).
+Area/device selections only resolve *light* entities via entity/device/area (not floor/label) — a floor or label
+selection works for occupancy but won't control any lights, so pick specific entities directly if you need one of
+those to also light a room.
+
 ## Occupancy-driven on/off
 
-Turns a room on when occupancy is detected and off `no_motion_wait` seconds after it clears. The Occupancy Sensor
-input is optional — without one, the blueprint still keeps already-on lights updated with the adaptive curve, it
-just won't turn anything on by itself. It's an entity/device/area/floor/label target, not a single sensor: it uses
-Home Assistant's built-in Occupancy triggers/conditions to aggregate every occupancy-class `binary_sensor` within
-that target automatically, so pointing it at a room's area covers every occupancy sensor in that area, including
-ones added later. Only `binary_sensor` entities with `device_class: occupancy` are counted — motion-class sensors
-aren't picked up by Home Assistant's own aggregation, so a room with only motion sensors won't have anything to
-target here (Additional Triggers can still cover that case manually).
+Turns a room on when occupancy is detected and off `no_motion_wait` seconds after it clears. Occupancy is entirely
+optional — a Room with no occupancy-class sensor in it still keeps already-on lights updated with the adaptive
+curve, it just won't turn anything on by itself.
+
+A room with no real occupancy sensor at all (or one you want to override manually — e.g. a nightlight mode) can
+use a template `binary_sensor` with `device_class: occupancy` as a stand-in - Home Assistant's occupancy machinery
+can't tell it apart from a real sensor. Pick it directly as an entity in Room (rather than relying on area
+membership) so it's a deliberate addition, not something automatically swept in.
 
 ## Manual override detection
 
@@ -95,8 +110,7 @@ Add an automation using the "Adaptive Lighting" blueprint per room, and set:
 | Input | Required | Description |
 |---|---|---|
 | Adaptive Lighting Sensor | yes | Sensor providing brightness/colour temperature |
-| Occupancy Sensor | no | Entity/device/area/floor/label whose occupancy sensors enable occupancy-driven on/off |
-| Light | yes | Entities, a device, or an area to control |
+| Room | no | Entity/device/area/floor/label - lights within it are controlled, occupancy sensors within it govern on/off (see [One target, two jobs](#one-target-two-jobs)) |
 | Additional Triggers | no | Entities that trigger immediate re-evaluation (see [Additional triggers](#additional-triggers)) |
 | Scene Template | no | Template returning a scene entity_id to hand the room over to |
 | Brightness Multiplier Template | no | Per-light brightness scaling |
