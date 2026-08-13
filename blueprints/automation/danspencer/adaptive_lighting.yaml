@@ -416,10 +416,29 @@ variables:
 
 action:
   - choose:
-      # Motion timed out: turn everything reachable off
+      # Motion timed out: turn everything reachable off - but only if
+      # Room's occupancy is actually clear in aggregate right now.
+      # occupancy.cleared fires per-entity, not per-target: with two
+      # occupancy-class sensors in Room (e.g. a real motion sensor plus
+      # a nightlight override sensor), this trigger fires the instant
+      # EITHER one goes from on to off, even while the other is still
+      # reporting occupied. Without this re-check, the real motion
+      # sensor clearing overnight was turning lights off outright even
+      # though the nightlight override sensor was still "on" the whole
+      # time - confirmed live via automation.bedroom_hall_lights'
+      # trace history, not just suspected. If occupancy.is_detected is
+      # still true here (another sensor's still on), this branch's
+      # conditions fail and default: below re-applies adaptive lighting
+      # instead - a harmless, idempotent no-op if the light's already
+      # at the right target (see grouping.py's tolerance check), or a
+      # correct resync if it wasn't.
       - conditions:
           - condition: trigger
             id: motion_off
+          - condition: not
+            conditions:
+              - condition: occupancy.is_detected
+                target: !input room_target
         sequence:
           - alias: "Turn off the light(s)"
             action: light.turn_off
