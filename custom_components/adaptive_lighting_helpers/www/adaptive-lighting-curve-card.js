@@ -320,12 +320,20 @@ class AdaptiveLightingCurveCard extends HTMLElement {
         .join('');
     }
 
-    const hourTicks = [];
+    // Rendered as real HTML text, not SVG <text>, deliberately - the
+    // chart's viewBox is stretched to the card's actual width via
+    // preserveAspectRatio="none" (a non-uniform scale, since only x
+    // stretches - the SVG's height is pinned to a fixed 220px), and SVG
+    // text glyphs get stretched/squished by that same transform along
+    // with everything else, unlike real HTML text which always renders
+    // at native scale. left:% positions each label proportionally
+    // within the chart-wrap div, which is exactly as wide as the SVG
+    // regardless of actual pixels, so this still lines up with xOf(t).
+    const hourLabels = [];
     for (let h = 0; h <= 24; h += 3) {
       const t = dayStart + h * 3600;
-      hourTicks.push(
-        `<text x="${xOf(t).toFixed(1)}" y="${VB_H - 6}" class="axis-label" text-anchor="middle">${String(h).padStart(2, '0')}:00</text>`
-      );
+      const leftPct = ((xOf(t) / VB_W) * 100).toFixed(2);
+      hourLabels.push(`<span class="axis-label" style="left:${leftPct}%">${String(h).padStart(2, '0')}:00</span>`);
     }
 
     // Shaded band + edge lines showing where Evening is allowed to land
@@ -393,15 +401,17 @@ class AdaptiveLightingCurveCard extends HTMLElement {
     }
 
     const svg = `
-      <svg viewBox="0 0 ${VB_W} ${VB_H}" preserveAspectRatio="none" class="chart">
-        ${bars}
-        ${clampBand}
-        ${boundaryLines}
-        ${hourTicks.join('')}
-        ${sunMarkers}
-        ${nowMarker}
-        <line x1="${PAD_L}" y1="${BASELINE_Y}" x2="${VB_W - PAD_R}" y2="${BASELINE_Y}" class="axis-line" />
-      </svg>
+      <div class="chart-wrap">
+        <svg viewBox="0 0 ${VB_W} ${VB_H}" preserveAspectRatio="none" class="chart">
+          ${bars}
+          ${clampBand}
+          ${boundaryLines}
+          ${sunMarkers}
+          ${nowMarker}
+          <line x1="${PAD_L}" y1="${BASELINE_Y}" x2="${VB_W - PAD_R}" y2="${BASELINE_Y}" class="axis-line" />
+        </svg>
+        ${hourLabels.join('')}
+      </div>
     `;
 
     const nowLabel = haveNow
@@ -421,9 +431,17 @@ class AdaptiveLightingCurveCard extends HTMLElement {
           color: var(--secondary-text-color);
           margin-bottom: 2px;
         }
+        .chart-wrap { position: relative; }
         .chart { width: 100%; height: 220px; display: block; }
         .axis-line { stroke: var(--divider-color, #888); stroke-width: 1; }
-        .axis-label { fill: var(--secondary-text-color); font-size: 11px; }
+        .axis-label {
+          position: absolute;
+          bottom: 6px;
+          transform: translateX(-50%);
+          color: var(--secondary-text-color);
+          font-size: 11px;
+          white-space: nowrap;
+        }
         .clamp-band { fill: var(--secondary-text-color); opacity: 0.18; }
         .clamp-edge {
           stroke: var(--secondary-text-color);
@@ -505,7 +523,7 @@ class AdaptiveLightingCurveCard extends HTMLElement {
       this._tooltipEl.style.display = 'block';
       this._tooltipEl.style.left = `${clamp((clientX - rect.left), 0, rect.width - 170)}px`;
       this._tooltipEl.style.top = '4px';
-      this._tooltipEl.innerHTML = `<b>${phase} · ${fmtTime(s.t)}</b><br>${sunState ? `${sunState} &nbsp; ` : ''}${s.brightness} bri &nbsp; ${s.kelvin}K ${swatch}`;
+      this._tooltipEl.innerHTML = `<b>${phase} · ${fmtTime(s.t)}${sunState ? ` · ${sunState}` : ''}</b><br>${s.brightness} bri &nbsp; ${s.kelvin}K ${swatch}`;
     };
     const onLeave = () => {
       this._tooltipEl.style.display = 'none';
