@@ -517,6 +517,22 @@ designs were explored:
   evaluated once at startup and never again; also would have bypassed
   occupancy gating had it ever fired, since `condition:` didn't list it
   in the occupied-gated branch) has been removed.
+- **`occupancy.cleared` fires per-entity, not per-target** - with more
+  than one occupancy-class sensor in `room_target` (the nightlight-
+  override pattern described below, real motion sensor + override
+  sensor both placed directly in the target), this trigger fires the
+  instant *either* one goes from on to off, even while the other is
+  still reporting occupied. The `motion_off` action branch used to act
+  on that trigger unconditionally - confirmed live via
+  `automation.bedroom_hall_lights`'s trace history (not just suspected):
+  its nightlight override sensor stayed `on` continuously all night
+  (Night phase active), yet the lights still turned off the moment the
+  real motion sensor's own off-transition fired. Fixed by adding a
+  `not occupancy.is_detected` re-check (the same aggregate check the
+  `reconcile` branch already did) to the `motion_off` branch itself -
+  if another sensor's still on, that branch's conditions fail and
+  `default:` re-applies adaptive lighting instead, which is a harmless
+  no-op if the light's already correct.
 
 **Deployment / operational notes:**
 - pyscript is fully gone, both from this repo and the live host.
