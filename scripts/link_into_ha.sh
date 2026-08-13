@@ -1,6 +1,6 @@
 #!/bin/sh
-# Copies/symlinks this repo's blueprint/integration/dashboard files
-# into a Home Assistant config directory. Run this ON THE HA HOST
+# Copies this repo's blueprint/integration/dashboard files into a
+# Home Assistant config directory. Run this ON THE HA HOST
 # ITSELF (e.g. from the Advanced SSH & Web Terminal add-on) - a
 # symlink created from another machine over a network share points at
 # a path meaningful to that machine, not to Home Assistant. See
@@ -20,9 +20,14 @@
 # actually reads it back. Copying sidesteps the whole class of problem
 # instead of trying to get the path right. See CLAUDE.md lesson 7.
 #
-# The dashboard card is still SYMLINKED - untested so far, but if it
-# turns out to have the same problem (a stale/missing card in the
-# Lovelace resource that doesn't update), switch it to `copy` too.
+# The dashboard card is COPIED too, not symlinked - it hit exactly the
+# problem this comment used to warn was untested: the live host's card
+# was frozen at a pre-multi-sensor-rework snapshot (months of unrelated
+# card changes never reached it) while every other deployment path in
+# this repo (HACS for the integration, ha_import_blueprint for the
+# blueprint) kept the rest of the install current. Confirmed live via
+# ha_read_file before concluding it wasn't just a browser cache issue -
+# the served bytes themselves were stale.
 #
 # A NEW custom_components/adaptive_lighting_helpers install needs a
 # full HA restart to be discovered at all, then adding once through
@@ -62,44 +67,6 @@ for arg in "$@"; do
 done
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-
-link() {
-  src="$REPO_DIR/$1"
-  dest="$CONFIG_DIR/$2"
-
-  if [ ! -e "$src" ]; then
-    echo "SKIP    $2 (source $src does not exist)"
-    return
-  fi
-
-  if [ -L "$dest" ]; then
-    current_target="$(readlink "$dest")"
-    if [ "$current_target" = "$src" ]; then
-      echo "OK      $2 (already linked)"
-      return
-    fi
-    echo "RELINK  $2 (was -> $current_target)"
-    if [ "$DRY_RUN" = 0 ]; then
-      rm "$dest"
-      ln -s "$src" "$dest"
-    fi
-    return
-  fi
-
-  if [ -e "$dest" ]; then
-    backup="$dest.bak-$(date +%Y%m%d-%H%M%S)"
-    echo "BACKUP  $2 -> $(basename "$backup")"
-    if [ "$DRY_RUN" = 0 ]; then
-      mv "$dest" "$backup"
-    fi
-  fi
-
-  echo "LINK    $2"
-  if [ "$DRY_RUN" = 0 ]; then
-    mkdir -p "$(dirname "$dest")"
-    ln -s "$src" "$dest"
-  fi
-}
 
 copy() {
   src="$REPO_DIR/$1"
@@ -147,7 +114,7 @@ echo
 copy "blueprints/automation/danspencer/adaptive_lighting.yaml" \
      "blueprints/automation/danspencer/adaptive_lighting.yaml"
 copy "custom_components/adaptive_lighting_helpers" "custom_components/adaptive_lighting_helpers"
-link "www/adaptive-lighting-curve-card.js" "www/adaptive-lighting-curve-card.js"
+copy "www/adaptive-lighting-curve-card.js" "www/adaptive-lighting-curve-card.js"
 
 echo
 echo "Done. Restart Home Assistant to pick up the integration (new custom_components"
