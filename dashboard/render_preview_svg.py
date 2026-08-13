@@ -24,16 +24,15 @@ VB_W = 960
 VB_H = 220
 PAD_L = 34
 PAD_R = 12
-PAD_TOP = 34
+PAD_TOP = 24
 PAD_BOTTOM = 26
 CHART_W = VB_W - PAD_L - PAD_R
 CHART_H = VB_H - PAD_TOP - PAD_BOTTOM
 BASELINE_Y = VB_H - PAD_BOTTOM
-# Evening's range bracket sits between the phase-name labels (near the
-# very top) and PAD_TOP, where the rest of the chart's markers start -
-# matches www/adaptive-lighting-curve-card.js exactly.
-BRACKET_Y = 26
-BRACKET_TICK = 4
+# Evening's earliest/latest range ticks hang down from the x-axis, the
+# same direction a normal axis tick would - matches
+# www/adaptive-lighting-curve-card.js exactly.
+RANGE_TICK = 6
 LABEL_Y = 13
 
 TITLE_H = 40
@@ -88,50 +87,51 @@ def main():
             f'<text x="{x_of(t):.1f}" y="{VB_H - 6}" class="axis-label" text-anchor="middle">{h:02d}:00</text>'
         )
 
-    # Evening's boundary is a *range* (clamped between earliest/latest,
-    # tracking sunset in between), not a single instant like the other
-    # three phases - shown as a dimension-line bracket (two end ticks +
-    # a connecting line) rather than a filled overlay, so it doesn't
-    # read as a colour effect layered on the bars beneath it. Falls
-    # back to a plain point (no bracket) if earliest/latest aren't set -
-    # matches www/adaptive-lighting-curve-card.js exactly.
-    evening_earliest = boundaries.get("evening_earliest")
-    evening_latest = boundaries.get("evening_latest")
-    evening_bracket = ""
-    if evening_earliest is not None and evening_latest is not None:
-        x_earliest = x_of(evening_earliest)
-        x_latest = x_of(evening_latest)
-        x_lo, x_hi = sorted((x_earliest, x_latest))
-        evening_bracket = (
-            f'<line x1="{x_lo:.1f}" y1="{BRACKET_Y - BRACKET_TICK}" x2="{x_lo:.1f}" y2="{BRACKET_Y + BRACKET_TICK}" class="evening-bracket" />'
-            f'<line x1="{x_hi:.1f}" y1="{BRACKET_Y - BRACKET_TICK}" x2="{x_hi:.1f}" y2="{BRACKET_Y + BRACKET_TICK}" class="evening-bracket" />'
-            f'<line x1="{x_lo:.1f}" y1="{BRACKET_Y}" x2="{x_hi:.1f}" y2="{BRACKET_Y}" class="evening-bracket" />'
-        )
-        evening_label_x = (x_lo + x_hi) / 2
-    else:
-        evening_label_x = x_of(boundaries["evening"])
-
-    # Phase name labels - name-only (no time), all centred on their
-    # marker, matching the live card exactly.
-    boundary_defs = [
-        ("Morning", boundaries["morning"]),
-        ("Day", boundaries["day"]),
-        ("Night", boundaries["night"]),
-    ]
+    # Phase name labels - name-only (no time), all centred on their own
+    # boundary line, Evening included - matches the live card exactly.
     # Rendered after sun_markers in the svg template below (not right
     # here where it's built) - Evening commonly starts at exactly
     # sunset, so the two lines are often pixel-coincident; drawing this
     # dashed line on top lets the sun-line's solid orange show through
     # its gaps instead of one flat-out hiding the other. Matches
     # www/adaptive-lighting-curve-card.js exactly.
-    evening_x = x_of(boundaries["evening"])
-    boundary_lines = [f'<line x1="{evening_x:.1f}" y1="{PAD_TOP}" x2="{evening_x:.1f}" y2="{BASELINE_Y}" class="boundary-line" />']
-    top_labels = [f'<text x="{evening_label_x:.1f}" y="{LABEL_Y}" class="boundary-label" text-anchor="middle">Evening</text>']
+    boundary_defs = [
+        ("Morning", boundaries["morning"]),
+        ("Day", boundaries["day"]),
+        ("Evening", boundaries["evening"]),
+        ("Night", boundaries["night"]),
+    ]
+    boundary_lines = []
+    top_labels = []
     for label, t in boundary_defs:
         x = x_of(t)
         boundary_lines.append(f'<line x1="{x:.1f}" y1="{PAD_TOP}" x2="{x:.1f}" y2="{BASELINE_Y}" class="boundary-line" />')
         top_labels.append(f'<text x="{x:.1f}" y="{LABEL_Y}" class="boundary-label" text-anchor="middle">{label}</text>')
     top_labels = "".join(top_labels)
+
+    # Evening's boundary is a *range* (clamped between earliest/latest,
+    # tracking sunset in between), not a single instant like the other
+    # three phases - anchored on the chart as two short ticks hanging off
+    # the x-axis at its earliest/latest bound, the same direction a
+    # normal axis tick would point. No connecting bracket between them -
+    # that read as a shape competing with the line+label convention the
+    # other three phases use, rather than a plain axis annotation like
+    # this. Matches www/adaptive-lighting-curve-card.js exactly. Omitted
+    # entirely (same as Morning/Day/Night, which have no range) if
+    # earliest/latest aren't set.
+    evening_earliest = boundaries.get("evening_earliest")
+    evening_latest = boundaries.get("evening_latest")
+    evening_range = ""
+    if evening_earliest is not None and evening_latest is not None:
+        x_earliest = x_of(evening_earliest)
+        x_latest = x_of(evening_latest)
+        evening_range = (
+            f'<g class="evening-range">'
+            f'<title>Evening window: {fmt_time(evening_earliest)} – {fmt_time(evening_latest)}</title>'
+            f'<line x1="{x_earliest:.1f}" y1="{BASELINE_Y}" x2="{x_earliest:.1f}" y2="{BASELINE_Y + RANGE_TICK}" />'
+            f'<line x1="{x_latest:.1f}" y1="{BASELINE_Y}" x2="{x_latest:.1f}" y2="{BASELINE_Y + RANGE_TICK}" />'
+            f"</g>"
+        )
 
     sunrise_x = x_of(data["sun"]["sunrise"])
     sunset_x = x_of(data["sun"]["sunset"])
@@ -163,7 +163,7 @@ def main():
     .axis-line {{ stroke: #888; stroke-width: 1; }}
     .axis-label {{ fill: #6f6f6f; font-size: 11px; }}
     .boundary-line {{ stroke: #6f6f6f; stroke-width: 1; stroke-dasharray: 3 3; opacity: 0.6; }}
-    .evening-bracket {{ stroke: #6f6f6f; stroke-width: 1; opacity: 0.6; }}
+    .evening-range line {{ stroke: #6f6f6f; stroke-width: 1.5; opacity: 0.7; }}
     .boundary-label {{ fill: #6f6f6f; font-size: 11px; }}
     .now-line {{ stroke: #212121; stroke-width: 1.5; }}
     .now-dot {{ stroke: #ffffff; stroke-width: 1.5; }}
@@ -178,12 +178,12 @@ def main():
   <text x="{CARD_PAD}" y="{TITLE_H + NOW_LABEL_H + 14}" class="sun-label">{sun_label}</text>
   <g transform="translate({CARD_PAD}, {TITLE_H + NOW_LABEL_H + SUN_LABEL_H})">
     {"".join(bars)}
-    {evening_bracket}
     {"".join(hour_ticks)}
     {sun_markers}
     {"".join(boundary_lines)}
     {now_marker}
     <line x1="{PAD_L}" y1="{BASELINE_Y}" x2="{VB_W - PAD_R}" y2="{BASELINE_Y}" class="axis-line" />
+    {evening_range}
     {top_labels}
   </g>
   <text x="{CARD_PAD}" y="{TITLE_H + NOW_LABEL_H + SUN_LABEL_H + VB_H + 18}" class="footnote">Evening starts at {fmt_time(boundaries["evening"])}, following tonight's sunset.</text>

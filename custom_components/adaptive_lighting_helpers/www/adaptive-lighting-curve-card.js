@@ -36,16 +36,14 @@ const VB_W = 960;
 const VB_H = 220;
 const PAD_L = 34;
 const PAD_R = 12;
-const PAD_TOP = 34;
+const PAD_TOP = 24;
 const PAD_BOTTOM = 26;
-// Evening's range bracket (see eveningBracket below) sits between the
-// phase-name labels (near the very top) and PAD_TOP, where the rest of
-// the chart's markers start.
-const BRACKET_Y = 26;
-const BRACKET_TICK = 4;
 const CHART_W = VB_W - PAD_L - PAD_R;
 const CHART_H = VB_H - PAD_TOP - PAD_BOTTOM;
 const BASELINE_Y = VB_H - PAD_BOTTOM;
+// Evening's earliest/latest range ticks (see eveningRange below) hang
+// down from the x-axis, the same direction a normal axis tick would.
+const RANGE_TICK = 6;
 
 function clamp(v, lo, hi) {
   return Math.min(Math.max(v, lo), hi);
@@ -341,53 +339,48 @@ class AdaptiveLightingCurveCard extends HTMLElement {
       hourLabels.push(`<span class="axis-label" style="left:${leftPct}%">${String(h).padStart(2, '0')}:00</span>`);
     }
 
-    // Evening's boundary is a *range* (clamped between earliest/latest,
-    // tracking sunset in between), not a single instant like the other
-    // three phases - shown as a dimension-line bracket (two end ticks
-    // + a connecting line) rather than a filled overlay, so it doesn't
-    // read as a colour effect layered on the bars beneath it the way a
-    // translucent band did. Falls back to a plain point (no bracket,
-    // same as Morning/Day/Night) if earliest/latest aren't configured.
-    let eveningBracket = '';
-    let eveningLabelX;
-    let eveningLabelTitle;
-    if (b.eveningEarliest != null && b.eveningLatest != null) {
-      const xEarliest = xOf(b.eveningEarliest);
-      const xLatest = xOf(b.eveningLatest);
-      const xLo = Math.min(xEarliest, xLatest);
-      const xHi = Math.max(xEarliest, xLatest);
-      eveningBracket = `
-        <line x1="${xLo.toFixed(1)}" y1="${BRACKET_Y - BRACKET_TICK}" x2="${xLo.toFixed(1)}" y2="${BRACKET_Y + BRACKET_TICK}" class="evening-bracket" />
-        <line x1="${xHi.toFixed(1)}" y1="${BRACKET_Y - BRACKET_TICK}" x2="${xHi.toFixed(1)}" y2="${BRACKET_Y + BRACKET_TICK}" class="evening-bracket" />
-        <line x1="${xLo.toFixed(1)}" y1="${BRACKET_Y}" x2="${xHi.toFixed(1)}" y2="${BRACKET_Y}" class="evening-bracket" />
-      `;
-      eveningLabelX = (xLo + xHi) / 2;
-      eveningLabelTitle = `${fmtTime(b.eveningEarliest)} – ${fmtTime(b.eveningLatest)}`;
-    } else {
-      eveningLabelX = xOf(b.evening);
-      eveningLabelTitle = fmtTime(b.evening);
-    }
-
     // Phase name labels - real HTML text for the same squishing reason
     // the hour ticks are (see hourLabels above), and name-only rather
     // than "Morning 06:00" - the exact time is a native hover tooltip
     // (`title`) instead of always-on text, which is what made four of
     // these side by side illegible in a narrow card in the first place.
-    // All four centre on their marker (Evening on its bracket, not its
-    // boundary line, since the bracket is what it's labelling) - kept
-    // uniform rather than anchoring Morning/Night to avoid edge overflow,
-    // since centred reads more clearly as "this label belongs to that line".
+    // All four are treated identically, Evening included - it centres
+    // on its own boundary line just like Morning/Day/Night; the
+    // earliest/latest range it can be clamped between is shown
+    // separately, by eveningRange below, not folded into this label.
     const topLabels = [
-      ['Morning', xOf(b.morning), fmtTime(b.morning)],
-      ['Day', xOf(b.day), fmtTime(b.day)],
-      ['Evening', eveningLabelX, eveningLabelTitle],
-      ['Night', xOf(b.night), fmtTime(b.night)],
+      ['Morning', b.morning],
+      ['Day', b.day],
+      ['Evening', b.evening],
+      ['Night', b.night],
     ]
-      .map(([name, x, title]) => {
-        const leftPct = ((x / VB_W) * 100).toFixed(2);
-        return `<span class="boundary-label" style="left:${leftPct}%" title="${title}">${name}</span>`;
+      .map(([name, t]) => {
+        const leftPct = ((xOf(t) / VB_W) * 100).toFixed(2);
+        return `<span class="boundary-label" style="left:${leftPct}%" title="${fmtTime(t)}">${name}</span>`;
       })
       .join('');
+
+    // Evening's boundary is a *range* (clamped between earliest/latest,
+    // tracking sunset in between), not a single instant like the other
+    // three phases - anchored on the chart as two short ticks hanging
+    // off the x-axis at its earliest/latest bound, the same direction a
+    // normal axis tick would point. No connecting bracket between them -
+    // that read as a shape competing with the line+label convention the
+    // other three phases use, rather than a plain axis annotation like
+    // this. Falls back to nothing (same as Morning/Day/Night, which have
+    // no range to show) if earliest/latest aren't configured.
+    let eveningRange = '';
+    if (b.eveningEarliest != null && b.eveningLatest != null) {
+      const xEarliest = xOf(b.eveningEarliest);
+      const xLatest = xOf(b.eveningLatest);
+      eveningRange = `
+        <g class="evening-range">
+          <title>Evening window: ${fmtTime(b.eveningEarliest)} – ${fmtTime(b.eveningLatest)}</title>
+          <line x1="${xEarliest.toFixed(1)}" y1="${BASELINE_Y}" x2="${xEarliest.toFixed(1)}" y2="${BASELINE_Y + RANGE_TICK}" />
+          <line x1="${xLatest.toFixed(1)}" y1="${BASELINE_Y}" x2="${xLatest.toFixed(1)}" y2="${BASELINE_Y + RANGE_TICK}" />
+        </g>
+      `;
+    }
 
     // Rendered after sunMarkers in the svg template below (not right
     // here where it's built) - Evening commonly starts at exactly
@@ -443,11 +436,11 @@ class AdaptiveLightingCurveCard extends HTMLElement {
       <div class="chart-wrap">
         <svg viewBox="0 0 ${VB_W} ${VB_H}" preserveAspectRatio="none" class="chart">
           ${bars}
-          ${eveningBracket}
           ${sunMarkers}
           ${boundaryLines}
           ${nowMarker}
           <line x1="${PAD_L}" y1="${BASELINE_Y}" x2="${VB_W - PAD_R}" y2="${BASELINE_Y}" class="axis-line" />
+          ${eveningRange}
         </svg>
         ${topLabels}
         ${hourLabels.join('')}
@@ -482,10 +475,10 @@ class AdaptiveLightingCurveCard extends HTMLElement {
           font-size: 11px;
           white-space: nowrap;
         }
-        .evening-bracket {
+        .evening-range line {
           stroke: var(--secondary-text-color);
-          stroke-width: 1;
-          opacity: 0.6;
+          stroke-width: 1.5;
+          opacity: 0.7;
         }
         .boundary-line {
           stroke: var(--secondary-text-color);
