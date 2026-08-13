@@ -458,36 +458,18 @@ designs were explored:
    prerequisite.
 
 **Blueprint** (`blueprints/automation/danspencer/adaptive_lighting.yaml`):
-- **Occupancy Sensor** - an entity/device/area/floor/label `target`
-  selector, added 2026-08-13, replacing the old single-entity Motion
-  Sensor input entirely (not kept alongside it - an initial dual-input
-  design was rejected as unnecessary complexity once it was clear
-  motion-class sensors can't use the mechanism below anyway). Uses HA's
-  native `occupancy` integration (2026.4+) - `occupancy.detected`/
-  `occupancy.cleared` triggers and an `occupancy.is_detected` condition
-  - which aggregates every occupancy-class `binary_sensor` within
-  whatever's targeted, automatically, including sensors added to the
-  area/device later. Confirmed against HA core source before building
-  on it: both the trigger and condition filter strictly by
-  `device_class: occupancy` (motion-class sensors are never picked up,
-  even targeted directly - `filter_by_domain_specs` in
-  `homeassistant/helpers/automation.py` applies the same check
-  regardless of how an entity was reached), and both schemas require
-  `target:` to be present, though every field inside it is individually
-  optional - `occupancy_target` defaults to `{}`, not `null`, because
-  `null` fails that schema outright. `occupancy.is_detected` is a
-  native condition *type*, not a template function, so it's spliced
-  into `condition:`/`action:` as real `condition: occupancy.is_detected`
-  blocks (gated by `{{ occupancy_target | length > 0 }}`) rather than
-  folded into the `occupied` Jinja variable, which now only covers the
-  no-Occupancy-Sensor light-based fallback. A room with only
-  motion-class sensors has no occupancy input to target today -
-  Additional Triggers remains the manual escape hatch. Live-verified
-  (see lesson 12 for a caching gotcha hit while testing): a real
-  occupancy sensor's on→off transition correctly fired the new
-  `occupancy.cleared` trigger and turned lights off, and a natural
-  adaptive-tick condition trace showed `occupancy.is_detected`
-  evaluating correctly against a real area.
+- **`room_target`** - a single entity/device/area/floor/label `target`
+  input doing double duty as both what to light and what governs
+  occupancy (see the dated note below for the full design history and
+  the real correctness gap caught while merging what used to be two
+  separate inputs). Occupancy uses HA's native `occupancy` integration
+  (2026.4+, HA core-confirmed to filter strictly by
+  `device_class: occupancy` - motion-class sensors aren't picked up
+  even targeted directly), aggregating every occupancy-class
+  `binary_sensor` within the target automatically. Live-verified once,
+  before the light+occupancy merge (see lesson 12 for a caching gotcha
+  hit while testing that pass) - **not yet re-verified live since the
+  merge**, see the dated note's open item.
 - `apply_lighting` is the only thing `action:` dispatches for adaptive/
   scene lighting - no inline `light.turn_on`/two-step/RGB branching in
   the blueprint itself.
@@ -532,73 +514,80 @@ designs were explored:
   dismiss by hand if still present; HA doesn't auto-clear a repair just
   because a later run succeeds.
 
-**Motion Sensor replaced entirely by a native-HA Occupancy Sensor
-target, at the user's request** ("newer HA automations let you just
-say, pick a room... can we make that part of our blueprint?"). HA 2026.4
-added a first-class `occupancy` integration - `occupancy.detected`/
-`occupancy.cleared` triggers and an `occupancy.is_detected` condition,
-each taking a `target:` (entity/device/area/floor/label) and aggregating
-every occupancy-class `binary_sensor` within it automatically. Confirmed
-directly against HA core source before building on it (not guessed):
-`homeassistant/components/occupancy/trigger.py`/`condition.py` both
-filter strictly by `device_class: occupancy` (motion-class sensors are
-never picked up, even targeted directly - `filter_by_domain_specs` in
-`homeassistant/helpers/automation.py` applies the same device_class
-check regardless of how an entity was reached), and both trigger/
-condition schemas require `target:` to be present
-(`vol.Required(CONF_TARGET): cv.TARGET_FIELDS` in
-`homeassistant/helpers/trigger.py`) though every field inside it is
-individually optional, so an empty `target: {}` is valid config - it
-just never matches anything. This is why the new `occupancy_target`
-input defaults to `{}`, not `null`: `null` would fail that schema
-outright regardless of whether the trigger is later disabled.
+**Motion Sensor and Light merged into one `room_target` input.** Occupancy
+detection went through two prior shapes first - a single-entity Motion
+Sensor, then a dedicated Occupancy Sensor `target` selector added
+alongside it and immediately simplified down to replace it entirely
+(the user rejected keeping both: "I don't like having both occupancy
+and motion") - before the user's own framing ("at its simplest you'd
+just choose a room") prompted merging that Occupancy Sensor input with
+the separate Light input into one. `room_target` is a single
+entity/device/area/floor/label target that does double duty: light
+entities within it get controlled (`resolved_entities`/`scope_entities`,
+filtered to `^light\.`), and any occupancy-class `binary_sensor` within
+it governs occupancy, via HA's native `occupancy` integration
+(2026.4+) - `occupancy.detected`/`occupancy.cleared` triggers and an
+`occupancy.is_detected` condition, confirmed directly against HA core
+source before building on it: both filter strictly by
+`device_class: occupancy` (motion-class sensors are never picked up,
+even targeted directly - `filter_by_domain_specs` in
+`homeassistant/helpers/automation.py` applies the same check regardless
+of how an entity was reached), and both schemas require `target:` to be
+present (`vol.Required(CONF_TARGET): cv.TARGET_FIELDS`) though every
+field inside it is individually optional, so an empty `target: {}` is
+valid config - it just never matches anything. This is why
+`room_target` defaults to `{}`, not `null`.
 
-First implementation kept the old single-entity Motion Sensor input
-alongside a new Occupancy Sensor target input (Occupancy Sensor taking
-precedence if both were set), reasoning that motion-class sensors would
-otherwise become unusable. The user pushed back immediately ("I don't
-like having both occupancy and motion") - simplicity won over that edge
-case, so Motion Sensor is gone entirely, not deprecated alongside. A
-room with only motion-class sensors has no occupancy input to target
-today (documented in `docs/BLUEPRINT.md`); Additional Triggers remains
-the escape hatch for wiring one in manually. Only the "Living Room
-Lights (New)" automation used this blueprint at the time, so nothing
-else needed migrating.
+Nightlight-style overrides (forcing a room "occupied" regardless of
+real motion, previously the user's own template-sensor workaround)
+don't need a dedicated mechanism - a template `binary_sensor` with
+`device_class: occupancy`, picked directly as an entity in `room_target`
+(not swept in via area membership), already gets full native
+`occupancy.*` support for free, since the trigger/condition machinery
+only looks at entity state, not entity origin. A dedicated boolean-
+override input (its own trigger, its own asymmetric on/off semantics,
+condition/reconcile changes) was considered and explicitly rejected as
+solving a problem this mechanism already covers.
 
-`occupancy.is_detected` is a native condition *type*, not a template
-function - it can't be folded into the existing `occupied` Jinja
-variable the way a motion-entity `is_state()` check could, so it's
-spliced into the `condition:`/`action:` trees as real
-`condition: occupancy.is_detected` blocks (gated by a
-`{{ occupancy_target | length > 0 }}` template check), while `occupied`
-itself shrank to just the light-based "is anything already on" fallback
-for rooms with no Occupancy Sensor configured. Same split for the
-trigger side: `occupancy.detected`/`cleared` triggers replace the old
-`motion_on`/`motion_off` template triggers outright, sharing their
-trigger `id:`s (HA allows multiple trigger definitions to share an id;
-whichever one fires sets `trigger.id`) rather than the rest of the
-blueprint needing to know which mechanism is active.
+**Real correctness gap caught before shipping, not after**: merging the
+inputs removes the free "was occupancy configured at all" signal the
+old separate `occupancy_target | length > 0` check provided (used both
+to disable the occupancy triggers and to pick the condition block's
+fallback branch) - `room_target` is basically always non-empty, since
+it's also what's being lit. The naive fix (always trust
+`occupancy.is_detected` unconditionally) is wrong, not just
+theoretically: `occupancy.is_detected`'s default `any`-across-target
+behaviour is vacuously **false** over a target matching zero entities,
+so a light-only room (no occupancy sensor at all - an explicitly
+supported, common configuration) would permanently fail the condition
+and stop receiving adaptive ticks entirely, a real regression, not a
+hypothetical edge case. Fixed with a new `room_occupancy_entities`
+variable - the same entity/device/area resolution pattern
+`resolved_entities` already uses, filtered to `binary_sensor` +
+`device_class: occupancy` instead of `light` - used purely to decide
+*whether* the room has an occupancy sensor at all (gating the
+condition/reconcile branches), while `occupancy.is_detected` itself
+still does the actual native detection. The occupancy *triggers*
+(`occupancy.detected`/`cleared`) don't need the equivalent gating - a
+trigger with nothing to track is inert, not vacuously wrong, since
+there's no boolean being evaluated over an empty set - so those are
+left unconditionally attached rather than re-adding an `enabled:` guard.
+`resolved_entities`/`scope_entities`/the `manual` trigger's light
+resolution all also gained an explicit `^light\.` filter on their
+`entity_id` branch (previously safe to skip, since the old Light
+input's picker could only ever select light-domain entities in the
+first place - `room_target`'s picker can now also select occupancy
+sensors directly, so a mixed entity_id list needs filtering before
+either purpose consumes it).
 
-Verified live, not just config-checked. Blueprint changes have no
-pytest coverage, so verification meant re-importing into the real
-instance and reading actual automation traces - and along the way,
-`ha_import_blueprint(..., overwrite=true)` reported success while
-silently still serving a stale, previously-cached copy from GitHub's
-raw CDN (a branch-name raw URL can lag behind a very recent push by a
-few minutes); confirmed by reading the file back with `ha_read_file`
-after import rather than trusting the tool's own echoed response, and
-worked around by importing from the exact commit SHA's raw URL instead
-of the branch name, which resolved instantly since GitHub treats a
-SHA-pinned raw URL as immutable and never serves it stale. Repointed
-"Living Room Lights (New)" at `occupancy_target: {area_id: living_room}`
-and got two real traces for free during testing, not staged: a genuine
-`binary_sensor.living_room_sensor_2_occupancy` on→off transition fired
-the new `occupancy.cleared` trigger (`id: motion_off`) and correctly
-turned the lights off, and a natural adaptive-sensor tick's condition
-trace showed `occupancy.is_detected` evaluating `true` against the real
-`living_room` area, correctly gating the tick through to
-`apply_lighting`. `config_check` stayed valid and zero repairs appeared
-throughout.
+Not yet deployed or tested live as of this note - `pytest` (43/43) and
+YAML-structure validation only so far, consistent with this repo's
+usual verify-locally-first pattern. In particular, `occupancy.is_detected`/
+`occupancy.detected`/`.cleared` attaching to a `room_target` that
+resolves zero occupancy-class entities (the common light-only case) is
+assumed harmless (no warnings, no errors) based on how HA's target
+resolution works generally, not yet confirmed against a live instance -
+verify this specifically before trusting it fully.
 
 ## Open question: dashboard card as a HACS plugin?
 
