@@ -84,6 +84,11 @@ custom_components/adaptive_lighting_helpers/
                    the integration's icon (256/512, alpha) - HA reads
                    this directly from the integration's own folder
                    (since HA 2026.3.0), no external submission needed
+    www/adaptive-lighting-curve-card.js
+                   the dashboard card, served and auto-loaded by the
+                   integration itself (see __init__.py's async_setup) -
+                   ships and updates with the integration, no manual
+                   Lovelace resource registration needed
     curve.py, grouping.py, and scenes.py are pure Python, no Home
     Assistant dependency - testable directly, and usable from anywhere
     that wants the math without the HA service/sensor wrapper around
@@ -111,10 +116,6 @@ blueprints/automation/danspencer/adaptive_lighting.yaml
     Unified" blueprint so the two can run side by side while rooms are
     migrated over individually, rather than one replacing the other
     in place.
-
-www/adaptive-lighting-curve-card.js
-    Custom Lovelace card rendering the day's curve as a rendered-colour
-    chart, with a live "now" marker.
 
 dashboard/
     house-settings-card.yaml   card config to add to a view
@@ -146,12 +147,8 @@ Not yet published to the HACS default store. Add this repository as a HACS custo
 menu → Custom repositories → this repo's URL, category "Integration"), install, restart Home Assistant (a brand
 new `custom_components` entry needs a restart to be discovered, not just a reload), then add it once via
 Settings → Devices & Services → Add Integration → "Adaptive Lighting Helpers" — nothing to configure, this just
-registers the services above. Add day-phase/curve sensors afterwards, any number of them, from the integration's
-own page (Add Sensor) — see [docs/HELPERS.md](docs/HELPERS.md).
-
-For local testing before it's on HACS at all, `scripts/link_into_ha.sh` copies
-`custom_components/adaptive_lighting_helpers/` directly onto an HA host over SSH — see the script's own header
-comment for details and why it copies rather than symlinks.
+registers the services above and the dashboard card (see below). Add day-phase/curve sensors afterwards, any
+number of them, from the integration's own page (Add Sensor) — see [docs/HELPERS.md](docs/HELPERS.md).
 
 ### The blueprint
 
@@ -170,12 +167,10 @@ Once imported, add an automation using the "Adaptive Lighting" blueprint per roo
 
 ### The dashboard card
 
-Register `www/adaptive-lighting-curve-card.js` as a Lovelace resource (Settings → Dashboards → Resources → Add
-Resource, URL `/local/adaptive-lighting-curve-card.js`, type JavaScript Module) and add the card config from
-`dashboard/house-settings-card.yaml` to a view. By default the card reads the auto-seeded "Default" sensor's
-entities; point it at any other named sensor with `sensor: <slugified name>` (e.g. `sensor: living_room`) in the
-card config. Not currently HACS-distributed either (see CLAUDE.md's "Open
-question" section for the plan to make it a proper HACS frontend plugin).
+Ships with the integration and self-registers with the frontend on startup — no separate install step, no
+manual Lovelace resource to add. Just add the card config from `dashboard/house-settings-card.yaml` to a view.
+By default the card reads the auto-seeded "Default" sensor's entities; point it at any other named sensor with
+`sensor: <slugified name>` (e.g. `sensor: living_room`) in the card config.
 
 ## Previewing the dashboard card
 

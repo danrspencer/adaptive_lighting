@@ -35,9 +35,12 @@ from __future__ import annotations
 
 import asyncio
 import time
+from pathlib import Path
 from typing import Any
 
 import voluptuous as vol
+from homeassistant.components.frontend import add_extra_js_url
+from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse, callback
@@ -46,6 +49,7 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.typing import ConfigType
 
 from .const import DOMAIN
 from .coordinator import CURVE_KEYS, ScheduleCoordinator, schedule_instances
@@ -242,6 +246,27 @@ async def _two_step_turn_on(
     else:
         data["rgb_color"] = rgb_color
     await hass.services.async_call("light", "turn_on", data, blocking=True)
+
+
+CARD_URL_BASE = "/adaptive_lighting_helpers_static"
+CARD_JS_PATH = "adaptive-lighting-curve-card.js"
+
+
+async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
+    """Serve www/adaptive-lighting-curve-card.js and auto-load it on
+    every frontend page - runs once for the whole domain, regardless of
+    how many config entries/subentries exist, so the card ships and
+    updates with the integration itself (via HACS) rather than needing
+    a separate manual Lovelace resource registration step that can
+    silently drift out of sync with it (see CLAUDE.md for the live
+    incident this replaced). cache_headers=False deliberately - the
+    file has no versioned URL, so aggressive caching here would just
+    trade a stale-deployed-file bug for a stale-browser-cache one."""
+    await hass.http.async_register_static_paths(
+        [StaticPathConfig(CARD_URL_BASE, str(Path(__file__).parent / "www"), cache_headers=False)]
+    )
+    add_extra_js_url(hass, f"{CARD_URL_BASE}/{CARD_JS_PATH}")
+    return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

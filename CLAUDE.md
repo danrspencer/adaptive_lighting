@@ -506,8 +506,51 @@ designs were explored:
   Lovelace card against synthetic data without a running HA instance -
   regenerate data, then serve the **repo root** (not `file://`, not
   `dashboard/` - the card's `fetch()` needs HTTP and `preview.html`
-  imports `../www/adaptive-lighting-curve-card.js`) and open
-  `dashboard/preview.html`.
+  imports `../custom_components/adaptive_lighting_helpers/www/adaptive-lighting-curve-card.js`)
+  and open `dashboard/preview.html`.
+- **Dashboard card now ships inside the integration and self-registers
+  with the frontend - no manual Lovelace resource, no separate
+  deployment path to drift out of sync.** Moved to
+  `custom_components/adaptive_lighting_helpers/www/`; `manifest.json`
+  gained `dependencies: ["http", "frontend"]`; a new `async_setup`
+  calls `hass.http.async_register_static_paths` then
+  `homeassistant.components.frontend.add_extra_js_url` once per domain
+  setup. Verified against HA core source before using it, not the
+  earlier "confirmed via a gist" guess this replaces: `add_extra_js_url`
+  is a real, docstringed public API "to register extra js or module to
+  load" for custom integrations, and is a cleaner fit than the
+  originally-scoped `lovelace.resources.async_create_item` approach -
+  no stored dashboard config to create or dedupe, just an in-memory
+  registration that's naturally redone on every setup.
+  `cache_headers=False` on the static path is deliberate - the file has
+  no versioned URL, so aggressive browser caching here would trade the
+  stale-deployed-file bug below for a stale-browser-cache one instead
+  of actually fixing it.
+
+  Prompted directly by a real live incident, not a theoretical
+  cleanliness pass: the card served from the old root-level `www/`
+  folder had been frozen since 2026-08-03 - stale for over a week,
+  through this session's entire multi-sensor rework - while the
+  integration itself stayed current via HACS the whole time, because
+  the card's only deployment path was `scripts/link_into_ha.sh`
+  (symlinking it), which nothing in this session's actual workflow ever
+  ran. The old deployed version didn't even understand the `sensor:`
+  config field, so two cards pointed at different sensors would have
+  silently rendered identical, broken content. Confirmed live via
+  `ha_read_file` before concluding it wasn't just a browser cache issue
+  - the served bytes themselves were stale - then fixed immediately via
+  `ha_write_file`, ahead of this permanent fix.
+
+  **`scripts/link_into_ha.sh` has been deleted entirely**, not just
+  fixed - once the card travels with `custom_components/adaptive_lighting_helpers/`
+  (which the script already copied as a whole directory) and HACS
+  handles updating that, there was nothing left for the script to do
+  that the already-established GitHub-based deployment paths (HACS for
+  the integration, `ha_import_blueprint` for the blueprint) didn't
+  already cover - and this session never actually used it even once,
+  which is exactly how the card went stale unnoticed for over a week
+  in the first place. Kept as untested, easy-to-forget tooling it would
+  have just been a liability going forward.
 - **Integration icon fixed, not just added.** The icon originally
   shipped from this repo's root-level `brand/` folder, which HA never
   actually reads - a custom integration's bundled brand icon has to
@@ -637,25 +680,6 @@ earlier. `resolved_entities`/`adaptive_target_entities` also confirmed
 correct via a `skip_condition: true` manual trigger, resolving all four
 real living-room lights with the right brightness multipliers.
 `config_check` stayed valid and zero repairs appeared throughout.
-
-## Open question: dashboard card as a HACS plugin?
-
-The integration half of this used to be an open question - now
-resolved (see above). What's left open is just the dashboard card:
-HACS's original/core use case is distributing custom Lovelace cards (a
-"plugin"/"frontend" repository category, separate from "Integration"),
-and `www/adaptive-lighting-curve-card.js` already fits that shape as-is
-(single file, no build step, no external deps) - would just need its
-own `hacs.json`-equivalent declaration. Confirmed (via a Home Assistant
-integration-embedding-a-card gist) that an *integration* can also
-bundle and self-register its own frontend resource at setup time
-(`manifest.json` depending on `frontend`+`http`, a small
-`JSModuleRegistration` class calling `lovelace.resources.async_create_item`)
-- so this doesn't have to be a second HACS repository/category if it's
-nicer to fold the card into `adaptive_lighting_helpers` directly.
-Neither approach has been started; the card still deploys the old way
-(manual Lovelace resource registration, see README's Installation
-section) until this is decided.
 
 ## Testing
 

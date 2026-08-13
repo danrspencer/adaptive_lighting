@@ -3,7 +3,7 @@
   "name": "Adaptive Lighting Helpers",
   "codeowners": ["@danrspencer"],
   "config_flow": true,
-  "dependencies": [],
+  "dependencies": ["http", "frontend"],
   "documentation": "https://github.com/danrspencer/adaptive_lighting",
   "iot_class": "calculated",
   "issue_tracker": "https://github.com/danrspencer/adaptive_lighting/issues",

@@ -5,7 +5,8 @@
   using the integration's actual curve.py) instead of a live Home
   Assistant instance. Serve the REPO ROOT over HTTP (fetch() needs
   that, file:// won't work - and it must be the repo root, not this
-  directory, since this page imports ../www/), e.g.:
+  directory, since this page imports
+  ../custom_components/adaptive_lighting_helpers/www/), e.g.:
 
     python3 -m http.server 8934
 
@@ -41,7 +42,7 @@
     <div id="card-container"></div>
 
     <script type="module">
-      import '../www/adaptive-lighting-curve-card.js';
+      import '../custom_components/adaptive_lighting_helpers/www/adaptive-lighting-curve-card.js';
 
       // Minimal <ha-card> stand-in - the real one is part of HA's
       // frontend, not something this repo ships or should depend on.
