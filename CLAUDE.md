@@ -108,6 +108,11 @@ meet.
   `apply_lighting`'s own nested `light.turn_on`/`turn_off` calls now
   explicitly pass `context=call.context` through (including both calls
   inside a two-step transition), where they previously didn't need to.
+  `apply_lighting` also takes an optional `owner_id` string identifying
+  the caller (the blueprint passes its own `this.entity_id`) so a
+  *different* caller's write is recognised as external too, and omitting
+  it entirely skips the check altogether as an explicit force/override
+  path - see "Current status" for the full mechanism.
 - Why any of this stays in Jinja at all: HA `condition:` blocks cannot
   call a service — only `action:` steps can — so anything
   condition:-gating needs to stay template-based. These pieces are also
@@ -602,6 +607,36 @@ working against the live instance:
   exercised beyond the restart already required to deploy this change -
   low risk, since it's HA's own standard `Store` helper, the same
   mechanism used throughout HA core.
+- **`owner_id` added to `apply_lighting`/`compute_lighting_groups`,
+  unit tested, not yet confirmed live.** User-driven follow-up, surfaced
+  by testing the override-detection redesign above: with the context.id
+  check in place, a *manual* call to `apply_lighting` (e.g. from
+  Developer Tools, after deliberately changing a light some other way)
+  got silently skipped too - the check has no notion of intent, only
+  "did the last write match mine," so there was no way to say "yes I
+  know, take it back anyway" short of turning the light off first.
+  `owner_id` (an optional string, any caller can pass anything) fixes
+  this two ways at once: omit it entirely and the check is skipped
+  altogether - the explicit force/override path; pass it, and
+  `write_tracking.py`'s per-entity record grows from just `context_id`
+  to `{context_id, owner_id}`, so `externally_set()` now asks two
+  questions in order - has *anything* touched the light since the last
+  write (context.id, unchanged as the primary signal - this can't be
+  owner_id alone, or a human editing the light between two ticks of the
+  *same* automation would go undetected), and if not, was that write
+  made under *this same* owner_id (a write from a different owner_id -
+  a different automation, or an unkeyed force call - counts as external
+  too, even though nothing about the light's own context changed).
+  Pre-owner_id `Store` entries (a bare context.id string, not a dict)
+  are dropped on load rather than migrated - harmless, since "no
+  record" was already the accepted safe fallback for a missing entity.
+  The blueprint passes its own `this.entity_id` (HA's built-in "this
+  automation's own state" template variable, confirmed against
+  home-assistant.io's templating docs before relying on it) as
+  `owner_id` on its `apply_lighting` call - required as part of this
+  same change, not a follow-up, since otherwise every room automation's
+  regular tick would itself count as an unkeyed force call and the
+  override protection just shipped would go dark immediately.
 - RGB colour (`prefer_rgb_color`) is implemented, unit tested, and now
   **fully confirmed live end-to-end** - both the *routing decision*
   (`compute_lighting_groups` correctly bucketed a real bulb into

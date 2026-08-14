@@ -13,6 +13,7 @@ def make_lookup(
     device_of: Optional[dict] = None,
     labels_of: Optional[dict] = None,
     last_write_context_ids: Optional[dict] = None,
+    last_write_owner_ids: Optional[dict] = None,
 ) -> EntityLookup:
     """
     states:    {entity_id: {"state": "on"/"off"/"unavailable"/..., "attributes": {...}, "context_id": "..."}}
@@ -22,10 +23,13 @@ def make_lookup(
     last_write_context_ids: {entity_id: context_id} - what write_tracking.LastWriteTracker
                would report as the context.id this integration itself last wrote that
                entity with. Absent/empty means "no record" for every entity.
+    last_write_owner_ids: {entity_id: owner_id} - the owner_id that write was made
+               under, if any. Absent/empty means no owner_id was recorded (None).
     """
     device_of = device_of or {}
     labels_of = labels_of or {}
     last_write_context_ids = last_write_context_ids or {}
+    last_write_owner_ids = last_write_owner_ids or {}
 
     def is_state(entity_id, value):
         return states.get(entity_id, {}).get("state") == value
@@ -45,6 +49,9 @@ def make_lookup(
     def last_write_context_id(entity_id):
         return last_write_context_ids.get(entity_id)
 
+    def last_write_owner_id(entity_id):
+        return last_write_owner_ids.get(entity_id)
+
     return EntityLookup(
         is_state=is_state,
         state_attr=state_attr,
@@ -52,6 +59,7 @@ def make_lookup(
         labels=labels,
         context_id=context_id,
         last_write_context_id=last_write_context_id,
+        last_write_owner_id=last_write_owner_id,
     )
 
 

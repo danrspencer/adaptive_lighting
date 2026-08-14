@@ -75,6 +75,7 @@ COMPUTE_LIGHTING_GROUPS_SCHEMA = vol.Schema(
         vol.Optional("prefer_rgb_color", default=False): cv.boolean,
         vol.Optional("rgb_color"): vol.All([vol.Coerce(int)], vol.Length(min=3, max=3)),
         vol.Optional("rgb_color_tolerance", default=10): vol.Coerce(int),
+        vol.Optional("owner_id"): cv.string,
     }
 )
 
@@ -113,6 +114,7 @@ APPLY_LIGHTING_SCHEMA = vol.Schema(
         vol.Optional("two_step_label", default="no_combined_transition"): cv.string,
         vol.Optional("prefer_rgb_color", default=False): cv.boolean,
         vol.Optional("rgb_color_tolerance", default=10): vol.Coerce(int),
+        vol.Optional("owner_id"): cv.string,
     }
 )
 
@@ -159,6 +161,7 @@ def _build_lookup(hass: HomeAssistant, tracker: LastWriteTracker) -> EntityLooku
         labels=labels,
         context_id=context_id,
         last_write_context_id=tracker.last_context_id,
+        last_write_owner_id=tracker.last_owner_id,
     )
 
 
@@ -309,6 +312,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             prefer_rgb_color=call.data["prefer_rgb_color"],
             rgb_color=tuple(rgb_color) if rgb_color else None,
             rgb_color_tolerance=call.data["rgb_color_tolerance"],
+            owner_id=call.data.get("owner_id"),
         )
         return _groups_response(groups)
 
@@ -347,7 +351,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         caller. Returns the same {"groups": [...]} shape as
         compute_lighting_groups for introspection, but nothing requires
         capturing it - see services.yaml for field docs.
+
+        owner_id (optional): identifies this caller for externally-set
+        protection - e.g. a blueprint automation passing its own
+        `this.entity_id`. Omit it entirely to skip that check altogether
+        and always write (the explicit force/override path); pass it to
+        have a light left alone once anything other than *this same*
+        owner_id's own last write has touched it since - see
+        grouping.py's EntityLookup.externally_set() for the full
+        semantics.
         """
+        owner_id = call.data.get("owner_id")
         brightness, color_temp_kelvin, rgb_color = _read_sensor_targets(hass, call.data["sensor_entity_id"])
         groups = build_groups(
             entities=call.data["entities"],
@@ -361,6 +375,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             prefer_rgb_color=call.data["prefer_rgb_color"],
             rgb_color=rgb_color,
             rgb_color_tolerance=call.data["rgb_color_tolerance"],
+            owner_id=owner_id,
         )
 
         transition = call.data["transition"]
@@ -442,7 +457,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if tasks:
             await asyncio.gather(*tasks)
         if written_entities:
-            await write_tracker.async_record(written_entities, call.context.id)
+            await write_tracker.async_record(written_entities, call.context.id, owner_id)
 
         return _groups_response(groups)
 

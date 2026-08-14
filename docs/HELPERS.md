@@ -53,7 +53,21 @@ data:
   transition: 2
   brightness_multipliers: { light.kitchen_2: 0.5 }
   prefer_rgb_color: true # optional - see "RGB colour" below
+  owner_id: "{{ this.entity_id }}" # optional - see "Override protection" below
 ```
+
+### Override protection
+
+A light already on gets left alone once something other than this integration's own last write has touched
+it since — a person, another automation, or a device regaining power. `owner_id` (optional, any string) is
+how a caller identifies itself for that check: the blueprint passes its own `this.entity_id` (Home
+Assistant's built-in "this automation's own state" template variable), so each room's writes are only ever
+recognised as "not overridden" by that same room's own next call — a write from a *different* `owner_id`,
+even though still technically `apply_lighting`, counts as external too.
+
+Leave `owner_id` unset entirely to skip the check altogether and always write regardless of what last
+touched the light — the explicit force/override case, e.g. for a script the user runs deliberately to bring
+a light back under adaptive control without having to turn it off first.
 
 ## `adaptive_lighting_helpers.compute_lighting_groups`
 
