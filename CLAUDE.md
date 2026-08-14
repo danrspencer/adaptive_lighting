@@ -435,6 +435,32 @@ re-propose without new information changing this trade-off.
     Sizing and Responsive Layout" once found, but not something a
     plain `column_span` fix on the section makes you suspect exists.
 
+16. **A blueprint input with no `default:` is required, regardless of
+    "(Optional)" in its own `name:`.** Adding four new entity-selector
+    inputs (`morning_scene`/`day_scene`/`evening_scene`/`night_scene`)
+    without a `default:` key broke every one of the 15 dependent room
+    automations on the very next re-import - none of them set these new
+    inputs (they're meant to be optional), so HA's blueprint
+    substitution failed to generate any of them at all:
+    `Failed to generate automation from blueprint: Missing input
+    day_scene, evening_scene, morning_scene, night_scene`, confirmed via
+    the live error log (`ha_get_logs(source="error_log")`), not just
+    suspected. `ha_get_overview`'s `repair_count` going from 0 to 15 in
+    one step was the first signal - all 15 `validation_failed_blueprint`
+    repairs, all created within the same second. Every other optional
+    input in this blueprint already had an explicit default (`""`,
+    `"{{ {} }}"`, `[]`) - these four were the only ones missing it,
+    added in the same change as several that did have one, which is
+    presumably why it wasn't caught in review. Fixed with `default: null`
+    on each; the downstream Jinja already treated an unset value
+    correctly (falsy, falls through to a fallback branch) - only the
+    blueprint schema itself was wrong. Restored live service by
+    importing directly from the fix branch's own commit SHA rather than
+    waiting for a PR merge - a pushed commit is immediately fetchable by
+    SHA regardless of merge state, and this is a case where minimizing
+    outage time mattered more than the normal branch-then-PR-then-merge
+    sequencing.
+
 ## Current status
 
 **Services** (`custom_components/adaptive_lighting_helpers/`,
