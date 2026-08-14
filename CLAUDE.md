@@ -160,15 +160,22 @@ meet.
   itself still accepts one - `docs/BLUEPRINT.md` documents pointing at
   one via the automation's "Edit in YAML" view instead.
 
-  All three sections are grouped via blueprint `sections:` (named,
-  collapsible `input:` groups - HA 2024.6.0+, confirmed via
-  `home-assistant.io`'s docs, no local HA core checkout in this repo to
-  verify against directly), which is also why this blueprint declares a
-  `homeassistant.min_version` for the first time - `2026.4.0` (what the
-  `occupancy.*` triggers already required, HA-core-confirmed elsewhere
-  in this file), not `2024.6.0` (sections' own lower floor), since the
-  blueprint's real requirement was always the higher one and had simply
-  never been declared.
+  All of these (plus a fourth, `timing`, added shortly after - grouping
+  the pre-existing `no_motion_wait`/`reconcile_interval`/
+  `motion_on_transition`/`motion_off_transition`/`adaptive_transition`
+  inputs that used to sit flat at the bottom of the input list, once the
+  user liked the pattern enough to ask for it there too) are grouped via
+  blueprint `sections:` (named, collapsible `input:` groups - HA
+  2024.6.0+, confirmed via `home-assistant.io`'s docs, no local HA core
+  checkout in this repo to verify against directly), which is also why
+  this blueprint declares a `homeassistant.min_version` for the first
+  time - `2026.4.0` (what the `occupancy.*` triggers already required,
+  HA-core-confirmed elsewhere in this file), not `2024.6.0` (sections'
+  own lower floor), since the blueprint's real requirement was always
+  the higher one and had simply never been declared. Nesting an input
+  inside a section doesn't change its name for `!input <key>` purposes -
+  purely presentational, confirmed live by every existing `!input`
+  reference continuing to resolve unchanged.
 
   All renames here are breaking, not backward-compatible: removing an
   input key doesn't leave the old value "still working" - HA's
