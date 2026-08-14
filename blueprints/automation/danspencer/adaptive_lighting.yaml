@@ -8,13 +8,23 @@ blueprint:
   domain: automation
   source_url: https://github.com/danrspencer/adaptive_lighting/blob/main/blueprints/automation/danspencer/adaptive_lighting.yaml
   author: Dan Spencer
+  homeassistant:
+    # Already required by the occupancy.* triggers/conditions below
+    # (HA core-confirmed, see CLAUDE.md) - declared here for the first
+    # time, prompted by the input sections below needing 2024.6.0, a
+    # strictly lower floor than what this blueprint already assumed.
+    min_version: 2026.4.0
   input:
     adaptive_sensor:
       name: Adaptive Lighting Sensor
-      description: Sensor providing brightness and colour temperature to apply.
+      description: >
+        Sensor providing brightness and colour temperature to apply -
+        filtered to Adaptive Lighting Helpers' own sensors.
       selector:
         entity:
-          domain: sensor
+          filter:
+            - integration: adaptive_lighting_helpers
+              domain: sensor
     room_target:
       name: Lights & Occupancy
       description: >
@@ -38,36 +48,105 @@ blueprint:
       selector:
         entity:
           multiple: true
-    scene_template:
-      name: Scene Template (Optional)
-      description: >
-        Template returning a scene entity_id to hand the room over to
-        instead of the adaptive brightness/colour.
-        [Details](https://github.com/danrspencer/adaptive_lighting/blob/main/docs/BLUEPRINT.md#scene-handoff).
-      default: ""
-      selector:
-        template: {}
-    brightness_multiplier_template:
-      name: Brightness Multiplier Template (Optional)
-      description: >
-        Template returning entity_id → brightness multiplier (0 = off,
-        null = skip entirely).
-        [Details](https://github.com/danrspencer/adaptive_lighting/blob/main/docs/BLUEPRINT.md#per-light-brightness-scaling).
-      default: "{{ {} }}"
-      selector:
-        template: {}
-    prefer_rgb_color_template:
-      name: Prefer RGB Color (Optional)
-      description: >
-        Template returning true to send RGB colour instead of colour
-        temperature to lights that support it (auto-detected). Defaults
-        to on for Evening/Night and off for Morning/Day - colour reads
-        as "relaxed/night" better than a plain colour-temperature warm
-        white does, but isn't worth it for the rest of the day.
-        [Details](https://github.com/danrspencer/adaptive_lighting/blob/main/docs/BLUEPRINT.md#rgb-colour).
-      default: "{{ states(adaptive_sensor) in ['Evening', 'Night'] }}"
-      selector:
-        template: {}
+    colour:
+      name: Colour
+      icon: mdi:palette
+      collapsed: true
+      input:
+        rgb_phases:
+          name: Prefer RGB During
+          description: >
+            Phases to send RGB colour instead of colour temperature
+            during, for lights that support it (auto-detected). Colour
+            reads as "relaxed/night" better than a plain colour-temperature
+            warm white does, but isn't worth it for the rest of the day.
+            [Details](https://github.com/danrspencer/adaptive_lighting/blob/main/docs/BLUEPRINT.md#rgb-colour).
+          default: [Evening, Night]
+          selector:
+            select:
+              options: [Morning, Day, Evening, Night]
+              multiple: true
+    scene_handoff:
+      name: Scene Handoff
+      icon: mdi:palette-swatch
+      collapsed: true
+      input:
+        scene_template:
+          name: Scene Template (Optional)
+          description: >
+            Template returning a scene entity_id to hand the room over
+            to instead of the adaptive brightness/colour. Takes
+            precedence over the per-phase scenes below whenever it
+            returns one - they're the fallback for phases it doesn't
+            cover.
+            [Details](https://github.com/danrspencer/adaptive_lighting/blob/main/docs/BLUEPRINT.md#scene-handoff).
+          default: ""
+          selector:
+            template: {}
+        morning_scene:
+          name: Morning Scene (Optional)
+          selector:
+            entity:
+              domain: scene
+        day_scene:
+          name: Day Scene (Optional)
+          selector:
+            entity:
+              domain: scene
+        evening_scene:
+          name: Evening Scene (Optional)
+          selector:
+            entity:
+              domain: scene
+        night_scene:
+          name: Night Scene (Optional)
+          selector:
+            entity:
+              domain: scene
+    brightness_scaling:
+      name: Brightness Scaling
+      icon: mdi:brightness-percent
+      collapsed: true
+      input:
+        brightness_multiplier_template:
+          name: Brightness Multiplier Template (Optional)
+          description: >
+            Template returning entity_id → brightness multiplier (0 =
+            off, null = skip entirely). Its own per-entity values always
+            win over the per-phase exclusions below - those only fill in
+            entities it doesn't already mention.
+            [Details](https://github.com/danrspencer/adaptive_lighting/blob/main/docs/BLUEPRINT.md#per-light-brightness-scaling).
+          default: "{{ {} }}"
+          selector:
+            template: {}
+        morning_exclude_lights:
+          name: Lights Off During Morning (Optional)
+          selector:
+            entity:
+              domain: light
+              multiple: true
+          default: []
+        day_exclude_lights:
+          name: Lights Off During Day (Optional)
+          selector:
+            entity:
+              domain: light
+              multiple: true
+          default: []
+        evening_exclude_lights:
+          name: Lights Off During Evening (Optional)
+          selector:
+            entity:
+              domain: light
+              multiple: true
+          default: []
+        night_exclude_lights:
+          name: Lights Off During Night (Optional)
+          selector:
+            entity:
+              domain: light
+              multiple: true
+          default: []
     no_motion_wait:
       name: Wait time
       description: Time to keep the light on after motion stops.
@@ -276,7 +355,8 @@ variables:
   scene_template: !input scene_template
   adaptive_transition: !input adaptive_transition
   motion_on_transition: !input motion_on_transition
-  prefer_rgb_color: !input prefer_rgb_color_template
+  rgb_phases: !input rgb_phases
+  prefer_rgb_color: "{{ states(adaptive_sensor) in rgb_phases }}"
   script_transition: >
     {# Slow transition for adaptive/scene/extra-trigger updates; snappier for motion or a manual run #}
     {% if trigger is defined and trigger.id is defined and trigger.id in ['adaptive', 'extra'] %}
@@ -392,12 +472,27 @@ variables:
       {% endif %}
     {% endif %}
     {{ ns.entities | unique | list }}
-  # Whatever scene_template returns, if it names a scene that actually
-  # exists - a typo or a scene that's been renamed/removed is treated
-  # the same as the template returning nothing, rather than erroring
+  morning_scene: !input morning_scene
+  day_scene: !input day_scene
+  evening_scene: !input evening_scene
+  night_scene: !input night_scene
+  phase_scene: >
+    {% set m = {'Morning': morning_scene, 'Day': day_scene, 'Evening': evening_scene, 'Night': night_scene} %}
+    {{ m.get(states(adaptive_sensor)) }}
+  # scene_template wins whenever it returns something valid (it can
+  # react to things a phase alone can't, e.g. "if the TV is on") - the
+  # per-phase pick is the fallback for when it doesn't apply. Either
+  # way, a typo or a scene that's been renamed/removed is treated the
+  # same as returning nothing, rather than erroring.
   desired_scene: >
     {% set candidate = (scene_template | trim) %}
-    {{ candidate if candidate and states[candidate] is not none else '' }}
+    {% if candidate and states[candidate] is not none %}
+      {{ candidate }}
+    {% elif phase_scene and states[phase_scene] is not none %}
+      {{ phase_scene }}
+    {% else %}
+      {{ '' }}
+    {% endif %}
   scene_covered_entities: >
     {% if desired_scene | length > 0 %}
       {{ state_attr(desired_scene, 'entity_id') | default([], true) | list }}
@@ -415,7 +510,26 @@ variables:
     {% else %}
       {{ resolved_entities }}
     {% endif %}
-  brightness_multipliers: !input brightness_multiplier_template
+  template_brightness_multipliers: !input brightness_multiplier_template
+  morning_exclude_lights: !input morning_exclude_lights
+  day_exclude_lights: !input day_exclude_lights
+  evening_exclude_lights: !input evening_exclude_lights
+  night_exclude_lights: !input night_exclude_lights
+  phase_exclude_lights: >
+    {% set m = {'Morning': morning_exclude_lights, 'Day': day_exclude_lights,
+                'Evening': evening_exclude_lights, 'Night': night_exclude_lights} %}
+    {{ m.get(states(adaptive_sensor), []) }}
+  # The per-phase exclude list only fills in entities the template
+  # doesn't already mention - its own per-entity values always win on
+  # collision, so a room's existing template logic (e.g. dining_room_lighting's
+  # illuminance-based override, unrelated to phase) can't be silently
+  # discarded by also setting a phase exclusion.
+  brightness_multipliers: >
+    {% set ns = namespace(m={}) %}
+    {% for e in phase_exclude_lights %}
+      {% set ns.m = dict(ns.m, **{e: 0}) %}
+    {% endfor %}
+    {{ dict(ns.m, **template_brightness_multipliers) }}
 
 action:
   - choose:
