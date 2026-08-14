@@ -531,17 +531,20 @@ working against the live instance:
   blueprint calls - see `docs/HELPERS.md`'s "Bring your own sensor"
   section for the full attribute contract (moved there from the README
   - the user flagged it as not belonging on the main landing page).
-- RGB colour (`prefer_rgb_color`) is implemented and unit tested, and
-  the *routing decision* is confirmed live - `compute_lighting_groups`
-  correctly bucketed a real bulb into `combined_rgb` based on its actual
-  `supported_color_modes`, not just test fakes. What's **not** yet
-  confirmed live is `apply_lighting`'s own `rgb_color` dispatch call
-  itself (the `light.turn_on` with `rgb_color` data) - no live sensor
-  has exposed an `rgb_color` attribute yet to point `sensor_entity_id`
-  at. Judged low-risk to leave that specific gap unverified for now,
-  since it's the identical dispatch pattern already confirmed live for
-  `color_temp_kelvin`, just a different data key - worth actually
-  exercising once a sensor with `rgb_color` exists live.
+- RGB colour (`prefer_rgb_color`) is implemented, unit tested, and now
+  **fully confirmed live end-to-end** - both the *routing decision*
+  (`compute_lighting_groups` correctly bucketed a real bulb into
+  `combined_rgb` based on its actual `supported_color_modes`, not just
+  test fakes) and `apply_lighting`'s own `rgb_color` dispatch call (a
+  direct `apply_lighting` call against `light.bedroom_hall_spot_1` with
+  `prefer_rgb_color: true` landed the light in `color_mode: "xy"` with
+  `rgb_color` matching `sensor.first_floor_adaptive_lighting`'s own
+  `rgb_color` attribute exactly, confirmed via `ha_get_state` before
+  turning the light back off to restore its prior state). The blueprint
+  side (`rgb_phases`) was already confirmed separately - the boolean
+  `prefer_rgb_color` value it computes was checked via automation traces
+  - so both halves (which phases prefer RGB, and what actually happens
+  when they do) are now live-verified, not just the first.
 
 **Multi-sensor schedule architecture** (`coordinator.py`, `sensor.py`,
 `select.py`, `number.py`, `time.py`, `switch.py`) - the config entry
