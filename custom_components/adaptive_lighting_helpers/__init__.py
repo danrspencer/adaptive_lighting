@@ -76,6 +76,7 @@ COMPUTE_LIGHTING_GROUPS_SCHEMA = vol.Schema(
         vol.Optional("rgb_color"): vol.All([vol.Coerce(int)], vol.Length(min=3, max=3)),
         vol.Optional("rgb_color_tolerance", default=10): vol.Coerce(int),
         vol.Optional("owner_id"): cv.string,
+        vol.Optional("force", default=False): cv.boolean,
     }
 )
 
@@ -115,6 +116,7 @@ APPLY_LIGHTING_SCHEMA = vol.Schema(
         vol.Optional("prefer_rgb_color", default=False): cv.boolean,
         vol.Optional("rgb_color_tolerance", default=10): vol.Coerce(int),
         vol.Optional("owner_id"): cv.string,
+        vol.Optional("force", default=False): cv.boolean,
     }
 )
 
@@ -313,6 +315,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             rgb_color=tuple(rgb_color) if rgb_color else None,
             rgb_color_tolerance=call.data["rgb_color_tolerance"],
             owner_id=call.data.get("owner_id"),
+            force=call.data["force"],
         )
         return _groups_response(groups)
 
@@ -355,13 +358,22 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         owner_id (optional): identifies this caller for externally-set
         protection - e.g. a blueprint automation passing its own
         `this.entity_id`. Omit it entirely to skip that check altogether
-        and always write (the explicit force/override path); pass it to
-        have a light left alone once anything other than *this same*
-        owner_id's own last write has touched it since - see
-        grouping.py's EntityLookup.externally_set() for the full
-        semantics.
+        and always write, same as force below, but without claiming the
+        write for a later call to recognise; pass it to have a light
+        left alone once anything other than *this same* owner_id's own
+        last write has touched it since.
+
+        force (optional, default false): bypasses externally-set
+        protection outright for this call, regardless of owner_id. The
+        write is still recorded under owner_id if one was given, so a
+        later, non-forced call with that same owner_id correctly
+        recognises it as its own rather than finding an orphaned record
+        - the right way to force through *and* keep protection working
+        normally afterward. See grouping.py's EntityLookup.externally_set()
+        for the full semantics of both parameters together.
         """
         owner_id = call.data.get("owner_id")
+        force = call.data["force"]
         brightness, color_temp_kelvin, rgb_color = _read_sensor_targets(hass, call.data["sensor_entity_id"])
         groups = build_groups(
             entities=call.data["entities"],
@@ -376,6 +388,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             rgb_color=rgb_color,
             rgb_color_tolerance=call.data["rgb_color_tolerance"],
             owner_id=owner_id,
+            force=force,
         )
 
         transition = call.data["transition"]

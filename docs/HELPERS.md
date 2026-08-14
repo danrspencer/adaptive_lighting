@@ -54,6 +54,7 @@ data:
   brightness_multipliers: { light.kitchen_2: 0.5 }
   prefer_rgb_color: true # optional - see "RGB colour" below
   owner_id: "{{ this.entity_id }}" # optional - see "Override protection" below
+  force: false # optional - see "Override protection" below
 ```
 
 ### Override protection
@@ -62,19 +63,29 @@ A light already on gets left alone once something other than this integration's 
 it since — a person, another automation, or a device regaining power. `owner_id` (optional, any string) is
 how a caller identifies itself for that check: the blueprint passes its own `this.entity_id` (Home
 Assistant's built-in "this automation's own state" template variable), so each room's writes are only ever
-recognised as "not overridden" by that same room's own next call — a write from a *different* `owner_id`,
-even though still technically `apply_lighting`, counts as external too.
+recognised as "not overridden" by that same room's own next call — a write from a *different* `owner_id`
+counts as external too, even though it's still technically `apply_lighting`.
 
-Leave `owner_id` unset entirely to skip the check altogether and always write regardless of what last
-touched the light — the explicit force/override case, e.g. for a script the user runs deliberately to bring
-a light back under adaptive control without having to turn it off first.
+Two ways to bypass the check for a single call:
+
+- **Leave `owner_id` unset entirely** — skips the check and always writes, but doesn't claim the write for
+  anyone: a *later* call, even one passing a real `owner_id`, sees no conflicting claim either (a write
+  recorded with no owner doesn't count against anybody) — so this is a clean, fully anonymous "just do it."
+- **Pass `force: true`** — also skips the check, but *alongside* a real `owner_id`, so the write is
+  attributed to that caller. A later, non-forced call under that same `owner_id` then correctly recognises
+  it as its own, rather than finding an orphaned record and getting stuck treating its *own* forced write as
+  external. Use this when the caller wants to force through **and** keep normal protection working
+  afterward — e.g. a script the user runs deliberately to bring a light back under adaptive control without
+  turning it off first, or an automation resyncing a light of its own that dropped off the network and came
+  back (see the blueprint's own handling of exactly this below).
 
 A device regaining power gets a fresh context of its own too, so at this level alone it looks identical to a
 real external change and stays protected (i.e. unmanaged) indefinitely — nothing here ever un-marks it on its
-own. If you're using the blueprint, it already handles this for you (a dedicated `recovered` trigger
-force-resyncs just that light) — see [docs/BLUEPRINT.md](BLUEPRINT.md#override-detection). Calling these
-services directly from your own automation, you'd need the same kind of handling yourself if this matters
-to you.
+own; only a later call with `force: true` does. If you're using the blueprint, it already handles this for
+you (a dedicated `recovered` trigger force-resyncs just that light, passing its own `owner_id` alongside
+`force` so later ticks keep recognising it) — see [docs/BLUEPRINT.md](BLUEPRINT.md#override-detection).
+Calling these services directly from your own automation, you'd need the same kind of handling yourself if
+this matters to you.
 
 ## `adaptive_lighting_helpers.compute_lighting_groups`
 

@@ -381,6 +381,14 @@ variables:
   # dedicated action: step for it), past whatever stale
   # override-protection record it had before it dropped off.
   just_recovered: "{{ trigger is defined and trigger.id is defined and trigger.id == 'recovered' }}"
+  # This run wasn't started by any of the triggers above at all - the
+  # user hit "Run" on the automation itself, or called automation.trigger
+  # directly. Used below to force this whole tick through regardless of
+  # override protection, matching the same "I ran this on purpose, take
+  # it back" intent a direct apply_lighting force call has - trigger is
+  # simply undefined for a manual run (see e.g. `this` in HA's own
+  # templating docs; the same is-defined guard already used above).
+  manual_run: "{{ trigger is not defined }}"
   # Brightness/colour temperature themselves are no longer extracted
   # here - adaptive_lighting_helpers.apply_lighting reads them straight
   # off adaptive_sensor (and applies rgb_color, tolerance-checking,
@@ -644,18 +652,29 @@ action:
           # light alone. `this` is this automation's own state object,
           # so this.entity_id is stable per room and needs no input.
           owner_id: "{{ this.entity_id }}"
+          # A manual run (someone hit "Run" on this automation, or
+          # called automation.trigger directly) forces the whole tick
+          # through regardless of override protection - owner_id is
+          # still passed above, so the write is properly attributed and
+          # a later, non-forced tick still recognises it as this
+          # automation's own rather than finding an orphaned record.
+          force: "{{ manual_run }}"
       - if:
           - "{{ just_recovered }}"
         then:
-          # The call above still used owner_id, so it just skipped the
-          # entity that recovered - it still carries the write record
-          # from before it dropped off, and its live context.id no
-          # longer matches (the device's own reconnect state report got
-          # a fresh, unrelated one). Force *just* that entity past it -
-          # deliberately scoped to trigger.entity_id alone, not the
-          # whole room, so a genuinely different light in this room
-          # that's under its own real manual override isn't clobbered
-          # just because something else nearby blipped.
+          # The call above still used owner_id (and wasn't forced,
+          # unless this also happens to be a manual run), so it just
+          # skipped the entity that recovered - it still carries the
+          # write record from before it dropped off, and its live
+          # context.id no longer matches (the device's own reconnect
+          # state report got a fresh, unrelated one). Force *just* that
+          # entity past it - deliberately scoped to trigger.entity_id
+          # alone, not the whole room, so a genuinely different light in
+          # this room that's under its own real manual override isn't
+          # clobbered just because something else nearby blipped. Still
+          # passes owner_id alongside force so this write is attributed
+          # too, not left orphaned for the next regular tick to trip
+          # over again.
           - alias: "Force-resync the light that just recovered from unavailable"
             action: adaptive_lighting_helpers.apply_lighting
             data:
@@ -664,3 +683,5 @@ action:
               sensor_entity_id: "{{ adaptive_sensor }}"
               transition: "{{ script_transition }}"
               prefer_rgb_color: "{{ prefer_rgb_color }}"
+              owner_id: "{{ this.entity_id }}"
+              force: true

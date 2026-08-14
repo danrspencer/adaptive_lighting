@@ -63,17 +63,29 @@ free to manage — rather than getting stuck unmanaged until it happens to chang
 The blueprint identifies itself to this check via `apply_lighting`'s `owner_id` parameter, set to its own
 `this.entity_id` — so a room's automation only ever recognises its *own* previous writes as "not overridden";
 even a write from a different room's automation counts as external. There's no blueprint input for this, and
-none needed — it's automatic per room. If you want to deliberately force a light back under adaptive control
-without turning it off first (e.g. from a script you run by hand), call `apply_lighting` directly with no
-`owner_id` at all — see [docs/HELPERS.md](HELPERS.md#override-protection).
+none needed — it's automatic per room. `owner_id` is passed on every single call the blueprint makes,
+including the two cases below that bypass the check with `force: true` — force and owner_id aren't opposites;
+forcing *with* an owner_id still attributes the write, so the room's next regular tick correctly recognises it
+as its own rather than getting stuck treating its own forced write as external.
+
+**Running the automation manually** (hitting "Run" in the UI, or calling `automation.trigger` directly, rather
+than one of its own configured triggers firing) forces the whole tick through regardless of override
+protection - the same "I ran this on purpose, take it back" intent as calling `apply_lighting` yourself with
+`force: true`. If you'd rather it respect protection even on a manual run, there's currently no input for
+that - open an issue if you need it.
 
 **A device regaining power after an outage does *not* fall under the "not treated as an override" umbrella** —
 its own reconnect state report gets a fresh context too, indistinguishable from a real external change, so left
 alone it would never resync on its own. The blueprint handles this with a dedicated `recovered` trigger: whenever
 one of its lights transitions from `unavailable`/`unknown` back to a real state (a Zigbee mesh drop, or someone
 physically cutting and restoring power to the room), it force-resyncs *just that light* - calling `apply_lighting`
-with no `owner_id` scoped to that one entity, rather than the whole room - so a genuinely different light in the
-same room that's under its own real manual override isn't clobbered just because something else nearby blipped.
+with `force: true` (still passing its own `owner_id`) scoped to that one entity, rather than the whole room - so
+a genuinely different light in the same room that's under its own real manual override isn't clobbered just
+because something else nearby blipped.
+
+If you want to deliberately force a light back under adaptive control from your own script without turning it
+off first, call `apply_lighting` directly with `force: true` (with or without an `owner_id` of your own) - see
+[docs/HELPERS.md](HELPERS.md#override-protection) for the full contract.
 
 ## Scene handoff
 

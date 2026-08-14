@@ -120,14 +120,28 @@ compute_lighting_groups:
         Identifies this caller for externally-set protection - e.g. an
         automation passing its own {{ this.entity_id }}. Left unset, the
         check is skipped entirely (every light is treated as free to
-        manage, regardless of what last touched it) - the explicit
-        force/override case. Set it, and a light is left alone once
-        anything other than a write recorded under this exact owner_id
-        has touched it since - a person, another automation, a device
-        regaining power, or an apply_lighting call using a different
-        owner_id (or none at all).
+        manage, regardless of what last touched it) - same as force
+        below, but without claiming the write for a later call to
+        recognise. Set it, and a light is left alone once anything other
+        than a write recorded under this exact owner_id has touched it
+        since - a person, another automation, a device regaining power,
+        or an apply_lighting call using a different owner_id. A write
+        recorded with no owner_id at all doesn't count against you -
+        there was no claim to conflict with.
       selector:
         text:
+    force:
+      name: Force
+      description: >-
+        Bypasses externally-set protection outright for this call,
+        regardless of owner_id. The write is still recorded under
+        owner_id if one was given, so a later, non-forced call with that
+        same owner_id correctly recognises it as its own rather than
+        finding an orphaned record - the right way to force through and
+        keep protection working normally afterward. Off by default.
+      default: false
+      selector:
+        boolean:
 
 apply_lighting:
   name: Apply adaptive lighting
@@ -241,14 +255,28 @@ apply_lighting:
         Identifies this caller for externally-set protection - e.g. an
         automation passing its own {{ this.entity_id }}. Left unset, the
         check is skipped entirely (every light is treated as free to
-        manage, regardless of what last touched it) - the explicit
-        force/override case. Set it, and a light is left alone once
-        anything other than a write recorded under this exact owner_id
-        has touched it since - a person, another automation, a device
-        regaining power, or an apply_lighting call using a different
-        owner_id (or none at all).
+        manage, regardless of what last touched it) - same as force
+        below, but without claiming the write for a later call to
+        recognise. Set it, and a light is left alone once anything other
+        than a write recorded under this exact owner_id has touched it
+        since - a person, another automation, a device regaining power,
+        or an apply_lighting call using a different owner_id. A write
+        recorded with no owner_id at all doesn't count against you -
+        there was no claim to conflict with.
       selector:
         text:
+    force:
+      name: Force
+      description: >-
+        Bypasses externally-set protection outright for this call,
+        regardless of owner_id. The write is still recorded under
+        owner_id if one was given, so a later, non-forced call with that
+        same owner_id correctly recognises it as its own rather than
+        finding an orphaned record - the right way to force through and
+        keep protection working normally afterward. Off by default.
+      default: false
+      selector:
+        boolean:
 
 compute_curve:
   name: Compute adaptive curve point
