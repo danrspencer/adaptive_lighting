@@ -43,7 +43,7 @@ class EntityLookup:
         did = self.device_id(entity_id)
         return self.labels(entity_id) + (self.labels(did) if did else [])
 
-    def externally_set(self, entity_id: str, owner_id: Optional[str] = None) -> bool:
+    def externally_set(self, entity_id: str, owner_id: Optional[str] = None, force: bool = False) -> bool:
         """True if the entity is on and something other than *this*
         caller's own last apply_lighting write has touched it since - a
         person, another automation (even one with no context.user_id of
@@ -53,11 +53,25 @@ class EntityLookup:
         apply_lighting caller (identified by owner_id, e.g. a different
         room's automation).
 
+        force bypasses the check outright, regardless of owner_id -
+        always returns False. Distinct from omitting owner_id (below):
+        force still lets the caller claim an identity for the write that
+        follows, so a *later* call - not forced, but with the same
+        owner_id - correctly recognises that write as its own rather
+        than finding an orphaned record with no claimed owner. Without
+        this, a forced write would leave the entity looking permanently
+        externally-set to its own regular caller from the very next
+        tick onward - the actual bug that prompted adding this parameter
+        (surfaced by asking, before shipping, "if we do one run without
+        an owner id, will subsequent runs with one continue to work?" -
+        they would not have, without this).
+
         owner_id is the caller's own identity for this call, entirely
         optional: pass None (the default - "I don't care who touched
-        this last") to skip the check altogether and always treat the
-        entity as free to manage, the explicit force/override path.
-        Passing a value asks two independent questions, in order:
+        this last") to skip the check altogether too, same as force,
+        but - unlike force - without claiming anything for later calls
+        to recognise. Passing a value (and force left False) asks two
+        independent questions, in order:
 
         1. Has *anything* touched this entity since the last recorded
            write (regardless of who made it)? Checked via context.id -
@@ -67,9 +81,11 @@ class EntityLookup:
            ticks of the *same* automation.
         2. If not, was that last recorded write made under *this same*
            owner_id? A write recorded under a different owner_id (a
-           different apply_lighting caller, or one that itself called
-           without an owner_id) counts as external too, even though
-           nothing about the light's own context has changed since.
+           different apply_lighting caller) counts as external too,
+           even though nothing about the light's own context has
+           changed since. A write recorded with *no* owner_id at all
+           (the caller omitted it, rather than passing force) doesn't
+           count against anyone - there was no claim to conflict with.
 
         No remembered write at all (a brand new entity, or the very
         first tick before anything's been recorded) counts as free to
@@ -82,11 +98,15 @@ class EntityLookup:
         opposite case - its own reconnect state report is itself a
         fresh-context write, so it *becomes* externally-set rather than
         stops being it, and stays that way indefinitely at this layer
-        alone (nothing here ever un-marks it). The blueprint's own
-        `recovered` trigger is what actually resolves that case, by
-        force-resyncing just that entity - see docs/BLUEPRINT.md's
-        "Override detection" section."""
+        alone (nothing here ever un-marks it) unless something calls
+        back in with force=True. The blueprint's own `recovered` trigger
+        is what actually does that, force-resyncing just that entity
+        (while still passing its own owner_id, so normal ticks
+        afterward recognise it) - see docs/BLUEPRINT.md's "Override
+        detection" section."""
         if not self.is_state(entity_id, "on"):
+            return False
+        if force:
             return False
         if owner_id is None:
             return False
@@ -95,7 +115,10 @@ class EntityLookup:
             return False
         if self.context_id(entity_id) != last_write_context:
             return True
-        return self.last_write_owner_id(entity_id) != owner_id
+        last_owner = self.last_write_owner_id(entity_id)
+        if last_owner is None:
+            return False
+        return last_owner != owner_id
 
     def supports_rgb(self, entity_id: str) -> bool:
         """True if the entity's supported_color_modes includes any mode
@@ -152,6 +175,7 @@ def build_groups(
     rgb_color: Optional[tuple] = None,
     rgb_color_tolerance: int = 10,
     owner_id: Optional[str] = None,
+    force: bool = False,
 ) -> list:
     """Compute exactly what needs commanding for `entities`, bucketed by
     brightness multiplier. Each returned Group is either an off-group
@@ -167,10 +191,12 @@ def build_groups(
     rgb_color given, and combined_rgb/two_step_rgb are always empty -
     behaviour is otherwise identical to before this parameter existed.
 
-    owner_id: this caller's own identity, passed straight through to
-    every EntityLookup.externally_set() check - see its docstring. Left
-    as None (the default), every entity is free to manage regardless of
-    what last touched it."""
+    owner_id/force: this caller's own identity and whether to bypass
+    protection outright, passed straight through to every
+    EntityLookup.externally_set() check - see its docstring for the full
+    semantics, including why force (not just omitting owner_id) is the
+    right way to bypass protection for a caller that still wants its
+    write recognised as its own next time."""
     use_rgb = prefer_rgb_color and rgb_color is not None
     groups = []
     for multiplier, group_entities in _bucket_by_multiplier(entities, brightness_multipliers).items():
@@ -182,7 +208,7 @@ def build_groups(
             group.needing_off = [
                 e
                 for e in group_entities
-                if lookup.reachable(e) and not lookup.is_state(e, "off") and not lookup.externally_set(e, owner_id)
+                if lookup.reachable(e) and not lookup.is_state(e, "off") and not lookup.externally_set(e, owner_id, force)
             ]
             groups.append(group)
             continue
@@ -197,7 +223,7 @@ def build_groups(
             e
             for e in temp_entities
             if lookup.reachable(e)
-            and not lookup.externally_set(e, owner_id)
+            and not lookup.externally_set(e, owner_id, force)
             and not _already_set(e, brightness, sensor_color_temp_kelvin, lookup, brightness_tolerance, color_temp_tolerance)
         ]
         group.two_step = [e for e in needing_update if two_step_label in lookup.tags(e)]
@@ -207,7 +233,7 @@ def build_groups(
             e
             for e in rgb_entities
             if lookup.reachable(e)
-            and not lookup.externally_set(e, owner_id)
+            and not lookup.externally_set(e, owner_id, force)
             and not _already_set_rgb(e, brightness, rgb_color, lookup, brightness_tolerance, rgb_color_tolerance)
         ]
         group.two_step_rgb = [e for e in needing_update_rgb if two_step_label in lookup.tags(e)]

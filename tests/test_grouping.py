@@ -331,6 +331,112 @@ def test_no_owner_id_forces_past_the_check():
     assert groups[0].combined == ["light.a"]
 
 
+def test_force_true_bypasses_the_check_even_with_a_matching_owner_id_given():
+    # force=True bypasses the check outright, regardless of owner_id and
+    # regardless of how mismatched the recorded context/owner are.
+    lookup = make_lookup(
+        states={
+            "light.a": {
+                "state": "on",
+                "attributes": {"brightness": 40, "color_temp_kelvin": 6000},
+                "context_id": "ctx-someone-else",
+            }
+        },
+        last_write_context_ids={"light.a": "ctx-ours"},
+        last_write_owner_ids={"light.a": "someone_else"},
+    )
+    groups = build_groups(
+        entities=["light.a"],
+        brightness_multipliers={},
+        sensor_brightness=200,
+        sensor_color_temp_kelvin=3000,
+        lookup=lookup,
+        owner_id="ours",
+        force=True,
+    )
+    assert groups[0].combined == ["light.a"]
+
+
+def test_a_write_recorded_with_no_owner_id_does_not_block_a_later_owner_id_check():
+    # A write recorded with no owner_id at all (the caller omitted it, or
+    # used force without passing one) doesn't count against anyone later
+    # - there was no claim to conflict with. This is what makes force
+    # actually useful: force a write through *with* an owner_id, and a
+    # later non-forced call under that same owner_id still needs this
+    # fallback for the case where an *earlier* write (before force
+    # existed, or from an anonymous caller) left no owner on record.
+    lookup = make_lookup(
+        states={
+            "light.a": {
+                "state": "on",
+                "attributes": {"brightness": 40, "color_temp_kelvin": 6000},
+                "context_id": "ctx-forced",
+            }
+        },
+        last_write_context_ids={"light.a": "ctx-forced"},
+        # No last_write_owner_ids entry for light.a - the earlier write
+        # that produced ctx-forced was made with no owner_id at all.
+    )
+    groups = build_groups(
+        entities=["light.a"],
+        brightness_multipliers={},
+        sensor_brightness=200,
+        sensor_color_temp_kelvin=3000,
+        lookup=lookup,
+        owner_id="ours",
+    )
+    assert groups[0].combined == ["light.a"]
+
+
+def test_force_write_is_recognised_by_a_later_non_forced_call_with_the_same_owner_id():
+    # The actual bug this design fixes: force a write through *with* an
+    # owner_id, and a later, non-forced call under that same owner_id
+    # (context unchanged since) must still recognise it as its own -
+    # not find an orphaned record and treat it as external.
+    lookup = make_lookup(
+        states={
+            "light.a": {
+                "state": "on",
+                "attributes": {"brightness": 200, "color_temp_kelvin": 3000},
+                "context_id": "ctx-forced-write",
+            }
+        },
+        last_write_context_ids={"light.a": "ctx-forced-write"},
+        last_write_owner_ids={"light.a": "ours"},
+    )
+    groups = build_groups(
+        entities=["light.a"],
+        brightness_multipliers={},
+        sensor_brightness=200,
+        sensor_color_temp_kelvin=3000,
+        lookup=lookup,
+        owner_id="ours",
+    )
+    # Already at target and recognised as our own write - correctly
+    # left alone by the *tolerance* check, not the override check.
+    assert groups[0].combined == []
+    lookup_mismatched = make_lookup(
+        states={
+            "light.a": {
+                "state": "on",
+                "attributes": {"brightness": 40, "color_temp_kelvin": 6000},
+                "context_id": "ctx-forced-write",
+            }
+        },
+        last_write_context_ids={"light.a": "ctx-forced-write"},
+        last_write_owner_ids={"light.a": "ours"},
+    )
+    groups_mismatched = build_groups(
+        entities=["light.a"],
+        brightness_multipliers={},
+        sensor_brightness=200,
+        sensor_color_temp_kelvin=3000,
+        lookup=lookup_mismatched,
+        owner_id="ours",
+    )
+    assert groups_mismatched[0].combined == ["light.a"]
+
+
 def test_turning_the_light_off_ends_the_protection():
     # Same mismatched context.id as the protected case, but the light is
     # now off - there's nothing to protect, and a later "on" is a fresh

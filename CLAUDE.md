@@ -862,8 +862,8 @@ designs were explored:
   when any of the room's lights transitions from `unavailable`/`unknown`
   to a real state. Deliberately **scoped to just `trigger.entity_id`,
   not the whole room** via a second, additional `apply_lighting` call
-  with no `owner_id` (the existing room-wide call still runs normally
-  first, with `owner_id`, so it still protects everyone else) - an
+  (the existing room-wide call still runs normally first, with
+  `owner_id` and no force, so it still protects everyone else) - an
   earlier draft of this fix would have force-resynced the *entire* room
   whenever any single light blipped, which would have clobbered a
   genuinely different light's real manual override in the same room
@@ -875,12 +875,71 @@ designs were explored:
   priority) - a plain `state` trigger's own `entity_id:` can't be
   computed from `room_target` (device/area) dynamically either, the
   same constraint that shaped the removed `manual` trigger, so a
-  template trigger doing its own resolution was the only path. Needs a
-  live instance to confirm - can't be exercised by unit tests (pure
-  Jinja/YAML, no Python here) or easily simulated (can't force a real
-  device to report `unavailable` on demand the way a service call can
-  simulate every other case tested so far).
+  template trigger doing its own resolution was the only path. This
+  scoped call originally omitted `owner_id` entirely (force via
+  omission, the only mechanism that existed yet) - revised to pass
+  `owner_id` *and* `force: true` together once a real gap in that
+  approach was found afterward (see the `force` parameter bullet
+  below), so the resync is properly attributed rather than left
+  orphaned. Not
+  unit-testable (pure blueprint YAML) - can't be exercised by unit
+  tests or easily simulated (no service call can force a real device to
+  report `unavailable` on demand the way every other case tested so far
+  could be), so this specific trigger firing has still only had its
+  surrounding logic (config validity, the rest of the tick) confirmed
+  live, not the transition itself.
+- **`force` parameter added to `apply_lighting`/`compute_lighting_groups`,
+  fixing a real bug in the two "omit `owner_id`" force paths shipped
+  just before this - unit tested, live-deployment pending.** User-caught,
+  by asking a verification question before trusting the design: "if we
+  do one run without an owner id, will subsequent runs with one continue
+  to work?" Traced through and the answer was no. `write_tracking.py`
+  records whatever `owner_id` a write was made under, including `None`
+  when it's omitted - so a forced write (no `owner_id`) got recorded as
+  `{context_id, owner_id: None}`, and the *next* regular tick, calling
+  with a real `owner_id`, compared `None != "automation.xxx"` and found
+  a mismatch - `externally_set()` treated its own just-forced write as
+  someone else's, indefinitely, since nothing ever corrected the
+  orphaned record. This affected the `recovered` trigger's scoped call
+  directly (it force-resyncs by omitting `owner_id`, so the very next
+  regular tick would immediately re-flag that same light as external
+  again) and would have affected the manual-run case below the same way
+  had it shipped with the same "just omit `owner_id`" pattern.
 
+  Fixed with two changes, not one - either alone leaves a hole:
+  1. `force: bool = False` added to `EntityLookup.externally_set()`
+     (checked right after the `is_state` guard, before `owner_id` is
+     even inspected) and threaded through `build_groups()` - an
+     explicit bypass that still accepts `owner_id` alongside it, so the
+     write gets attributed properly instead of orphaned. `force` and
+     "omit `owner_id`" are no longer the same mechanism: force lets a
+     caller claim identity *and* skip the check in the same call;
+     omitting `owner_id` is now the fully-anonymous variant, unclaimed
+     by design.
+  2. `externally_set()`'s owner-comparison step now treats a recorded
+     `owner_id` of `None` as "doesn't count against anyone," not "counts
+     against everyone" - `last_owner is None: return False` before the
+     final `last_owner != owner_id` comparison. Needed regardless of (1)
+     for full backward compatibility, since "omit `owner_id` entirely"
+     remains a valid, already-shipped, already-tested force path in its
+     own right (e.g. a one-off Developer Tools call with no interest in
+     claiming anything) - without this, *that* path would still orphan
+     records that a later `owner_id`'d caller could trip over.
+
+  The blueprint was updated to use `force` properly instead of ever
+  omitting `owner_id` to force something: the `recovered` trigger's
+  scoped call now passes `owner_id: "{{ this.entity_id }}"` *and*
+  `force: true` together (see the `recovered` bullet above, revised as
+  part of this same change). A second, new case: **running the
+  automation manually** (hitting "Run" in the UI, or calling
+  `automation.trigger` directly - detected via `trigger is not defined`,
+  the same `is defined` guard `script_transition`/`just_recovered`
+  already used) now also passes `force: "{{ manual_run }}"` alongside
+  its normal `owner_id` on the main room-wide call - the user's own
+  follow-on ask right after owner_id shipped: "if it's ran manually it
+  should also not pass in an owner id so it'll always update," which
+  the verification question above caught before it could ship with the
+  same bug the `recovered` trigger already had.
 **Deployment / operational notes:**
 - pyscript is fully gone, both from this repo and the live host.
 - The dev git-sync automation (polling this repo for new commits and
