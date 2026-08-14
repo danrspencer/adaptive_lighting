@@ -7,9 +7,11 @@ compute_lighting_groups:
     unreachable lights, groups by multiplier, skips anything already
     within tolerance of the target, leaves externally-set lights alone
     (a light whose current context.id doesn't match what this
-    integration itself last wrote it with - a person, another
-    automation, or a device regaining power), and separates out lights
-    that need a two-step (brightness-then-colour) transition.
+    integration itself last wrote it with under the same owner_id - a
+    person, another automation, a device regaining power, or a
+    different owner_id entirely - see that field's own description),
+    and separates out lights that need a two-step (brightness-then-
+    colour) transition.
     Standalone - call this from your own automation, it doesn't require
     the adaptive_lighting blueprint in this repo.
   fields:
@@ -112,6 +114,20 @@ compute_lighting_groups:
         number:
           min: 0
           max: 100
+    owner_id:
+      name: Owner ID
+      description: >-
+        Identifies this caller for externally-set protection - e.g. an
+        automation passing its own {{ this.entity_id }}. Left unset, the
+        check is skipped entirely (every light is treated as free to
+        manage, regardless of what last touched it) - the explicit
+        force/override case. Set it, and a light is left alone once
+        anything other than a write recorded under this exact owner_id
+        has touched it since - a person, another automation, a device
+        regaining power, or an apply_lighting call using a different
+        owner_id (or none at all).
+      selector:
+        text:
 
 apply_lighting:
   name: Apply adaptive lighting
@@ -219,6 +235,20 @@ apply_lighting:
         number:
           min: 0
           max: 100
+    owner_id:
+      name: Owner ID
+      description: >-
+        Identifies this caller for externally-set protection - e.g. an
+        automation passing its own {{ this.entity_id }}. Left unset, the
+        check is skipped entirely (every light is treated as free to
+        manage, regardless of what last touched it) - the explicit
+        force/override case. Set it, and a light is left alone once
+        anything other than a write recorded under this exact owner_id
+        has touched it since - a person, another automation, a device
+        regaining power, or an apply_lighting call using a different
+        owner_id (or none at all).
+      selector:
+        text:
 
 compute_curve:
   name: Compute adaptive curve point

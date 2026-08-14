@@ -168,13 +168,16 @@ def test_multiplier_floors_at_one_never_accidentally_off():
 
 
 # Overrides: a light currently on whose live context.id doesn't match
-# the context.id this integration itself last wrote it with (per
-# write_tracking.LastWriteTracker) is left exactly alone, even if it
-# doesn't match the current adaptive target - regardless of *what*
-# changed it (a person, another automation with no context.user_id of
-# its own, a device regaining power) - checked fresh against live state
-# on every call, so nothing needs to be remembered here or explicitly
-# expired.
+# the context.id this integration itself last wrote it with under the
+# *same owner_id* (per write_tracking.LastWriteTracker) is left exactly
+# alone, even if it doesn't match the current adaptive target -
+# regardless of *what* changed it (a person, another automation with no
+# context.user_id of its own, a device regaining power, or a different
+# owner_id entirely) - checked fresh against live state on every call,
+# so nothing needs to be remembered here or explicitly expired.
+# build_groups' own owner_id defaults to None, which skips this check
+# altogether (every light is free to manage) - the explicit force path,
+# tested separately below.
 
 
 def test_externally_set_light_is_not_recommanded_even_when_mismatched():
@@ -187,6 +190,7 @@ def test_externally_set_light_is_not_recommanded_even_when_mismatched():
             }
         },
         last_write_context_ids={"light.a": "ctx-ours"},
+        last_write_owner_ids={"light.a": "ours"},
     )
     groups = build_groups(
         entities=["light.a"],
@@ -194,6 +198,7 @@ def test_externally_set_light_is_not_recommanded_even_when_mismatched():
         sensor_brightness=200,
         sensor_color_temp_kelvin=3000,
         lookup=lookup,
+        owner_id="ours",
     )
     assert groups[0].combined == []
     assert groups[0].two_step == []
@@ -206,6 +211,7 @@ def test_externally_set_light_is_protected_from_being_turned_off_too():
     lookup = make_lookup(
         states={"light.a": {"state": "on", "attributes": {}, "context_id": "ctx-someone-else"}},
         last_write_context_ids={"light.a": "ctx-ours"},
+        last_write_owner_ids={"light.a": "ours"},
     )
     groups = build_groups(
         entities=["light.a"],
@@ -213,6 +219,7 @@ def test_externally_set_light_is_protected_from_being_turned_off_too():
         sensor_brightness=200,
         sensor_color_temp_kelvin=3000,
         lookup=lookup,
+        owner_id="ours",
     )
     assert groups[0].needing_off == []
 
@@ -223,7 +230,7 @@ def test_no_write_record_is_not_treated_as_externally_set():
     # the very first tick before anything's been recorded - also what a
     # HA restart looks like before write_tracking.py's persisted store
     # reloads) - this light gets corrected normally rather than getting
-    # stuck unmanaged forever.
+    # stuck unmanaged forever, even though a real owner_id was given.
     lookup = make_lookup(
         states={
             "light.a": {
@@ -239,14 +246,16 @@ def test_no_write_record_is_not_treated_as_externally_set():
         sensor_brightness=200,
         sensor_color_temp_kelvin=3000,
         lookup=lookup,
+        owner_id="ours",
     )
     assert groups[0].combined == ["light.a"]
 
 
 def test_our_own_last_write_is_not_treated_as_externally_set():
-    # The light's current context.id matches what we last wrote it with
-    # - nothing has touched it since our own last apply_lighting call,
-    # so it's still ours to manage normally.
+    # The light's current context.id matches what we last wrote it with,
+    # under the same owner_id we're calling with now - nothing has
+    # touched it since our own last apply_lighting call, so it's still
+    # ours to manage normally.
     lookup = make_lookup(
         states={
             "light.a": {
@@ -256,6 +265,61 @@ def test_our_own_last_write_is_not_treated_as_externally_set():
             }
         },
         last_write_context_ids={"light.a": "ctx-ours"},
+        last_write_owner_ids={"light.a": "ours"},
+    )
+    groups = build_groups(
+        entities=["light.a"],
+        brightness_multipliers={},
+        sensor_brightness=200,
+        sensor_color_temp_kelvin=3000,
+        lookup=lookup,
+        owner_id="ours",
+    )
+    assert groups[0].combined == ["light.a"]
+
+
+def test_different_owner_id_is_treated_as_externally_set_even_with_matching_context():
+    # Nothing has touched the light since the recorded write (context.id
+    # still matches), but that write was made under a *different*
+    # owner_id (e.g. a different room's automation) - from this caller's
+    # perspective that's still someone else's write, not mine.
+    lookup = make_lookup(
+        states={
+            "light.a": {
+                "state": "on",
+                "attributes": {"brightness": 40, "color_temp_kelvin": 6000},
+                "context_id": "ctx-shared",
+            }
+        },
+        last_write_context_ids={"light.a": "ctx-shared"},
+        last_write_owner_ids={"light.a": "other_automation"},
+    )
+    groups = build_groups(
+        entities=["light.a"],
+        brightness_multipliers={},
+        sensor_brightness=200,
+        sensor_color_temp_kelvin=3000,
+        lookup=lookup,
+        owner_id="ours",
+    )
+    assert groups[0].combined == []
+
+
+def test_no_owner_id_forces_past_the_check():
+    # Omitting owner_id entirely is the explicit force/override path -
+    # the light is written regardless of what last touched it, even
+    # though there's a recorded write from a mismatched context under a
+    # different owner_id right here.
+    lookup = make_lookup(
+        states={
+            "light.a": {
+                "state": "on",
+                "attributes": {"brightness": 40, "color_temp_kelvin": 6000},
+                "context_id": "ctx-someone-else",
+            }
+        },
+        last_write_context_ids={"light.a": "ctx-ours"},
+        last_write_owner_ids={"light.a": "ours"},
     )
     groups = build_groups(
         entities=["light.a"],
@@ -274,6 +338,7 @@ def test_turning_the_light_off_ends_the_protection():
     lookup = make_lookup(
         states={"light.a": {"state": "off", "attributes": {}, "context_id": "ctx-someone-else"}},
         last_write_context_ids={"light.a": "ctx-ours"},
+        last_write_owner_ids={"light.a": "ours"},
     )
     groups = build_groups(
         entities=["light.a"],
@@ -281,6 +346,7 @@ def test_turning_the_light_off_ends_the_protection():
         sensor_brightness=200,
         sensor_color_temp_kelvin=3000,
         lookup=lookup,
+        owner_id="ours",
     )
     assert groups[0].combined == ["light.a"]
 
@@ -461,6 +527,7 @@ def test_rgb_external_override_and_reachability_still_apply():
             "light.unreachable": {"state": "unavailable", "attributes": {"supported_color_modes": ["rgb"]}},
         },
         last_write_context_ids={"light.overridden": "ctx-ours"},
+        last_write_owner_ids={"light.overridden": "ours"},
     )
     groups = build_groups(
         entities=["light.overridden", "light.unreachable"],
@@ -470,6 +537,7 @@ def test_rgb_external_override_and_reachability_still_apply():
         lookup=lookup,
         prefer_rgb_color=True,
         rgb_color=(255, 180, 107),
+        owner_id="ours",
     )
     assert groups[0].combined_rgb == []
     assert groups[0].two_step_rgb == []

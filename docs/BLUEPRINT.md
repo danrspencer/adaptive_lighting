@@ -63,6 +63,13 @@ in line automatically rather than left stuck at its last known state. A light wi
 (brand new, or right after this integration's own restart) is treated the same way — free to manage — rather than
 getting stuck unmanaged until it happens to change some other way.
 
+The blueprint identifies itself to this check via `apply_lighting`'s `owner_id` parameter, set to its own
+`this.entity_id` — so a room's automation only ever recognises its *own* previous writes as "not overridden";
+even a write from a different room's automation counts as external. There's no blueprint input for this, and
+none needed — it's automatic per room. If you want to deliberately force a light back under adaptive control
+without turning it off first (e.g. from a script you run by hand), call `apply_lighting` directly with no
+`owner_id` at all — see [docs/HELPERS.md](HELPERS.md#override-protection).
+
 ## Scene handoff
 
 Two ways to hand a room over to a scene instead of the adaptive curve, usable together:
