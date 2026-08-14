@@ -85,21 +85,25 @@ blueprint:
             template: {}
         morning_scene:
           name: Morning Scene (Optional)
+          default: null
           selector:
             entity:
               domain: scene
         day_scene:
           name: Day Scene (Optional)
+          default: null
           selector:
             entity:
               domain: scene
         evening_scene:
           name: Evening Scene (Optional)
+          default: null
           selector:
             entity:
               domain: scene
         night_scene:
           name: Night Scene (Optional)
+          default: null
           selector:
             entity:
               domain: scene
