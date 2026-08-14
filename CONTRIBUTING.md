@@ -116,6 +116,8 @@ The pure-Python core (`curve.py`, `grouping.py`, `scenes.py`) and the integratio
 are both written, unit tested, and **installed via HACS and confirmed working against a live Home Assistant
 instance** — `compute_lighting_groups`/`compute_curve`/`compute_scene_coverage` verified registered and
 functionally correct, the blueprint's full compute-groups-then-turn-on-lights path exercised end to end
-against real hardware, and the day-phase/curve sensors deployed and iterated on live (multi-sensor subentries,
-per-sensor devices). `apply_lighting` and RGB colour support (`prefer_rgb_color`) are unit tested but **not yet
-exercised against a live instance**. See CLAUDE.md's "Current status" section for the full rundown.
+against real hardware, the day-phase/curve sensors deployed and iterated on live (multi-sensor subentries,
+per-sensor devices), and `apply_lighting`'s RGB colour support (`prefer_rgb_color`) confirmed live end to end -
+both the routing decision (a real bulb correctly bucketed by its actual `supported_color_modes`) and the
+`light.turn_on` dispatch itself (a real bulb landing in `xy` colour mode with the expected `rgb_color`). See
+CLAUDE.md's "Current status" section for the full rundown.
