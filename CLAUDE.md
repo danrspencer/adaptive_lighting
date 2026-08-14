@@ -109,15 +109,18 @@ meet.
   the specific adaptive lighting phase names, but I think it's time."
   Still just a *default* - it's a template input like `scene_template`/
   `brightness_multiplier_template`, so anyone who doesn't want this
-  coupling can override it with their own condition, or a flat
-  `{{ true }}`/`{{ false }}`, same as before. Renamed from
-  `prefer_rgb_color` (a plain boolean) since the value is now a
-  template, matching the existing `_template`-suffix naming convention
-  for optional template inputs - a room automation with the old
-  `prefer_rgb_color: true` override still works unchanged (HA's
-  `variables:` block only template-renders string values, so a stored
-  literal boolean passes through as-is), just without the new
-  phase-based default until that input's cleared.
+  coupling can override it with a flat `{{ true }}` (there's no
+  separate "always on" toggle any more - a template already covers it:
+  set all four phases to prefer RGB, same as the old boolean set to
+  on). Renamed from `prefer_rgb_color` (a plain boolean) to
+  `prefer_rgb_color_template`, matching the existing `_template`-suffix
+  naming convention - a deliberate breaking rename, not an in-place
+  type change: a room automation still holding the old
+  `prefer_rgb_color: true` input has a now-unrecognized key, same
+  "misconfigured until updated" situation `docs/BLUEPRINT.md` already
+  documents for the earlier `scene_sensor`/`scene_name_prefix` rename.
+  Every already-migrated room automation needs that old key removed
+  outright (not left blank) as part of deploying this.
 
 **Lives in `custom_components/adaptive_lighting_helpers/` (a standalone
 HACS integration, four services - see "Current status" for the current

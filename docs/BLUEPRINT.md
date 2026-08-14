@@ -132,6 +132,8 @@ Note: if migrating from an older, pre-rewrite version of this blueprint, the inp
 inputs will show as misconfigured until updated. Worth doing deliberately, room by room, rather than all at once.
 
 Note: `prefer_rgb_color` (a fixed on/off toggle) was renamed `prefer_rgb_color_template` (a template) so it could
-default per phase instead of a single fixed value - a room automation still setting the old `prefer_rgb_color: true`
-override keeps behaving exactly as before (always on), just without the new phase-based default. Clear that input
-(leave it blank) to pick up the new default, or replace it with your own template.
+default per phase instead of a single fixed value - same breaking-rename situation as `scene_sensor`/
+`scene_name_prefix` above, every room automation still using the old `prefer_rgb_color` input will show as
+misconfigured until updated. There's no dedicated "always on" option any more, since a template already covers
+it - `{{ true }}` (or `{{ states(adaptive_sensor) in ['Morning', 'Day', 'Evening', 'Night'] }}`, equivalent) prefers
+RGB in every phase, the same as the old toggle set to on.
