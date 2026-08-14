@@ -76,9 +76,16 @@ class EntityLookup:
         manage either way - the same "don't block on missing
         provenance" behaviour a restart used to fall back to under the
         old check. Checked fresh against live state every call, so
-        there's nothing to expire: once a light's state changes again
-        for any other reason (it's turned off, or a device recovers
-        from unavailable), this naturally stops being true on its own."""
+        there's nothing to expire: once a light is turned off, this
+        naturally stops being true on its own (the is_state check above
+        fails first). A device recovering from unavailable is the
+        opposite case - its own reconnect state report is itself a
+        fresh-context write, so it *becomes* externally-set rather than
+        stops being it, and stays that way indefinitely at this layer
+        alone (nothing here ever un-marks it). The blueprint's own
+        `recovered` trigger is what actually resolves that case, by
+        force-resyncing just that entity - see docs/BLUEPRINT.md's
+        "Override detection" section."""
         if not self.is_state(entity_id, "on"):
             return False
         if owner_id is None:

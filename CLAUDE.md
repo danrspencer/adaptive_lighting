@@ -836,6 +836,50 @@ designs were explored:
   if another sensor's still on, that branch's conditions fail and
   `default:` re-applies adaptive lighting instead, which is a harmless
   no-op if the light's already correct.
+- **`recovered` trigger + scoped force-resync, unit-untestable (pure
+  blueprint YAML), not yet confirmed live.** User-caught gap, found by
+  directly asking "if the zigbee drops off the network then comes back
+  again - will that track as someone else having changed the entity?"
+  while reviewing the owner_id feature above. Answer: yes, and this
+  exposed a real inconsistency in what had just been written - the
+  context.id-based check's own `externally_set()` docstring already
+  correctly listed "a device regaining power under a fresh context" as
+  one of the things *detected* as external, but both `docs/BLUEPRINT.md`
+  and that same docstring's closing sentence claimed the opposite (a
+  device recovering "isn't treated as an override" / "naturally stops"
+  the protection) - true under the old `context.user_id` check (a
+  reconnect carries no user_id either), never re-verified against the
+  new `context.id` one when it was rewritten, and actually backwards:
+  a reconnect's fresh context *is* what makes it look external, and
+  nothing at the `grouping.py` layer ever un-marks it - a light stuck
+  this way would never resync on its own. Both the doc claim and the
+  self-contradicting docstring sentence are corrected as part of this.
+  Fixed in the blueprint (the user's explicit call, not the Python
+  service) via a new `recovered` trigger - a `platform: template`
+  trigger mirroring the removed `manual` trigger's own room_target ->
+  light-entity-list resolution boilerplate (confirming `trigger_variables:
+  room_target: !input room_target` needed reinstating for it), firing
+  when any of the room's lights transitions from `unavailable`/`unknown`
+  to a real state. Deliberately **scoped to just `trigger.entity_id`,
+  not the whole room** via a second, additional `apply_lighting` call
+  with no `owner_id` (the existing room-wide call still runs normally
+  first, with `owner_id`, so it still protects everyone else) - an
+  earlier draft of this fix would have force-resynced the *entire* room
+  whenever any single light blipped, which would have clobbered a
+  genuinely different light's real manual override in the same room
+  just because something else nearby recovered from a drop; caught
+  before implementing, not after. No native purpose-specific trigger
+  covers "entity recovered from unavailable" (checked
+  `automation-patterns.md`'s full trigger catalogue first, per the
+  best-practices skill's own "check purpose-specific before templating"
+  priority) - a plain `state` trigger's own `entity_id:` can't be
+  computed from `room_target` (device/area) dynamically either, the
+  same constraint that shaped the removed `manual` trigger, so a
+  template trigger doing its own resolution was the only path. Needs a
+  live instance to confirm - can't be exercised by unit tests (pure
+  Jinja/YAML, no Python here) or easily simulated (can't force a real
+  device to report `unavailable` on demand the way a service call can
+  simulate every other case tested so far).
 
 **Deployment / operational notes:**
 - pyscript is fully gone, both from this repo and the live host.

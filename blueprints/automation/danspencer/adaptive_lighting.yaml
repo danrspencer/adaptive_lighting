@@ -204,6 +204,14 @@ blueprint:
 mode: restart
 max_exceeded: silent
 
+# Available to trigger definitions themselves (trigger: / condition:),
+# unlike the variables: block below which isn't computed until after a
+# trigger has fired - needed here so the `recovered` trigger's own
+# template (which can't call a service, so can't reuse resolved_entities)
+# can resolve room_target into light entities itself.
+trigger_variables:
+  room_target: !input room_target
+
 trigger:
   # The live brightness/colour-temperature sensor; fires roughly once a
   # minute. With no to:/from:/attribute: filter, a state trigger fires on
@@ -240,12 +248,59 @@ trigger:
   - id: reconcile
     platform: time_pattern
     minutes: !input reconcile_interval
+  - id: recovered
+    platform: template
+    value_template: >
+      {#
+        Fires when one of our lights recovers from unavailable/unknown -
+        a Zigbee mesh drop, or a physical power switch cutting and then
+        restoring power to the room. Used below to force a resync of
+        just that light past whatever override-protection record it had
+        before it dropped off: the device's own reconnect state report
+        gets an unrelated fresh context.id, indistinguishable from a
+        real external change to Adaptive Lighting Helpers - so left
+        alone, it would otherwise never resync on its own (see
+        docs/BLUEPRINT.md's "Override detection" section).
+      #}
+      {% set ns = namespace(entities=[]) %}
+      {% if room_target is not none %}
+        {% if room_target.entity_id is defined %}
+          {% set eids = room_target.entity_id if room_target.entity_id is iterable and room_target.entity_id is not string else [room_target.entity_id] %}
+          {% set ns.entities = ns.entities + (eids | select('match', '^light\.') | list) %}
+        {% endif %}
+        {% if room_target.device_id is defined %}
+          {% set dids = room_target.device_id if room_target.device_id is iterable and room_target.device_id is not string else [room_target.device_id] %}
+          {% for d in dids %}
+            {% set ns.entities = ns.entities + (device_entities(d) | select('match', '^light\.') | list) %}
+          {% endfor %}
+        {% endif %}
+        {% if room_target.area_id is defined %}
+          {% set aids = room_target.area_id if room_target.area_id is iterable and room_target.area_id is not string else [room_target.area_id] %}
+          {% for a in aids %}
+            {% set ns.entities = ns.entities + (area_entities(a) | select('match', '^light\.') | list) %}
+          {% endfor %}
+        {% endif %}
+      {% endif %}
+      {% set light_entity_ids = ns.entities | unique | list %}
+      {% set watch = namespace(items=[]) %}
+      {% for light_id in light_entity_ids %}
+        {# Touching each entity's state here is what makes this
+           template trigger re-evaluate whenever any of them changes #}
+        {% set watch.items = watch.items + [states(light_id)] %}
+      {% endfor %}
+      {{ trigger is defined
+         and trigger.entity_id in light_entity_ids
+         and trigger.from_state is not none
+         and trigger.from_state.state in ['unavailable', 'unknown']
+         and trigger.to_state is not none
+         and trigger.to_state.state not in ['unavailable', 'unknown'] }}
 
 condition:
   - or:
       # Any trigger other than adaptive/extra/motion_on always passes
       # here; motion_off/reconcile have their own gating logic in
-      # action: below
+      # action: below, and recovered runs unconditionally (deliberately
+      # not occupancy-gated - see the force-resync step in action: below)
       - condition: not
         conditions:
           - condition: trigger
@@ -321,6 +376,11 @@ variables:
     {% else %}
       {{ motion_on_transition }}
     {% endif %}
+  # This tick is running because the `recovered` trigger fired - used
+  # below to also force-resync just the entity that recovered (see the
+  # dedicated action: step for it), past whatever stale
+  # override-protection record it had before it dropped off.
+  just_recovered: "{{ trigger is defined and trigger.id is defined and trigger.id == 'recovered' }}"
   # Brightness/colour temperature themselves are no longer extracted
   # here - adaptive_lighting_helpers.apply_lighting reads them straight
   # off adaptive_sensor (and applies rgb_color, tolerance-checking,
@@ -584,3 +644,23 @@ action:
           # light alone. `this` is this automation's own state object,
           # so this.entity_id is stable per room and needs no input.
           owner_id: "{{ this.entity_id }}"
+      - if:
+          - "{{ just_recovered }}"
+        then:
+          # The call above still used owner_id, so it just skipped the
+          # entity that recovered - it still carries the write record
+          # from before it dropped off, and its live context.id no
+          # longer matches (the device's own reconnect state report got
+          # a fresh, unrelated one). Force *just* that entity past it -
+          # deliberately scoped to trigger.entity_id alone, not the
+          # whole room, so a genuinely different light in this room
+          # that's under its own real manual override isn't clobbered
+          # just because something else nearby blipped.
+          - alias: "Force-resync the light that just recovered from unavailable"
+            action: adaptive_lighting_helpers.apply_lighting
+            data:
+              entities: "{{ [trigger.entity_id] }}"
+              brightness_multipliers: "{{ brightness_multipliers }}"
+              sensor_entity_id: "{{ adaptive_sensor }}"
+              transition: "{{ script_transition }}"
+              prefer_rgb_color: "{{ prefer_rgb_color }}"
