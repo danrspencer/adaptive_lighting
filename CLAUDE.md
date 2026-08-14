@@ -98,6 +98,26 @@ meet.
   (`ha_get_automation_traces`), used heavily throughout this project to
   diagnose issues live. Losing that observability isn't worth it for
   logic that isn't actually that bad.
+- **The blueprint's `prefer_rgb_color_template` input is a deliberate,
+  one-off exception to "the blueprint doesn't know phase names."** Its
+  default - `{{ states(adaptive_sensor) in ['Evening', 'Night'] }}` -
+  hardcodes the four phase-name strings `curve.py`/`sensor.py` produce,
+  something every other blueprint input/condition/trigger up to this
+  point deliberately avoided (target resolution, occupancy, scene
+  handoff - none of it cares what phase it is). Accepted anyway,
+  explicit user call: "I had been avoiding coupling the blueprint to
+  the specific adaptive lighting phase names, but I think it's time."
+  Still just a *default* - it's a template input like `scene_template`/
+  `brightness_multiplier_template`, so anyone who doesn't want this
+  coupling can override it with their own condition, or a flat
+  `{{ true }}`/`{{ false }}`, same as before. Renamed from
+  `prefer_rgb_color` (a plain boolean) since the value is now a
+  template, matching the existing `_template`-suffix naming convention
+  for optional template inputs - a room automation with the old
+  `prefer_rgb_color: true` override still works unchanged (HA's
+  `variables:` block only template-renders string values, so a stored
+  literal boolean passes through as-is), just without the new
+  phase-based default until that input's cleared.
 
 **Lives in `custom_components/adaptive_lighting_helpers/` (a standalone
 HACS integration, four services - see "Current status" for the current

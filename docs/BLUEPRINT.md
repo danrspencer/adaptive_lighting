@@ -89,10 +89,16 @@ light or device.
 
 ## RGB colour
 
-Prefer RGB Color (off by default) sends RGB colour instead of colour temperature to lights that support it -
-auto-detected per light, nothing to configure per bulb. Some bulbs render colour more accurately in RGB mode than
-colour-temperature mode, which is the main reason to turn it on. Lights without RGB support are unaffected
-either way.
+Prefer RGB Color sends RGB colour instead of colour temperature to lights that support it - auto-detected per
+light, nothing to configure per bulb. Some bulbs render colour more accurately in RGB mode than colour-temperature
+mode, which is the main reason to turn it on. Lights without RGB support are unaffected either way.
+
+It's a template, not a fixed on/off - the default is `{{ states(adaptive_sensor) in ['Evening', 'Night'] }}`, so
+RGB is used automatically for Evening/Night (colour reads as "relaxed/night" better than a plain warm white) and
+skipped for Morning/Day (colour temperature is closer to neutral daylight, which fits those phases better).
+Override with your own template if you want it on/off unconditionally, or keyed off something else entirely -
+`adaptive_sensor` is in scope, so `{{ true }}`/`{{ false }}` or any other condition works the same as any other
+template input here.
 
 ## Reachability and redundancy filtering
 
@@ -116,7 +122,7 @@ Add an automation using the "Adaptive Lighting" blueprint per room, and set:
 | Additional Triggers | no | Entities that trigger immediate re-evaluation (see [Additional triggers](#additional-triggers)) |
 | Scene Template | no | Template returning a scene entity_id to hand the room over to |
 | Brightness Multiplier Template | no | Per-light brightness scaling |
-| Prefer RGB Color | no | Send RGB colour instead of colour temperature to lights that support it (see [RGB colour](#rgb-colour)) |
+| Prefer RGB Color | no | Template for whether to send RGB colour instead of colour temperature to lights that support it - defaults to on for Evening/Night, off for Morning/Day (see [RGB colour](#rgb-colour)) |
 | Wait time | no | Seconds to keep lights on after motion stops (default 120) |
 | Reconcile Interval | no | Self-healing check interval (default every 5 minutes) |
 | Motion On / Motion Off / Adaptive Transition | no | Transition durations for each trigger type |
@@ -124,3 +130,8 @@ Add an automation using the "Adaptive Lighting" blueprint per room, and set:
 Note: if migrating from an older, pre-rewrite version of this blueprint, the inputs have changed
 (`scene_sensor`/`scene_name_prefix` → `scene_template`/`extra_triggers`) — every room automation using the old
 inputs will show as misconfigured until updated. Worth doing deliberately, room by room, rather than all at once.
+
+Note: `prefer_rgb_color` (a fixed on/off toggle) was renamed `prefer_rgb_color_template` (a template) so it could
+default per phase instead of a single fixed value - a room automation still setting the old `prefer_rgb_color: true`
+override keeps behaving exactly as before (always on), just without the new phase-based default. Clear that input
+(leave it blank) to pick up the new default, or replace it with your own template.

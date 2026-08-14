@@ -56,15 +56,18 @@ blueprint:
       default: "{{ {} }}"
       selector:
         template: {}
-    prefer_rgb_color:
+    prefer_rgb_color_template:
       name: Prefer RGB Color (Optional)
       description: >
-        Send RGB colour instead of colour temperature to lights that
-        support it (auto-detected).
+        Template returning true to send RGB colour instead of colour
+        temperature to lights that support it (auto-detected). Defaults
+        to on for Evening/Night and off for Morning/Day - colour reads
+        as "relaxed/night" better than a plain colour-temperature warm
+        white does, but isn't worth it for the rest of the day.
         [Details](https://github.com/danrspencer/adaptive_lighting/blob/main/docs/BLUEPRINT.md#rgb-colour).
-      default: false
+      default: "{{ states(adaptive_sensor) in ['Evening', 'Night'] }}"
       selector:
-        boolean: {}
+        template: {}
     no_motion_wait:
       name: Wait time
       description: Time to keep the light on after motion stops.
@@ -273,7 +276,7 @@ variables:
   scene_template: !input scene_template
   adaptive_transition: !input adaptive_transition
   motion_on_transition: !input motion_on_transition
-  prefer_rgb_color: !input prefer_rgb_color
+  prefer_rgb_color: !input prefer_rgb_color_template
   script_transition: >
     {# Slow transition for adaptive/scene/extra-trigger updates; snappier for motion or a manual run #}
     {% if trigger is defined and trigger.id is defined and trigger.id in ['adaptive', 'extra'] %}
