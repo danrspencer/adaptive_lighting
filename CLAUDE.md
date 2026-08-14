@@ -188,16 +188,56 @@ meet.
   automations; `prefer_rgb_color_template` → `rgb_phases` didn't, since
   no automation had set that input explicitly.
 
-  **Deferred: condition-selector inputs.** HA has a
-  `selector: condition: {}` type - confirmed real via
-  `home-assistant.io`'s selector docs - that surfaces the actual visual
-  condition-builder UI (the same one used for automation conditions) and
-  produces a native condition-config list, not free text, usable
-  directly in a `condition:`/`if:` block. Could give per-phase scene/
-  brightness overrides (or other rules) a builder instead of a template -
-  explicitly deferred by the user when this design was discussed, not
-  folded into the current inputs. Worth revisiting; this note exists so
-  it doesn't need re-researching from scratch.
+  **Condition/action-selector inputs for scene/brightness overrides -
+  investigated properly, not pursued.** HA has `selector: condition: {}`
+  and `selector: action: {}` types that surface the real visual
+  condition/action-builder UI and produce native condition/action-config
+  lists, not free text - real, and initially looked like a promising way
+  to give `scene_template`/`brightness_multiplier_template` a
+  no-Jinja-required builder. Pulled the actual substitution source
+  (`homeassistant/components/blueprint/models.py` +
+  `annotatedyaml`'s `input.py`, straight from `home-assistant/core` and
+  PyPI, not guessed) to answer two concrete questions and settle this for
+  good:
+  - **A blueprint input's `default:` cannot reference another input's
+    real value.** `inputs_with_default` builds its substitution map with
+    one flat pass - `inputs_with_default[inp] = blueprint_input[CONF_DEFAULT]`,
+    no substitution run over the default first - and even though the
+    later `substitute()` call walks the *entire* blueprint data tree
+    (technically including the `blueprint.input.*.default` subtree
+    itself), that whole `blueprint:` key gets discarded
+    (`combined.pop(CONF_BLUEPRINT)`) before the real automation config is
+    assembled. So a literal `!input adaptive_sensor` placed inside
+    another input's own default would never resolve to anything real -
+    ruling out "pre-populate a condition builder already wired to
+    whichever sensor the user picked," the specific idea that prompted
+    this investigation.
+  - **Brightness has no viable selector-based replacement, full stop.**
+    `brightness_multiplier_template` returns a *value* (a dict of
+    `entity_id → multiplier`) - neither `action` (a list of service
+    calls) nor `condition` (a list of boolean checks) can produce that
+    shape. Not a scoping choice, a hard type mismatch.
+  - **Scene handoff is technically convertible, but only by giving up
+    gap-fill.** A `condition:` selector's value can only be evaluated
+    natively (a `condition:`/`if:` position) - no template function
+    evaluates a raw condition-config list from Jinja. Today's
+    `desired_scene` → `scene_covered_entities` → `scene_valid` →
+    `scene_active` → `adaptive_target_entities` chain is one single
+    Jinja pass in `variables:`, which is exactly what lets
+    `scene_template` "gap-fill" (activate the scene, adaptively light
+    whatever it doesn't cover). A native condition check happens
+    structurally too late to feed back into that same pass, so a
+    condition-selector override could only be an early branch that, when
+    triggered, takes over the *entire* tick with no adaptive fallback
+    for lights it doesn't cover - a real behavioural regression from
+    `scene_template`'s current gap-fill.
+
+  Presented both findings to the user directly; explicit call: not worth
+  it. `scene_template`/`brightness_multiplier_template` stay exactly as
+  they are. Don't re-propose without new information changing this
+  trade-off - same standing this file already gives the earlier
+  "Considered and explicitly rejected: extracting target resolution"
+  decision.
 
 **Lives in `custom_components/adaptive_lighting_helpers/` (a standalone
 HACS integration, four services - see "Current status" for the current
