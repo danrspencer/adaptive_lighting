@@ -608,7 +608,7 @@ working against the live instance:
   low risk, since it's HA's own standard `Store` helper, the same
   mechanism used throughout HA core.
 - **`owner_id` added to `apply_lighting`/`compute_lighting_groups`,
-  unit tested, not yet confirmed live.** User-driven follow-up, surfaced
+  unit tested and now confirmed live.** User-driven follow-up, surfaced
   by testing the override-detection redesign above: with the context.id
   check in place, a *manual* call to `apply_lighting` (e.g. from
   Developer Tools, after deliberately changing a light some other way)
@@ -637,6 +637,23 @@ working against the live instance:
   same change, not a follow-up, since otherwise every room automation's
   regular tick would itself count as an unkeyed force call and the
   override protection just shipped would go dark immediately.
+  **Confirmed live against `light.bedroom_hall_spot_1`**, deployed
+  end-to-end (HACS download, full restart since Python changed,
+  blueprint re-imported at the merge commit and confirmed to carry
+  `owner_id: "{{ this.entity_id }}"`): seeded a write under
+  `owner_id: "owner_a"` via `apply_lighting`, then confirmed via the
+  read-only `compute_lighting_groups` planner (no risk of an extra real
+  write) that a mismatched-target check under `owner_id: "owner_b"`
+  excluded the light (`combined: []`) while the identical check under
+  `owner_id: "owner_a"` included it (`combined: [...]`) - proving
+  context.id-unchanged-but-different-owner is correctly treated as
+  external. Separately confirmed with real writes that a context change
+  (a direct `light.turn_on`, simulating an external touch) still blocks
+  a subsequent `apply_lighting` call even when passed the *same*
+  `owner_id` that originally claimed it - context.id remains the
+  primary signal, exactly as designed - and that omitting `owner_id`
+  entirely (force) then successfully wrote through regardless, bringing
+  the light back to the adaptive target.
 - RGB colour (`prefer_rgb_color`) is implemented, unit tested, and now
   **fully confirmed live end-to-end** - both the *routing decision*
   (`compute_lighting_groups` correctly bucketed a real bulb into
