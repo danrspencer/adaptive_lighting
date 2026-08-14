@@ -12,8 +12,12 @@ anything about how that service is implemented.
 
 Tracks a target brightness and Kelvin value that follows the [Morning/Day/Evening/Night schedule](../README.md#why-four-phases-not-a-continuous-curve),
 applied roughly once a minute while the room is occupied, so lights drift with the schedule instead of jumping.
-The Adaptive Lighting Sensor input isn't limited to this integration's own sensor - any entity following the
-[attribute contract in docs/HELPERS.md](HELPERS.md#bring-your-own-sensor) works.
+`apply_lighting` itself isn't limited to this integration's own sensor - any entity following the
+[attribute contract in docs/HELPERS.md](HELPERS.md#bring-your-own-sensor) works, and that's still true here. The
+Adaptive Lighting Sensor input's own picker, though, is filtered to just this integration's sensors (so you don't
+have to hunt through every sensor in the house to find the right one) - a hand-written "bring your own" sensor
+won't show up in that dropdown. It still works if you point at it via the automation's **Edit in YAML** view
+instead of the picker.
 
 The [dashboard curve card](../README.md#previewing-the-dashboard-card) also plots today's actual sunrise/sunset
 (from `sun.sun`) against the schedule, so it's easy to see at a glance how far the configured boundaries and
@@ -55,22 +59,41 @@ than left stuck at its last known state.
 
 ## Scene handoff
 
-An optional template returns the entity_id of a scene to activate instead of the adaptive curve — for example,
-`scene.kitchen_night` when a day-phase sensor reads `Night`. The template is written directly by whoever sets up
-the room, so the mapping is explicit rather than guessed from a naming convention. A scene only qualifies if
-every entity it touches is within the blueprint's own scope (the controlled lights, plus sibling entities on the
-same device, such as a light strip's effect selector); a scene reaching outside that scope, or one that doesn't
-exist (a typo, a renamed scene), is treated the same as the template returning nothing.
+Two ways to hand a room over to a scene instead of the adaptive curve, usable together:
+
+- **Per-phase scene pickers** - four optional entity pickers, one per phase (e.g. pick `scene.kitchen_night` for
+  Night). The simple, explicit case: no template to write.
+- **Scene Template** - an optional template returning the entity_id of a scene to activate, for cases a phase
+  alone can't express - for example, a different scene while the TV is on, regardless of what phase it is. Written
+  directly by whoever sets up the room, so the mapping is explicit rather than guessed from a naming convention.
+
+**The template wins whenever it returns a valid scene** - the matching phase picker is only used as the fallback,
+for phases the template doesn't have an opinion on (or when no template is set at all). A scene only qualifies -
+from either source - if every entity it touches is within the blueprint's own scope (the controlled lights, plus
+sibling entities on the same device, such as a light strip's effect selector); a scene reaching outside that
+scope, or one that doesn't exist (a typo, a renamed scene), is treated the same as returning nothing.
 
 ## Per-light brightness scaling
 
-An optional template maps `entity_id` to a brightness multiplier:
+Two ways to scale brightness down, usable together:
 
-| Value | Effect |
-|---|---|
-| a number | scales that light's brightness, floored at 1 |
-| `0` | turns the light off during the adaptive step |
-| `null` / `false` | skips the light entirely on power-on (for another automation or a fixed scene to own), but still includes it when the room turns off |
+- **Per-phase "lights off" lists** - four optional multi-entity pickers, one per phase. Any light picked for the
+  current phase gets turned off during the adaptive step - the simple, explicit case for "this light should
+  always be off during Night," with no template to write.
+- **Brightness Multiplier Template** - an optional template mapping `entity_id` to a brightness multiplier, for
+  anything the lists above can't express (a specific dim level rather than fully off, or a condition unrelated to
+  phase - illuminance, a TV being on, etc.):
+
+  | Value | Effect |
+  |---|---|
+  | a number | scales that light's brightness, floored at 1 |
+  | `0` | turns the light off during the adaptive step |
+  | `null` / `false` | skips the light entirely on power-on (for another automation or a fixed scene to own), but still includes it when the room turns off |
+
+**The template's own per-entity values always win over the phase lists** on any light both mention - the lists
+only fill in lights the template doesn't already cover. This is additive, not a replacement: a room whose
+template already fully covers its own dimming logic doesn't need the phase lists at all, and adding one only
+affects lights the template leaves untouched.
 
 ## Additional triggers
 
@@ -89,16 +112,14 @@ light or device.
 
 ## RGB colour
 
-Prefer RGB Color sends RGB colour instead of colour temperature to lights that support it - auto-detected per
-light, nothing to configure per bulb. Some bulbs render colour more accurately in RGB mode than colour-temperature
-mode, which is the main reason to turn it on. Lights without RGB support are unaffected either way.
+Prefer RGB During is a multi-select - pick which phases send RGB colour instead of colour temperature to lights
+that support it (auto-detected per light, nothing to configure per bulb). Some bulbs render colour more
+accurately in RGB mode than colour-temperature mode, which is the main reason to turn it on. Lights without RGB
+support are unaffected either way.
 
-It's a template, not a fixed on/off - the default is `{{ states(adaptive_sensor) in ['Evening', 'Night'] }}`, so
-RGB is used automatically for Evening/Night (colour reads as "relaxed/night" better than a plain warm white) and
-skipped for Morning/Day (colour temperature is closer to neutral daylight, which fits those phases better).
-Override with your own template if you want it on/off unconditionally, or keyed off something else entirely -
-`adaptive_sensor` is in scope, so `{{ true }}`/`{{ false }}` or any other condition works the same as any other
-template input here.
+Defaults to Evening and Night selected, Morning and Day not - colour reads as "relaxed/night" better than a
+plain warm white does, but isn't worth it for the rest of the day. Select all four (or none) if you want it
+on/off unconditionally.
 
 ## Reachability and redundancy filtering
 
@@ -117,12 +138,17 @@ Add an automation using the "Adaptive Lighting" blueprint per room, and set:
 
 | Input | Required | Description |
 |---|---|---|
-| Adaptive Lighting Sensor | yes | Sensor providing brightness/colour temperature |
+| Adaptive Lighting Sensor | yes | Sensor providing brightness/colour temperature - filtered to this integration's own sensors (see [Brightness & colour temperature schedule](#brightness--colour-temperature-schedule) for the "bring your own sensor" case) |
 | Room | no | Entity/device/area/floor/label - lights within it are controlled, occupancy sensors within it govern on/off (see [One target, two jobs](#one-target-two-jobs)) |
 | Additional Triggers | no | Entities that trigger immediate re-evaluation (see [Additional triggers](#additional-triggers)) |
-| Scene Template | no | Template returning a scene entity_id to hand the room over to |
-| Brightness Multiplier Template | no | Per-light brightness scaling |
-| Prefer RGB Color | no | Template for whether to send RGB colour instead of colour temperature to lights that support it - defaults to on for Evening/Night, off for Morning/Day (see [RGB colour](#rgb-colour)) |
+| **Colour** section | | |
+| Prefer RGB During | no | Phases to send RGB colour instead of colour temperature to lights that support it - defaults to Evening/Night selected (see [RGB colour](#rgb-colour)) |
+| **Scene Handoff** section | | |
+| Scene Template | no | Template returning a scene entity_id to hand the room over to - wins over the phase pickers below when it returns one |
+| Morning / Day / Evening / Night Scene | no | Per-phase scene to hand the room over to - the fallback for phases Scene Template doesn't cover (see [Scene handoff](#scene-handoff)) |
+| **Brightness Scaling** section | | |
+| Brightness Multiplier Template | no | Per-light brightness scaling - its own per-entity values win over the phase lists below |
+| Lights Off During Morning / Day / Evening / Night | no | Lights to turn off during that phase - fills in whatever Brightness Multiplier Template doesn't already cover (see [Per-light brightness scaling](#per-light-brightness-scaling)) |
 | Wait time | no | Seconds to keep lights on after motion stops (default 120) |
 | Reconcile Interval | no | Self-healing check interval (default every 5 minutes) |
 | Motion On / Motion Off / Adaptive Transition | no | Transition durations for each trigger type |
@@ -131,9 +157,8 @@ Note: if migrating from an older, pre-rewrite version of this blueprint, the inp
 (`scene_sensor`/`scene_name_prefix` → `scene_template`/`extra_triggers`) — every room automation using the old
 inputs will show as misconfigured until updated. Worth doing deliberately, room by room, rather than all at once.
 
-Note: `prefer_rgb_color` (a fixed on/off toggle) was renamed `prefer_rgb_color_template` (a template) so it could
-default per phase instead of a single fixed value - same breaking-rename situation as `scene_sensor`/
-`scene_name_prefix` above, every room automation still using the old `prefer_rgb_color` input will show as
-misconfigured until updated. There's no dedicated "always on" option any more, since a template already covers
-it - `{{ true }}` (or `{{ states(adaptive_sensor) in ['Morning', 'Day', 'Evening', 'Night'] }}`, equivalent) prefers
-RGB in every phase, the same as the old toggle set to on.
+Note: `prefer_rgb_color_template` (a template) was replaced by **Prefer RGB During** (a multi-select of phases) -
+same breaking-rename situation as `scene_sensor`/`scene_name_prefix` above, every room automation still using the
+old `prefer_rgb_color_template` input will show as misconfigured until updated. There's no template fallback for
+this one any more - select all four phases if you want RGB unconditionally, the same as the old template set to
+`{{ true }}`.

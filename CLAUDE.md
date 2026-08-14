@@ -98,29 +98,99 @@ meet.
   (`ha_get_automation_traces`), used heavily throughout this project to
   diagnose issues live. Losing that observability isn't worth it for
   logic that isn't actually that bad.
-- **The blueprint's `prefer_rgb_color_template` input is a deliberate,
-  one-off exception to "the blueprint doesn't know phase names."** Its
-  default - `{{ states(adaptive_sensor) in ['Evening', 'Night'] }}` -
-  hardcodes the four phase-name strings `curve.py`/`sensor.py` produce,
-  something every other blueprint input/condition/trigger up to this
-  point deliberately avoided (target resolution, occupancy, scene
-  handoff - none of it cares what phase it is). Accepted anyway,
-  explicit user call: "I had been avoiding coupling the blueprint to
-  the specific adaptive lighting phase names, but I think it's time."
-  Still just a *default* - it's a template input like `scene_template`/
-  `brightness_multiplier_template`, so anyone who doesn't want this
-  coupling can override it with a flat `{{ true }}` (there's no
-  separate "always on" toggle any more - a template already covers it:
-  set all four phases to prefer RGB, same as the old boolean set to
-  on). Renamed from `prefer_rgb_color` (a plain boolean) to
-  `prefer_rgb_color_template`, matching the existing `_template`-suffix
-  naming convention - a deliberate breaking rename, not an in-place
-  type change: a room automation still holding the old
-  `prefer_rgb_color: true` input has a now-unrecognized key, same
-  "misconfigured until updated" situation `docs/BLUEPRINT.md` already
-  documents for the earlier `scene_sensor`/`scene_name_prefix` rename.
-  Every already-migrated room automation needs that old key removed
-  outright (not left blank) as part of deploying this.
+- **The blueprint knows phase names in three places now - RGB, scene
+  handoff, and brightness scaling - a deliberate exception to "the
+  blueprint doesn't know phase names," explicit user call: "I had been
+  avoiding coupling the blueprint to the specific adaptive lighting
+  phase names, but I think it's time."** Went through two designs before
+  landing here - first a single `prefer_rgb_color_template` (a Jinja
+  template, matching `scene_template`/`brightness_multiplier_template`),
+  then explicit per-phase selectors once the user flagged editing
+  templates in the HA UI as not user-friendly for something this simple:
+  - **RGB**: `rgb_phases`, a multi-select of phase names (default
+    `[Evening, Night]`) - `{{ states(adaptive_sensor) in rgb_phases }}`.
+    No template fallback - list membership is the whole mechanism, and
+    needs no `.get()`/crash-guarding against `states(adaptive_sensor)`
+    legitimately being `"unknown"`/`"unavailable"` the way a dict lookup
+    would (see the scene/brightness bullets below).
+  - **Scene handoff**: four optional per-phase scene pickers
+    (`morning_scene`/`day_scene`/`evening_scene`/`night_scene`), added
+    alongside the kept `scene_template`. **`scene_template` wins
+    whenever it returns a valid scene** - the phase pick is the fallback
+    for phases it doesn't cover. User-corrected precedence, not the
+    initial design: a template handling something like "if the TV is
+    on" needs to keep winning over a plain per-phase pick, the opposite
+    of "explicit is the friendly default, template is the escape hatch."
+  - **Brightness scaling**: four optional per-phase "lights to keep off"
+    multi-entity pickers, added alongside the kept
+    `brightness_multiplier_template` - each excluded light becomes
+    multiplier `0`. Not a per-phase multiplier *number* (user: "I can't
+    think of a case where you'd want an entire room dimmer") and not a
+    paired light+number control either (no HA selector binds a value to
+    a chosen entity). **The template's own per-entity values win over
+    the phase exclude list on any collision** (`dict(phase_base,
+    **template_result)`, template spread in second) - same
+    user-corrected precedence as scenes. Traced against
+    `dining_room_lighting` (illuminance-based, phase-independent
+    override) and `kitchen_lights` (mixed phase-/illuminance-conditional
+    logic in one template) to confirm this merge order leaves both
+    provably unaffected even if their owner later also sets a phase
+    exclusion for an entity the template already covers.
+
+  All three phase-keyed dict lookups (`phase_scene`, `phase_exclude_lights`)
+  use `.get(key, default)`, never direct indexing -
+  `states(adaptive_sensor)` can legitimately be `"unknown"` or
+  `"unavailable"` (before the coordinator's first refresh, or during a
+  failed one), not just the four phase names, and direct indexing would
+  crash the whole automation tick on a transient hiccup.
+
+  Also: `adaptive_sensor`'s own selector changed from a plain
+  `entity: domain: sensor` to `entity: filter: [{integration:
+  adaptive_lighting_helpers, domain: sensor}]` (the `filter:` list form
+  is the only documented shape combining `integration:` with `domain:` -
+  don't mix a bare top-level `domain:` key with a sibling `filter:`
+  list, same class of selector-schema trap as lesson 14). This is only
+  possible to do unambiguously because the curve sensor was merged away
+  first (see "Multi-sensor schedule architecture" below) - filtering to
+  just this integration's sensors while two existed per instance would
+  have left the same "which one do I want" ambiguity as before, just
+  narrower. **Deliberate trade-off, explicit user call**: this filter
+  also hides a hand-written "bring your own sensor" entity (see
+  `docs/HELPERS.md`) from the picker UI, even though `apply_lighting`
+  itself still accepts one - `docs/BLUEPRINT.md` documents pointing at
+  one via the automation's "Edit in YAML" view instead.
+
+  All three sections are grouped via blueprint `sections:` (named,
+  collapsible `input:` groups - HA 2024.6.0+, confirmed via
+  `home-assistant.io`'s docs, no local HA core checkout in this repo to
+  verify against directly), which is also why this blueprint declares a
+  `homeassistant.min_version` for the first time - `2026.4.0` (what the
+  `occupancy.*` triggers already required, HA-core-confirmed elsewhere
+  in this file), not `2024.6.0` (sections' own lower floor), since the
+  blueprint's real requirement was always the higher one and had simply
+  never been declared.
+
+  All renames here are breaking, not backward-compatible: removing an
+  input key doesn't leave the old value "still working" - HA's
+  `variables:` block only template-renders *string* values, but the
+  point is moot regardless, since a room automation's stored input
+  simply stops matching any input the blueprint still declares. Every
+  already-migrated room automation needs the old key removed outright
+  (not left blank) as part of deploying a rename - `prefer_rgb_color` →
+  `prefer_rgb_color_template` needed this cleanup across all 15 room
+  automations; `prefer_rgb_color_template` → `rgb_phases` didn't, since
+  no automation had set that input explicitly.
+
+  **Deferred: condition-selector inputs.** HA has a
+  `selector: condition: {}` type - confirmed real via
+  `home-assistant.io`'s selector docs - that surfaces the actual visual
+  condition-builder UI (the same one used for automation conditions) and
+  produces a native condition-config list, not free text, usable
+  directly in a `condition:`/`if:` block. Could give per-phase scene/
+  brightness overrides (or other rules) a builder instead of a template -
+  explicitly deferred by the user when this design was discussed, not
+  folded into the current inputs. Worth revisiting; this note exists so
+  it doesn't need re-researching from scratch.
 
 **Lives in `custom_components/adaptive_lighting_helpers/` (a standalone
 HACS integration, four services - see "Current status" for the current
