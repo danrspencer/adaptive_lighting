@@ -19,10 +19,14 @@ custom_components/adaptive_lighting_helpers/
     switch.py      sticky-phase-override toggle, as an entity (same doc)
     curve.py       brightness/colour-temperature schedule + Kelvin -> RGB
     grouping.py    reachability, multiplier bucketing, tolerance checks,
-                   manual-override protection, two-step/combined and
+                   externally-set protection, two-step/combined and
                    RGB-vs-colour-temp routing
     scenes.py      scene-coverage gap filling (apply a scene, then a
                    default for whatever it doesn't cover)
+    write_tracking.py
+                   persisted (Store-backed) record of what context.id
+                   this integration itself last wrote each light with -
+                   what grouping.py's externally_set() compares against
     manifest.json, config_flow.py, services.yaml, strings.json,
     translations/  standard HA integration/HACS scaffolding
     brand/icon.png, brand/icon@2x.png
@@ -38,7 +42,8 @@ custom_components/adaptive_lighting_helpers/
     Assistant dependency - testable directly, and usable from anywhere
     that wants the math without the HA service/sensor wrapper around
     it. __init__.py, coordinator.py, sensor.py, select.py, number.py,
-    time.py, and switch.py are the only files that touch `hass`.
+    time.py, switch.py, and write_tracking.py (via HA's Store helper)
+    are the only files that touch `hass`.
 
 hacs.json
     HACS repository metadata for the integration.

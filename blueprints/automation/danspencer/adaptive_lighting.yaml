@@ -204,12 +204,6 @@ blueprint:
 mode: restart
 max_exceeded: silent
 
-# Available to trigger definitions themselves (trigger: / condition:),
-# unlike the variables: block below which isn't computed until after a
-# trigger has fired.
-trigger_variables:
-  room_target: !input room_target
-
 trigger:
   # The live brightness/colour-temperature sensor; fires roughly once a
   # minute. With no to:/from:/attribute: filter, a state trigger fires on
@@ -246,58 +240,12 @@ trigger:
   - id: reconcile
     platform: time_pattern
     minutes: !input reconcile_interval
-  - id: manual
-    platform: template
-    value_template: >
-      {#
-        Fires when a human turns on one of our lights directly via the
-        UI/app - not via this automation, another automation, or a
-        device simply regaining power. Used below to back off entirely
-        and leave a deliberate human choice alone.
-
-        A person's action is identified by context.user_id being set;
-        automations and device-originated changes (e.g. a bulb coming
-        back after a power/Zigbee outage) leave it null.
-      #}
-      {% set ns = namespace(entities=[]) %}
-      {% if room_target is not none %}
-        {% if room_target.entity_id is defined %}
-          {% set eids = room_target.entity_id if room_target.entity_id is iterable and room_target.entity_id is not string else [room_target.entity_id] %}
-          {% set ns.entities = ns.entities + (eids | select('match', '^light\.') | list) %}
-        {% endif %}
-        {% if room_target.device_id is defined %}
-          {% set dids = room_target.device_id if room_target.device_id is iterable and room_target.device_id is not string else [room_target.device_id] %}
-          {% for d in dids %}
-            {% set ns.entities = ns.entities + (device_entities(d) | select('match', '^light\.') | list) %}
-          {% endfor %}
-        {% endif %}
-        {% if room_target.area_id is defined %}
-          {% set aids = room_target.area_id if room_target.area_id is iterable and room_target.area_id is not string else [room_target.area_id] %}
-          {% for a in aids %}
-            {% set ns.entities = ns.entities + (area_entities(a) | select('match', '^light\.') | list) %}
-          {% endfor %}
-        {% endif %}
-      {% endif %}
-      {% set light_entity_ids = ns.entities | unique | list %}
-      {% set watch = namespace(items=[]) %}
-      {% for light_id in light_entity_ids %}
-        {# Touching each entity's state here is what makes this
-           template trigger re-evaluate whenever any of them changes #}
-        {% set watch.items = watch.items + [states(light_id)] %}
-      {% endfor %}
-      {{ trigger is defined
-         and trigger.entity_id in light_entity_ids
-         and trigger.to_state is not none
-         and trigger.to_state.state == 'on'
-         and trigger.to_state.context.user_id is not none }}
 
 condition:
-  # A human just turned on one of our lights directly - don't fight their choice
-  - "{{ trigger.id != 'manual' }}"
   - or:
       # Any trigger other than adaptive/extra/motion_on always passes
       # here; motion_off/reconcile have their own gating logic in
-      # action: below, and manual is fully handled above
+      # action: below
       - condition: not
         conditions:
           - condition: trigger
@@ -611,7 +559,7 @@ action:
             data:
               transition: "{{ script_transition }}"
       # Reachability, multiplier bucketing, tolerance-based "already
-      # correct" checks, manual-override protection, two-step/combined
+      # correct" checks, externally-set protection, two-step/combined
       # routing, and RGB-vs-colour-temp dispatch are all handled by the
       # Adaptive Lighting Helpers integration (a standalone HACS add-on,
       # not specific to this blueprint - see its README) - this used to

@@ -4,9 +4,11 @@ Adaptive Lighting Helpers.
 Standalone Home Assistant services for adaptive-lighting computation:
 brightness/colour-temperature curve math (curve.py), per-light
 grouping - reachability, multiplier bucketing, tolerance checks,
-manual-override protection, two-step transition routing, RGB-vs-colour-
-temp routing (grouping.py) - and scene-coverage gap filling, for "apply
-a scene, then a default for whatever it doesn't cover" (scenes.py).
+externally-set protection (leaving a light alone once something other
+than our own last write has touched it - see write_tracking.py), two-
+step transition routing, RGB-vs-colour-temp routing (grouping.py) - and
+scene-coverage gap filling, for "apply a scene, then a default for
+whatever it doesn't cover" (scenes.py).
 `compute_lighting_groups` is a pure planner (returns groups, doesn't
 touch any light); `apply_lighting` wraps the same grouping logic and
 actually dispatches light.turn_on/turn_off, reading its brightness/
@@ -43,7 +45,7 @@ from homeassistant.components.frontend import add_extra_js_url
 from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse, callback
+from homeassistant.core import Context, HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse, callback
 from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
@@ -56,6 +58,7 @@ from .coordinator import CURVE_KEYS, ScheduleCoordinator, schedule_instances
 from .curve import phase_at, targets_for_phase
 from .grouping import EntityLookup, Group, build_groups
 from .scenes import SceneLookup, compute_scene_coverage
+from .write_tracking import LastWriteTracker
 
 SCHEDULE_PLATFORMS = [Platform.SENSOR, Platform.SELECT, Platform.NUMBER, Platform.TIME, Platform.SWITCH]
 
@@ -114,7 +117,7 @@ APPLY_LIGHTING_SCHEMA = vol.Schema(
 )
 
 
-def _build_lookup(hass: HomeAssistant) -> EntityLookup:
+def _build_lookup(hass: HomeAssistant, tracker: LastWriteTracker) -> EntityLookup:
     """Adapts real HA state/registries to the plain EntityLookup
     interface grouping.py expects - the only HA-specific piece of this
     integration, everything else is the pure modules doing the work."""
@@ -145,16 +148,17 @@ def _build_lookup(hass: HomeAssistant) -> EntityLookup:
             return list(device_entry.labels)
         return []
 
-    def context_user_id(entity_id: str) -> str | None:
+    def context_id(entity_id: str) -> str | None:
         s = hass.states.get(entity_id)
-        return s.context.user_id if s else None
+        return s.context.id if s else None
 
     return EntityLookup(
         is_state=is_state,
         state_attr=state_attr,
         device_id=device_id,
         labels=labels,
-        context_user_id=context_user_id,
+        context_id=context_id,
+        last_write_context_id=tracker.last_context_id,
     )
 
 
@@ -225,6 +229,7 @@ async def _two_step_turn_on(
     entity_ids: list,
     brightness: int,
     half_transition: float,
+    context: Context,
     *,
     color_temp_kelvin: int | None = None,
     rgb_color: list | None = None,
@@ -232,12 +237,18 @@ async def _two_step_turn_on(
     """Brightness-only call, wait, then brightness + colour - for bulbs
     that can't transition both together (no_combined_transition label).
     Works the same for either colour representation; only the second
-    call's colour field differs."""
+    call's colour field differs. `context` is threaded through both
+    calls explicitly - hass.services.async_call makes its own fresh,
+    unrelated Context() for anything it isn't given (confirmed against
+    HA core's core.py), so without this every light we turn on would
+    get an unmatched context.id and immediately look externally-set on
+    the very next tick (see write_tracking.py)."""
     await hass.services.async_call(
         "light",
         "turn_on",
         {"entity_id": entity_ids, "transition": half_transition, "brightness": brightness},
         blocking=True,
+        context=context,
     )
     await asyncio.sleep(half_transition)
     data = {"entity_id": entity_ids, "transition": half_transition, "brightness": brightness}
@@ -245,7 +256,7 @@ async def _two_step_turn_on(
         data["color_temp_kelvin"] = color_temp_kelvin
     else:
         data["rgb_color"] = rgb_color
-    await hass.services.async_call("light", "turn_on", data, blocking=True)
+    await hass.services.async_call("light", "turn_on", data, blocking=True, context=context)
 
 
 CARD_URL_BASE = "/adaptive_lighting_helpers_static"
@@ -270,6 +281,14 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    # Shared across every apply_lighting call, from whichever automation
+    # made it - see write_tracking.py for why (grouping.py's
+    # externally_set() check only cares "did adaptive control write this
+    # most recently", not which specific caller). Loaded once here so
+    # last-write provenance survives a HA restart.
+    write_tracker = LastWriteTracker(hass)
+    await write_tracker.async_load()
+
     async def compute_lighting_groups(call: ServiceCall) -> ServiceResponse:
         """adaptive_lighting_helpers.compute_lighting_groups
 
@@ -283,7 +302,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             brightness_multipliers=call.data["brightness_multipliers"],
             sensor_brightness=call.data["sensor_brightness"],
             sensor_color_temp_kelvin=call.data["sensor_color_temp_kelvin"],
-            lookup=_build_lookup(hass),
+            lookup=_build_lookup(hass, write_tracker),
             brightness_tolerance=call.data["brightness_tolerance"],
             color_temp_tolerance=call.data["color_temp_tolerance"],
             two_step_label=call.data["two_step_label"],
@@ -323,7 +342,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         entity with those attributes - see README's "Bring your own
         sensor") and actually turns entities on/off via
         light.turn_on/turn_off, handling reachability, tolerance,
-        manual-override protection, two-step transitions, and RGB-vs-
+        externally-set protection, two-step transitions, and RGB-vs-
         colour-temp dispatch internally rather than leaving it to the
         caller. Returns the same {"groups": [...]} shape as
         compute_lighting_groups for introspection, but nothing requires
@@ -335,7 +354,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             brightness_multipliers=call.data["brightness_multipliers"],
             sensor_brightness=brightness,
             sensor_color_temp_kelvin=color_temp_kelvin,
-            lookup=_build_lookup(hass),
+            lookup=_build_lookup(hass, write_tracker),
             brightness_tolerance=call.data["brightness_tolerance"],
             color_temp_tolerance=call.data["color_temp_tolerance"],
             two_step_label=call.data["two_step_label"],
@@ -348,15 +367,28 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         half_transition = round(transition / 2, 1)
         rgb_color_list = list(rgb_color) if rgb_color is not None else None
 
+        # Every light.turn_on/turn_off call below is given call.context
+        # explicitly (rather than left to default to a fresh, unrelated
+        # one - see _two_step_turn_on's docstring) so the resulting
+        # state's context.id is exactly what write_tracker records below,
+        # matching what grouping.py's externally_set() compares against
+        # on the next tick.
+        written_entities: list = []
         tasks = []
         for g in groups:
             if g.needing_off:
+                written_entities.extend(g.needing_off)
                 tasks.append(
                     hass.services.async_call(
-                        "light", "turn_off", {"entity_id": g.needing_off, "transition": transition}, blocking=True
+                        "light",
+                        "turn_off",
+                        {"entity_id": g.needing_off, "transition": transition},
+                        blocking=True,
+                        context=call.context,
                     )
                 )
             if g.combined:
+                written_entities.extend(g.combined)
                 tasks.append(
                     hass.services.async_call(
                         "light",
@@ -368,9 +400,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                             "color_temp_kelvin": color_temp_kelvin,
                         },
                         blocking=True,
+                        context=call.context,
                     )
                 )
             if g.combined_rgb:
+                written_entities.extend(g.combined_rgb)
                 tasks.append(
                     hass.services.async_call(
                         "light",
@@ -382,21 +416,33 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                             "rgb_color": rgb_color_list,
                         },
                         blocking=True,
+                        context=call.context,
                     )
                 )
             if g.two_step:
+                written_entities.extend(g.two_step)
                 tasks.append(
                     _two_step_turn_on(
-                        hass, g.two_step, g.brightness, half_transition, color_temp_kelvin=color_temp_kelvin
+                        hass,
+                        g.two_step,
+                        g.brightness,
+                        half_transition,
+                        call.context,
+                        color_temp_kelvin=color_temp_kelvin,
                     )
                 )
             if g.two_step_rgb:
+                written_entities.extend(g.two_step_rgb)
                 tasks.append(
-                    _two_step_turn_on(hass, g.two_step_rgb, g.brightness, half_transition, rgb_color=rgb_color_list)
+                    _two_step_turn_on(
+                        hass, g.two_step_rgb, g.brightness, half_transition, call.context, rgb_color=rgb_color_list
+                    )
                 )
 
         if tasks:
             await asyncio.gather(*tasks)
+        if written_entities:
+            await write_tracker.async_record(written_entities, call.context.id)
 
         return _groups_response(groups)
 

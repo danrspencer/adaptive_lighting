@@ -85,12 +85,29 @@ meet.
   no-op instead of not running at all - functionally harmless, not
   behaviourally identical). See "Parked: scene handling in
   apply_lighting" below for the full design if this gets picked back up.
-- The blueprint's `manual` trigger (context.user_id on the *triggering*
-  state change) only ever blocks the one automation run where it fires
-  - it has no memory, so it does NOT stop a later `adaptive` tick from
-  overwriting the same light a minute afterwards. The actual sustained
-  protection lives in `grouping.py`'s `EntityLookup.manually_set()`
-  (see lesson 5), not here.
+- The blueprint used to carry its own `manual` trigger (context.user_id
+  on the *triggering* state change) as a one-shot immediate bail-out -
+  removed entirely once it became clear it never actually protected
+  anything: its own `condition:` unconditionally backed out of the run
+  the instant it fired, so it was pure trace-log noise, not a second
+  layer of protection. The only real, sustained protection has always
+  lived in `grouping.py`'s `EntityLookup.externally_set()` (see lesson
+  5) - and that check itself moved off `context.user_id` onto
+  `context.id` equality against a persisted per-entity "what did we
+  last write this with" record (`write_tracking.py`), specifically so
+  it also catches a light set by *another automation* (e.g. one
+  triggered directly by a physical button, which carries no
+  context.user_id of its own either - identical to this integration's
+  own writes under the old check, and the actual gap that prompted this
+  change). User-driven redesign, not a bug fix: "check if the last
+  thing that updated a bulb was the automation doing the checking"
+  rather than "was it a human" - confirmed against HA core source
+  (`helpers/script.py`) that every service call within one automation
+  run shares the same context.id, and that a service call given no
+  explicit `context=` gets a fresh, unrelated one - which is also why
+  `apply_lighting`'s own nested `light.turn_on`/`turn_off` calls now
+  explicitly pass `context=call.context` through (including both calls
+  inside a two-step transition), where they previously didn't need to.
 - Why any of this stays in Jinja at all: HA `condition:` blocks cannot
   call a service — only `action:` steps can — so anything
   condition:-gating needs to stay template-based. These pieces are also
@@ -243,7 +260,7 @@ meet.
 HACS integration, four services - see "Current status" for the current
 contract of each):**
 - Reachability filtering, multiplier bucketing, the tolerance-based
-  "already at target" check, manual-override protection, and
+  "already at target" check, externally-set protection, and
   two-step-vs-combined / RGB-vs-colour-temp label routing
   (`grouping.py`).
 - Why: this was the genuinely gnarly part — nested namespace loops,
@@ -266,10 +283,12 @@ All services are deliberately written and documented (see
 own automation, not just to the blueprint in this repo.
 
 **Considered and explicitly rejected: extracting target resolution**
-(`resolved_entities`/`scope_entities`, duplicated three times in the
-blueprint - once more in the `manual` trigger, structurally unfixable
-since triggers can't call services either). Two blockers, either of
-which alone would kill it: (1) `condition:` reads `resolved_entities`
+(`resolved_entities`/`scope_entities`, duplicated twice in the
+blueprint - was three times until the `manual` trigger's own copy went
+away with the trigger itself, see the architectural-split note above;
+still structurally unfixable for the remaining two since triggers and
+conditions can't call services either). Two blockers, either of which
+alone would kill it: (1) `condition:` reads `resolved_entities`
 directly and `scene_active` transitively via `scope_entities`, and
 `condition:` runs *before* `action:` - a service call's response isn't
 available yet at that point, so adopting one would mean moving those
@@ -326,15 +345,24 @@ re-propose without new information changing this trade-off.
    status"), not via a service call.
 
 5. **A trigger firing once does not mean protection persists.** A
-   one-shot trigger-level check (the blueprint's `manual` trigger,
-   context.user_id-based) is not the same as a standing invariant later
-   code respects - it only blocks the one automation run where it
-   fires, not a later independent `adaptive` tick. Fixed properly in
-   `grouping.py`'s `EntityLookup.manually_set()`: instead of
-   remembering that an override happened, it re-checks the entity's
-   *current* state's context on every call - room-empty, light-off, and
-   device-recovery release conditions all fall out for free from that,
-   with no persisted state needed.
+   one-shot trigger-level check (the blueprint's old `manual` trigger,
+   context.user_id-based, since removed entirely - see the
+   architectural-split note above) is not the same as a standing
+   invariant later code respects - it only blocked the one automation
+   run where it fired, not a later independent `adaptive` tick. Fixed
+   properly in `grouping.py`'s `EntityLookup` (originally
+   `manually_set()`, later renamed `externally_set()` when the
+   underlying check moved from `context.user_id` to `context.id`
+   equality - see "Current status"): instead of remembering that an
+   override happened, it re-checks the entity's *current* state on
+   every call - room-empty, light-off, and device-recovery release
+   conditions all fall out for free from that. The one piece that
+   *does* now need persisted state, contrary to this lesson's original
+   framing, is knowing what to compare the current state against -
+   `write_tracking.py`'s `Store`-backed record of what context.id this
+   integration itself last wrote each entity with. The lesson still
+   holds where it always mattered: a trigger's one-shot firing is not a
+   substitute for a check performed fresh on every tick.
 
 6. **A same-named blueprint can take out every room at once.** This
    repo's blueprint used to share a filename with the live, already-
@@ -531,6 +559,36 @@ working against the live instance:
   blueprint calls - see `docs/HELPERS.md`'s "Bring your own sensor"
   section for the full attribute contract (moved there from the README
   - the user flagged it as not belonging on the main landing page).
+- **Override detection redesigned from `context.user_id` to
+  `context.id` equality, unit tested but not yet confirmed live.**
+  User-driven: the old check ("was this light's current state set by a
+  real person") missed a real gap - another automation (e.g. one
+  triggered directly by a physical button, carrying no
+  `context.user_id` of its own either) setting a light looked identical
+  to "nothing happened" and got silently overwritten on the next tick.
+  The fix reframes the question as "did *we* (adaptive control) make
+  the last change" instead of "was it a human": `write_tracking.py`'s
+  `LastWriteTracker` (Store-backed, survives restarts) records the
+  `context.id` `apply_lighting` actually issued each write with;
+  `grouping.py`'s `EntityLookup.externally_set()` (renamed from
+  `manually_set()`) compares a light's *current* live `context.id`
+  against that record - a mismatch (or no record at all) is the only
+  signal, regardless of what caused it. Required threading
+  `context=call.context` explicitly through every nested
+  `light.turn_on`/`turn_off` call inside `apply_lighting` (including
+  both calls of a two-step transition) - confirmed against HA core's
+  `helpers/script.py` that a service call given no explicit `context=`
+  gets a fresh, unrelated one, which would otherwise have made every
+  one of `apply_lighting`'s own writes look externally-set on the very
+  next tick. The blueprint's old `manual` trigger (a one-shot,
+  context.user_id-based immediate bail-out) was removed entirely as
+  part of this - it never actually protected anything on its own (its
+  own `condition:` unconditionally backed out the instant it fired),
+  so once the real check was fixed there was nothing left for it to do;
+  see the architectural-split note above and lesson 5. Needs a live
+  instance to confirm the persisted record actually survives a real HA
+  restart and that another automation's write is correctly detected,
+  not just the unit-test fakes.
 - RGB colour (`prefer_rgb_color`) is implemented, unit tested, and now
   **fully confirmed live end-to-end** - both the *routing decision*
   (`compute_lighting_groups` correctly bucketed a real bulb into
@@ -595,7 +653,7 @@ Per sensor, five entities:
   Implemented by comparing against the phase computed at override time
   on every refresh, not a timer - the same "check live state fresh,
   don't invent a persisted expiry" pattern `grouping.py`'s
-  `manually_set()` uses.
+  `externally_set()` uses.
 - `time.<slug>_morning_time` / `day_time` / `evening_earliest_time` /
   `evening_latest_time` / `night_time` and `number.<slug>_morning_brightness`
   / `morning_kelvin` / `day_brightness` / `day_end_kelvin` /

@@ -30,7 +30,8 @@ class EntityLookup:
     state_attr: Callable[[str, str], object]
     device_id: Callable[[str], Optional[str]]
     labels: Callable[[str], list]
-    context_user_id: Callable[[str], Optional[str]]
+    context_id: Callable[[str], Optional[str]]
+    last_write_context_id: Callable[[str], Optional[str]]
 
     def reachable(self, entity_id: str) -> bool:
         """False for anything HA already knows it can't reach - no point commanding it."""
@@ -41,16 +42,29 @@ class EntityLookup:
         did = self.device_id(entity_id)
         return self.labels(entity_id) + (self.labels(did) if did else [])
 
-    def manually_set(self, entity_id: str) -> bool:
-        """True if the entity's *current* state was set by a real person
-        (context.user_id present) rather than this automation, another
-        automation, or a device simply regaining power - all of which
-        leave it null. Checked fresh against live state every call, so
-        there's nothing to remember or expire: once a light's state
-        changes again for any other reason (it's turned off, or a
-        device recovers from unavailable), this naturally stops being
-        true on its own."""
-        return self.is_state(entity_id, "on") and self.context_user_id(entity_id) is not None
+    def externally_set(self, entity_id: str) -> bool:
+        """True if the entity is on and its *current* context.id doesn't
+        match the context.id this integration itself last wrote it with
+        (see write_tracking.LastWriteTracker) - i.e. something other
+        than our own last apply_lighting call has touched it since:
+        a person, another automation (even one with no context.user_id
+        of its own, such as one triggered directly by a physical
+        button - the gap context.user_id-based detection used to miss),
+        or a device regaining power under a fresh context. No
+        remembered write at all (a brand new entity, or the very first
+        tick before anything's been recorded) counts as free to manage,
+        not externally set - the same "don't block on missing
+        provenance" behaviour a restart used to fall back to under the
+        old check. Checked fresh against live state every call, so
+        there's nothing to expire: once a light's state changes again
+        for any other reason (it's turned off, or a device recovers
+        from unavailable), this naturally stops being true on its own."""
+        if not self.is_state(entity_id, "on"):
+            return False
+        last_write = self.last_write_context_id(entity_id)
+        if last_write is None:
+            return False
+        return self.context_id(entity_id) != last_write
 
     def supports_rgb(self, entity_id: str) -> bool:
         """True if the entity's supported_color_modes includes any mode
@@ -131,7 +145,7 @@ def build_groups(
             group.needing_off = [
                 e
                 for e in group_entities
-                if lookup.reachable(e) and not lookup.is_state(e, "off") and not lookup.manually_set(e)
+                if lookup.reachable(e) and not lookup.is_state(e, "off") and not lookup.externally_set(e)
             ]
             groups.append(group)
             continue
@@ -146,7 +160,7 @@ def build_groups(
             e
             for e in temp_entities
             if lookup.reachable(e)
-            and not lookup.manually_set(e)
+            and not lookup.externally_set(e)
             and not _already_set(e, brightness, sensor_color_temp_kelvin, lookup, brightness_tolerance, color_temp_tolerance)
         ]
         group.two_step = [e for e in needing_update if two_step_label in lookup.tags(e)]
@@ -156,7 +170,7 @@ def build_groups(
             e
             for e in rgb_entities
             if lookup.reachable(e)
-            and not lookup.manually_set(e)
+            and not lookup.externally_set(e)
             and not _already_set_rgb(e, brightness, rgb_color, lookup, brightness_tolerance, rgb_color_tolerance)
         ]
         group.two_step_rgb = [e for e in needing_update_rgb if two_step_label in lookup.tags(e)]

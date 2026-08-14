@@ -167,22 +167,26 @@ def test_multiplier_floors_at_one_never_accidentally_off():
     assert groups[0].brightness == 1
 
 
-# Manual overrides: a light currently on whose latest state change was
-# made by a real person (context.user_id set) is left exactly alone,
-# even if it doesn't match the current adaptive target - checked fresh
-# against live state on every call, so nothing needs to be remembered
-# or explicitly expired.
+# Overrides: a light currently on whose live context.id doesn't match
+# the context.id this integration itself last wrote it with (per
+# write_tracking.LastWriteTracker) is left exactly alone, even if it
+# doesn't match the current adaptive target - regardless of *what*
+# changed it (a person, another automation with no context.user_id of
+# its own, a device regaining power) - checked fresh against live state
+# on every call, so nothing needs to be remembered here or explicitly
+# expired.
 
 
-def test_manually_set_light_is_not_recommanded_even_when_mismatched():
+def test_externally_set_light_is_not_recommanded_even_when_mismatched():
     lookup = make_lookup(
         states={
             "light.a": {
                 "state": "on",
                 "attributes": {"brightness": 40, "color_temp_kelvin": 6000},
-                "user_id": "person-1",
+                "context_id": "ctx-someone-else",
             }
-        }
+        },
+        last_write_context_ids={"light.a": "ctx-ours"},
     )
     groups = build_groups(
         entities=["light.a"],
@@ -195,11 +199,13 @@ def test_manually_set_light_is_not_recommanded_even_when_mismatched():
     assert groups[0].two_step == []
 
 
-def test_manually_set_light_is_protected_from_being_turned_off_too():
-    # brightness_multiplier says this light should be off, but a human
-    # turned it on - the human's choice wins, it isn't forced off
+def test_externally_set_light_is_protected_from_being_turned_off_too():
+    # brightness_multiplier says this light should be off, but something
+    # else set it on since our last write - that choice wins, it isn't
+    # forced off
     lookup = make_lookup(
-        states={"light.a": {"state": "on", "attributes": {}, "user_id": "person-1"}}
+        states={"light.a": {"state": "on", "attributes": {}, "context_id": "ctx-someone-else"}},
+        last_write_context_ids={"light.a": "ctx-ours"},
     )
     groups = build_groups(
         entities=["light.a"],
@@ -211,16 +217,19 @@ def test_manually_set_light_is_protected_from_being_turned_off_too():
     assert groups[0].needing_off == []
 
 
-def test_device_recovery_is_not_treated_as_a_manual_override():
-    # Same mismatched state as the protected case above, but no user_id
-    # (a device regaining power sets its own state, unattributed to a
-    # person) - this light gets corrected normally
+def test_no_write_record_is_not_treated_as_externally_set():
+    # Same mismatched state as the protected case above, but we've never
+    # recorded a write for this entity at all (a brand new entity, or
+    # the very first tick before anything's been recorded - also what a
+    # HA restart looks like before write_tracking.py's persisted store
+    # reloads) - this light gets corrected normally rather than getting
+    # stuck unmanaged forever.
     lookup = make_lookup(
         states={
             "light.a": {
                 "state": "on",
                 "attributes": {"brightness": 40, "color_temp_kelvin": 6000},
-                "user_id": None,
+                "context_id": "ctx-whatever",
             }
         }
     )
@@ -234,11 +243,37 @@ def test_device_recovery_is_not_treated_as_a_manual_override():
     assert groups[0].combined == ["light.a"]
 
 
-def test_turning_the_light_off_ends_the_protection():
-    # Same user_id as the protected case, but the light is now off -
-    # there's nothing to protect, and a later "on" is a fresh decision
+def test_our_own_last_write_is_not_treated_as_externally_set():
+    # The light's current context.id matches what we last wrote it with
+    # - nothing has touched it since our own last apply_lighting call,
+    # so it's still ours to manage normally.
     lookup = make_lookup(
-        states={"light.a": {"state": "off", "attributes": {}, "user_id": "person-1"}}
+        states={
+            "light.a": {
+                "state": "on",
+                "attributes": {"brightness": 40, "color_temp_kelvin": 6000},
+                "context_id": "ctx-ours",
+            }
+        },
+        last_write_context_ids={"light.a": "ctx-ours"},
+    )
+    groups = build_groups(
+        entities=["light.a"],
+        brightness_multipliers={},
+        sensor_brightness=200,
+        sensor_color_temp_kelvin=3000,
+        lookup=lookup,
+    )
+    assert groups[0].combined == ["light.a"]
+
+
+def test_turning_the_light_off_ends_the_protection():
+    # Same mismatched context.id as the protected case, but the light is
+    # now off - there's nothing to protect, and a later "on" is a fresh
+    # decision
+    lookup = make_lookup(
+        states={"light.a": {"state": "off", "attributes": {}, "context_id": "ctx-someone-else"}},
+        last_write_context_ids={"light.a": "ctx-ours"},
     )
     groups = build_groups(
         entities=["light.a"],
@@ -412,8 +447,8 @@ def test_rgb_tolerance_skips_already_close_lights():
     assert groups2[0].combined_rgb == ["light.rgb_bulb"]
 
 
-def test_rgb_manual_override_and_reachability_still_apply():
-    # supports_rgb doesn't bypass the existing manual-override/reachability
+def test_rgb_external_override_and_reachability_still_apply():
+    # supports_rgb doesn't bypass the existing externally-set/reachability
     # checks - they're evaluated the same way regardless of which bucket
     # an entity ends up in.
     lookup = make_lookup(
@@ -421,10 +456,11 @@ def test_rgb_manual_override_and_reachability_still_apply():
             "light.overridden": {
                 "state": "on",
                 "attributes": {"brightness": 10, "supported_color_modes": ["rgb"]},
-                "user_id": "person-1",
+                "context_id": "ctx-someone-else",
             },
             "light.unreachable": {"state": "unavailable", "attributes": {"supported_color_modes": ["rgb"]}},
-        }
+        },
+        last_write_context_ids={"light.overridden": "ctx-ours"},
     )
     groups = build_groups(
         entities=["light.overridden", "light.unreachable"],

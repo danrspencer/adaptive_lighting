@@ -47,7 +47,7 @@ schedules at once, each with its own name and settings — see
 
 ## Adaptive Lighting Helpers (the integration)
 
-Exposes the phase schedule above, plus per-light grouping (reachability, tolerance, manual-override protection,
+Exposes the phase schedule above, plus per-light grouping (reachability, tolerance, override protection,
 two-step transitions, optional RGB colour) and scene-coverage gap filling, as four plain HA services —
 `compute_lighting_groups` and `compute_curve` are pure planners that hand back data; `apply_lighting` wraps the
 same grouping logic and actually turns lights on/off for you; `compute_scene_coverage` is the scene-handoff
