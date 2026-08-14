@@ -385,10 +385,13 @@ variables:
   # user hit "Run" on the automation itself, or called automation.trigger
   # directly. Used below to force this whole tick through regardless of
   # override protection, matching the same "I ran this on purpose, take
-  # it back" intent a direct apply_lighting force call has - trigger is
-  # simply undefined for a manual run (see e.g. `this` in HA's own
-  # templating docs; the same is-defined guard already used above).
-  manual_run: "{{ trigger is not defined }}"
+  # it back" intent a direct apply_lighting force call has. `trigger`
+  # itself is still defined for a manual run (confirmed live - an
+  # earlier `trigger is not defined` version of this check silently
+  # never fired), it's `trigger.id` that isn't - the same two-part
+  # is-defined guard `just_recovered` above already uses, for the same
+  # reason.
+  manual_run: "{{ not (trigger is defined and trigger.id is defined) }}"
   # Brightness/colour temperature themselves are no longer extracted
   # here - adaptive_lighting_helpers.apply_lighting reads them straight
   # off adaptive_sensor (and applies rgb_color, tolerance-checking,

@@ -932,14 +932,22 @@ designs were explored:
   `force: true` together (see the `recovered` bullet above, revised as
   part of this same change). A second, new case: **running the
   automation manually** (hitting "Run" in the UI, or calling
-  `automation.trigger` directly - detected via `trigger is not defined`,
-  the same `is defined` guard `script_transition`/`just_recovered`
-  already used) now also passes `force: "{{ manual_run }}"` alongside
-  its normal `owner_id` on the main room-wide call - the user's own
-  follow-on ask right after owner_id shipped: "if it's ran manually it
-  should also not pass in an owner id so it'll always update," which
-  the verification question above caught before it could ship with the
-  same bug the `recovered` trigger already had.
+  `automation.trigger` directly) now also passes `force: "{{
+  manual_run }}"` alongside its normal `owner_id` on the main room-wide
+  call - the user's own follow-on ask right after owner_id shipped: "if
+  it's ran manually it should also not pass in an owner id so it'll
+  always update," which the verification question above caught before
+  it could ship with the same bug the `recovered` trigger already had.
+  **`manual_run`'s own detection needed a live-caught fix before this
+  actually worked**: it first read `trigger is not defined`, on the
+  assumption that a manual run leaves `trigger` itself undefined - live
+  testing showed the trace still carrying `force: false` on a manual
+  `automation.trigger` call, proving `trigger` *is* defined even then,
+  just `trigger.id` isn't. Corrected to `not (trigger is defined and
+  trigger.id is defined)` - the same two-part guard `just_recovered`
+  already used, for the same reason - and reconfirmed live afterward
+  (`force: true` in the trace, light correctly resynced past a
+  deliberately-mismatched external write).
 **Deployment / operational notes:**
 - pyscript is fully gone, both from this repo and the live host.
 - The dev git-sync automation (polling this repo for new commits and
