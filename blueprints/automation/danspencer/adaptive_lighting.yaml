@@ -151,50 +151,55 @@ blueprint:
               domain: light
               multiple: true
           default: []
-    no_motion_wait:
-      name: Wait time
-      description: Time to keep the light on after motion stops.
-      default: 120
-      selector:
-        number:
-          min: 0
-          max: 3600
-          unit_of_measurement: seconds
-    reconcile_interval:
-      name: Reconcile Interval (Optional)
-      description: >
-        How often to retry turning off lights left on with no occupancy.
-        time_pattern syntax, e.g. '/5' for every 5 minutes.
-      default: "/5"
-      selector:
-        text: {}
-    motion_on_transition:
-      name: Motion On Transition
-      description: Transition duration when turning on via motion or a manual run.
-      default: 1
-      selector:
-        number:
-          min: 0
-          max: 60
-          unit_of_measurement: seconds
-    motion_off_transition:
-      name: Motion Off Transition
-      description: Transition duration when turning off via motion.
-      default: 15
-      selector:
-        number:
-          min: 0
-          max: 60
-          unit_of_measurement: seconds
-    adaptive_transition:
-      name: Adaptive Transition
-      description: Transition duration when adaptive lighting, the scene template, or an Additional Trigger updates.
-      default: 30
-      selector:
-        number:
-          min: 0
-          max: 60
-          unit_of_measurement: seconds
+    timing:
+      name: Timing
+      icon: mdi:timer-outline
+      collapsed: true
+      input:
+        no_motion_wait:
+          name: Wait time
+          description: Time to keep the light on after motion stops.
+          default: 120
+          selector:
+            number:
+              min: 0
+              max: 3600
+              unit_of_measurement: seconds
+        reconcile_interval:
+          name: Reconcile Interval (Optional)
+          description: >
+            How often to retry turning off lights left on with no occupancy.
+            time_pattern syntax, e.g. '/5' for every 5 minutes.
+          default: "/5"
+          selector:
+            text: {}
+        motion_on_transition:
+          name: Motion On Transition
+          description: Transition duration when turning on via motion or a manual run.
+          default: 1
+          selector:
+            number:
+              min: 0
+              max: 60
+              unit_of_measurement: seconds
+        motion_off_transition:
+          name: Motion Off Transition
+          description: Transition duration when turning off via motion.
+          default: 15
+          selector:
+            number:
+              min: 0
+              max: 60
+              unit_of_measurement: seconds
+        adaptive_transition:
+          name: Adaptive Transition
+          description: Transition duration when adaptive lighting, the scene template, or an Additional Trigger updates.
+          default: 30
+          selector:
+            number:
+              min: 0
+              max: 60
+              unit_of_measurement: seconds
 
 mode: restart
 max_exceeded: silent

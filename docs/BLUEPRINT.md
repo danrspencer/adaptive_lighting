@@ -149,6 +149,7 @@ Add an automation using the "Adaptive Lighting" blueprint per room, and set:
 | **Brightness Scaling** section | | |
 | Brightness Multiplier Template | no | Per-light brightness scaling - its own per-entity values win over the phase lists below |
 | Lights Off During Morning / Day / Evening / Night | no | Lights to turn off during that phase - fills in whatever Brightness Multiplier Template doesn't already cover (see [Per-light brightness scaling](#per-light-brightness-scaling)) |
+| **Timing** section | | |
 | Wait time | no | Seconds to keep lights on after motion stops (default 120) |
 | Reconcile Interval | no | Self-healing check interval (default every 5 minutes) |
 | Motion On / Motion Off / Adaptive Transition | no | Transition durations for each trigger type |
