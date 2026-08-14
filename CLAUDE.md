@@ -945,9 +945,23 @@ designs were explored:
   `automation.trigger` call, proving `trigger` *is* defined even then,
   just `trigger.id` isn't. Corrected to `not (trigger is defined and
   trigger.id is defined)` - the same two-part guard `just_recovered`
-  already used, for the same reason - and reconfirmed live afterward
-  (`force: true` in the trace, light correctly resynced past a
-  deliberately-mismatched external write).
+  already used, for the same reason - and reconfirmed live afterward:
+  triggering `automation.harrison_s_pendant_lighting` manually
+  (`automation.trigger`, no `skip_condition`) now produces a trace whose
+  `apply_lighting` call carries `"force": true` (previously `false`),
+  and the light ended the run at its correct adaptive target. A
+  follow-up attempt to also re-confirm the fuller "resynced past a
+  deliberately-mismatched external write" scenario on this same light
+  was inconclusive, not failed - `light.harrisons_room_pendant` stopped
+  accepting new `light.turn_on` writes entirely partway through testing
+  (three calls with different explicit brightness/color_temp values all
+  left `last_updated` frozen, confirmed via `ha_eval_template` reading
+  live state directly, bypassing any tool-level caching) - consistent
+  with this exact bulb's own history of `unavailable`/`on` flapping
+  earlier the same day, i.e. real device/Zigbee flakiness unrelated to
+  this fix, not evidence against it. The core claim - `force: true` now
+  reaches `apply_lighting` on a manual run - is confirmed by the trace
+  alone regardless.
 **Deployment / operational notes:**
 - pyscript is fully gone, both from this repo and the live host.
 - The dev git-sync automation (polling this repo for new commits and
