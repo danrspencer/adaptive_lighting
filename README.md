@@ -131,3 +131,7 @@ integration is added — there's no separate HACS entry for it and nothing to ad
 
 Repository layout, running the test suite, previewing the dashboard card without a live Home Assistant instance,
 and current project status all live in [CONTRIBUTING.md](CONTRIBUTING.md).
+
+## License
+
+[MIT](LICENSE)
