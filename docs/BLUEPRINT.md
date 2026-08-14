@@ -49,13 +49,19 @@ use a template `binary_sensor` with `device_class: occupancy` as a stand-in - Ho
 can't tell it apart from a real sensor. Pick it directly as an entity in Room (rather than relying on area
 membership) so it's a deliberate addition, not something automatically swept in.
 
-## Manual override detection
+## Override detection
 
-A light changed directly — wall switch, app, voice assistant — is left alone rather than being overwritten on
-the next adaptive tick. Detected via `context.user_id`: a real person's action through the UI always carries a
-user id, while automations and a device regaining power after an outage don't. The latter case is not treated as
-an override, so a bulb reconnecting after a power or Zigbee blip is brought back in line automatically rather
-than left stuck at its last known state.
+A light changed by anything other than this integration's own last write — a wall switch, an app, a voice
+assistant, or another automation entirely (including one with no identifiable "user" of its own, such as one
+triggered directly by a physical button) — is left alone rather than being overwritten on the next adaptive tick.
+Detected by comparing the light's current `context.id` against the `context.id` [Adaptive Lighting
+Helpers](HELPERS.md) itself last wrote that light with: if they still match, nothing has touched it since our own
+last update and it's updated normally; if they don't, something else has, and it's left alone. A device simply
+regaining power after an outage gets a fresh context of its own too, so it's covered by the same mechanism as
+everything else — not treated as an override, so a bulb reconnecting after a power or Zigbee blip is brought back
+in line automatically rather than left stuck at its last known state. A light with no recorded write at all yet
+(brand new, or right after this integration's own restart) is treated the same way — free to manage — rather than
+getting stuck unmanaged until it happens to change some other way.
 
 ## Scene handoff
 

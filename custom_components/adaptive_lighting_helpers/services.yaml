@@ -5,9 +5,11 @@ compute_lighting_groups:
     and optional per-light brightness multipliers, works out the minimal
     set of light.turn_on/light.turn_off calls actually needed: filters out
     unreachable lights, groups by multiplier, skips anything already
-    within tolerance of the target, leaves manually-set lights alone (a
-    light a person turned on directly via context.user_id), and separates
-    out lights that need a two-step (brightness-then-colour) transition.
+    within tolerance of the target, leaves externally-set lights alone
+    (a light whose current context.id doesn't match what this
+    integration itself last wrote it with - a person, another
+    automation, or a device regaining power), and separates out lights
+    that need a two-step (brightness-then-colour) transition.
     Standalone - call this from your own automation, it doesn't require
     the adaptive_lighting blueprint in this repo.
   fields:
@@ -117,7 +119,7 @@ apply_lighting:
     Reads brightness/colour temperature (and optionally RGB colour) off
     sensor_entity_id and actually turns entities on/off via
     light.turn_on/light.turn_off - the same reachability/tolerance/
-    manual-override/two-step/RGB-vs-colour-temp logic
+    override-protection/two-step/RGB-vs-colour-temp logic
     compute_lighting_groups exposes as data, but dispatched for you.
     sensor_entity_id can be any sensor with brightness/color_temp
     attributes (optionally rgb_color too) - this integration's own

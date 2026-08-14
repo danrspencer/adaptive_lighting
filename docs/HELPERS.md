@@ -34,7 +34,7 @@ template:
 ```
 
 Point `apply_lighting`'s `sensor_entity_id` (or the blueprint's Adaptive Lighting Sensor input) at that entity
-and everything else — reachability, tolerance, manual-override protection, two-step transitions, RGB dispatch —
+and everything else — reachability, tolerance, override protection, two-step transitions, RGB dispatch —
 works exactly the same as with this integration's own sensor.
 
 ## `adaptive_lighting_helpers.apply_lighting`
@@ -42,7 +42,7 @@ works exactly the same as with this integration's own sensor.
 The "just make it happen" service: reads brightness/colour-temperature (and optionally RGB colour) off any
 sensor entity you point it at — see ["Bring your own sensor"](#bring-your-own-sensor) above for
 the exact contract — and actually turns entities on/off via `light.turn_on`/`light.turn_off`, handling
-reachability, tolerance, manual-override protection, two-step transitions, and RGB-vs-colour-temp dispatch
+reachability, tolerance, override protection, two-step transitions, and RGB-vs-colour-temp dispatch
 internally. This is what the blueprint calls.
 
 ```yaml
@@ -60,7 +60,7 @@ data:
 The pure-planner version of `apply_lighting`: given a set of light entities, a target brightness/colour-temperature,
 and optional per-light brightness multipliers, returns the minimal set of groups actually needing a
 `light.turn_on`/`light.turn_off` call — filters out unreachable lights, buckets by multiplier, skips anything
-already within tolerance of the target, leaves manually-set lights alone, and separates out lights tagged for
+already within tolerance of the target, leaves externally-set lights alone, and separates out lights tagged for
 two-step transitions — without touching any light itself. Use this instead of `apply_lighting` if you want to
 dispatch the calls yourself (custom transition curves, logging, etc.).
 

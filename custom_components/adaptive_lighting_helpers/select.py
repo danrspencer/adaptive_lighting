@@ -18,7 +18,7 @@ disagree") was a direct symptom of one entity trying to be both.
 RestoreEntity so an override survives a restart rather than silently
 reverting to Auto - matching the rest of this integration's "check
 live state fresh, don't invent hidden expiry" style (see
-grouping.py's manually_set()), just for the select's own state instead
+grouping.py's externally_set()), just for the select's own state instead
 of a light's.
 
 Self-correcting by default, matching the old system's behaviour: pin

@@ -23,7 +23,7 @@ uniformly to the rest of the schedule/curve config too.
 Override: each instance's own select.<prefix>adaptive_lighting_phase
 can pin the phase used for "right now" - _phase_override() reads its
 *current* live state on every update, the same "check fresh, don't
-remember" style grouping.py's manually_set() uses, so there's nothing
+remember" style grouping.py's externally_set() uses, so there's nothing
 to expire or persist here beyond what the select entity itself already
 does (see select.py's RestoreEntity use). curve.py's phase-taking
 functions don't care where the phase string came from, so overriding
