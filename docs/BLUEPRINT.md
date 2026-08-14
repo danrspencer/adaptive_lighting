@@ -56,12 +56,9 @@ assistant, or another automation entirely (including one with no identifiable "u
 triggered directly by a physical button) — is left alone rather than being overwritten on the next adaptive tick.
 Detected by comparing the light's current `context.id` against the `context.id` [Adaptive Lighting
 Helpers](HELPERS.md) itself last wrote that light with: if they still match, nothing has touched it since our own
-last update and it's updated normally; if they don't, something else has, and it's left alone. A device simply
-regaining power after an outage gets a fresh context of its own too, so it's covered by the same mechanism as
-everything else — not treated as an override, so a bulb reconnecting after a power or Zigbee blip is brought back
-in line automatically rather than left stuck at its last known state. A light with no recorded write at all yet
-(brand new, or right after this integration's own restart) is treated the same way — free to manage — rather than
-getting stuck unmanaged until it happens to change some other way.
+last update and it's updated normally; if they don't, something else has, and it's left alone. A light with no
+recorded write at all yet (brand new, or right after this integration's own restart) is treated the same way —
+free to manage — rather than getting stuck unmanaged until it happens to change some other way.
 
 The blueprint identifies itself to this check via `apply_lighting`'s `owner_id` parameter, set to its own
 `this.entity_id` — so a room's automation only ever recognises its *own* previous writes as "not overridden";
@@ -69,6 +66,14 @@ even a write from a different room's automation counts as external. There's no b
 none needed — it's automatic per room. If you want to deliberately force a light back under adaptive control
 without turning it off first (e.g. from a script you run by hand), call `apply_lighting` directly with no
 `owner_id` at all — see [docs/HELPERS.md](HELPERS.md#override-protection).
+
+**A device regaining power after an outage does *not* fall under the "not treated as an override" umbrella** —
+its own reconnect state report gets a fresh context too, indistinguishable from a real external change, so left
+alone it would never resync on its own. The blueprint handles this with a dedicated `recovered` trigger: whenever
+one of its lights transitions from `unavailable`/`unknown` back to a real state (a Zigbee mesh drop, or someone
+physically cutting and restoring power to the room), it force-resyncs *just that light* - calling `apply_lighting`
+with no `owner_id` scoped to that one entity, rather than the whole room - so a genuinely different light in the
+same room that's under its own real manual override isn't clobbered just because something else nearby blipped.
 
 ## Scene handoff
 

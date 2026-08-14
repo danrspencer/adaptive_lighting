@@ -69,6 +69,13 @@ Leave `owner_id` unset entirely to skip the check altogether and always write re
 touched the light — the explicit force/override case, e.g. for a script the user runs deliberately to bring
 a light back under adaptive control without having to turn it off first.
 
+A device regaining power gets a fresh context of its own too, so at this level alone it looks identical to a
+real external change and stays protected (i.e. unmanaged) indefinitely — nothing here ever un-marks it on its
+own. If you're using the blueprint, it already handles this for you (a dedicated `recovered` trigger
+force-resyncs just that light) — see [docs/BLUEPRINT.md](BLUEPRINT.md#override-detection). Calling these
+services directly from your own automation, you'd need the same kind of handling yourself if this matters
+to you.
+
 ## `adaptive_lighting_helpers.compute_lighting_groups`
 
 The pure-planner version of `apply_lighting`: given a set of light entities, a target brightness/colour-temperature,
