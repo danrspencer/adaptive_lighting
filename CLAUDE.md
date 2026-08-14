@@ -416,7 +416,7 @@ renames every entity's displayed name for free, no bulk update needed,
 since the display name is computed live rather than stored as a static
 string.
 
-Per sensor, six entities:
+Per sensor, five entities:
 - `sensor.<slug>_adaptive_lighting` - state is the phase name; current
   `brightness`/`color_temp`/`rgb_color` plus today's boundary
   timestamps (`morning_start`/`day_start`/`evening_start`/`night_start`/
@@ -424,13 +424,24 @@ Per sensor, six entities:
   one entity - no separate boundary-sensor entities (removed as UI
   noise; a `platform: state, attribute: phase` trigger on this entity
   already covers the automation case those existed for).
-- `sensor.<slug>_adaptive_lighting_curve` - `attributes.points`, the
-  full day as 289 samples, what the dashboard card reads.
-  `_unrecorded_attributes = frozenset({"points"})` keeps this out of
-  the recorder database (avoiding its 16KB state-attribute size
-  warning) without needing a dedicated fetch service - a fetch-on-
-  demand alternative was explored and rejected as strictly more
-  computation for no real win over this one-line fix.
+  `attributes.points` (the full day as 289 samples, what the dashboard
+  card reads) lives here too - **not** on a separate curve sensor as it
+  used to. That split existed only because `points` is too large for
+  the recorder database (16KB state-attribute size warning); merging it
+  in confirmed `_unrecorded_attributes = frozenset({"points"})` (what
+  actually solves that) is a plain per-attribute-name class field with
+  no dependency on a dedicated entity - the split was never load-bearing,
+  just how it happened to be built originally. Removing it was prompted
+  directly by the user disliking the second entity's existence, while
+  designing the blueprint's `adaptive_sensor` selector (see "Blueprint"
+  below) - filtering that selector to just this integration's sensors
+  would otherwise still have left two per instance to choose between.
+  **Breaking change** to the documented "bring your own sensor"
+  contract (`docs/HELPERS.md`) for anyone who built a custom sensor
+  mimicking the old two-entity split, or pointed a card's `entities:`
+  override at a separate `curve:` entity - the card's default `curve:`
+  key is gone, `points` now expected on the same entity as everything
+  else.
 - `select.<slug>_adaptive_lighting_phase` - manual phase override
   (Auto/Morning/Day/Evening/Night). Self-clears at the next natural
   phase boundary by default; `switch.<slug>_sticky_phase_override`

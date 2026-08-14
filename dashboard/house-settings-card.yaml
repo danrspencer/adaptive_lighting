@@ -22,8 +22,8 @@
 #                                           seconds), attributes.evening_earliest/
 #                                           evening_latest (unix seconds,
 #                                           optional - only used to explain
-#                                           *why* evening starts when it does)
-#        sensor.living_room_adaptive_lighting_curve - attributes.points: [{t, brightness, kelvin}, ...]
+#                                           *why* evening starts when it does),
+#                                           attributes.points: [{t, brightness, kelvin}, ...]
 #        sun.sun (optional, same reason as evening's earliest/latest)
 #
 # For the curve graph plus the override and every config entity in one
