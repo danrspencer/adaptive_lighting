@@ -560,7 +560,7 @@ working against the live instance:
   section for the full attribute contract (moved there from the README
   - the user flagged it as not belonging on the main landing page).
 - **Override detection redesigned from `context.user_id` to
-  `context.id` equality, unit tested but not yet confirmed live.**
+  `context.id` equality, unit tested and now confirmed live.**
   User-driven: the old check ("was this light's current state set by a
   real person") missed a real gap - another automation (e.g. one
   triggered directly by a physical button, carrying no
@@ -585,10 +585,23 @@ working against the live instance:
   part of this - it never actually protected anything on its own (its
   own `condition:` unconditionally backed out the instant it fired),
   so once the real check was fixed there was nothing left for it to do;
-  see the architectural-split note above and lesson 5. Needs a live
-  instance to confirm the persisted record actually survives a real HA
-  restart and that another automation's write is correctly detected,
-  not just the unit-test fakes.
+  see the architectural-split note above and lesson 5. **Confirmed live
+  against `light.bedroom_hall_spot_1`**: a direct `apply_lighting` call
+  brought it to the adaptive target (255 brightness / ~5025K); a
+  follow-up `light.turn_on` called directly (not through
+  `apply_lighting`, simulating an external source - its resulting state
+  carried `context.user_id: null`, identical to what the old check
+  would have waved through) changed its brightness to 90; a second
+  `apply_lighting` call against the same target then left it at 90
+  untouched - the exact failure mode this fix targets, confirmed fixed.
+  Turning the light off and calling `apply_lighting` once more
+  correctly resumed control (back to the adaptive target), confirming
+  the existing "turning off ends the protection" behaviour (lesson 5)
+  still holds under the new context.id-based check. Restart-survival of
+  the persisted `write_tracking.py` record itself wasn't separately
+  exercised beyond the restart already required to deploy this change -
+  low risk, since it's HA's own standard `Store` helper, the same
+  mechanism used throughout HA core.
 - RGB colour (`prefer_rgb_color`) is implemented, unit tested, and now
   **fully confirmed live end-to-end** - both the *routing decision*
   (`compute_lighting_groups` correctly bucketed a real bulb into
