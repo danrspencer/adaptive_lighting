@@ -98,6 +98,29 @@ meet.
   (`ha_get_automation_traces`), used heavily throughout this project to
   diagnose issues live. Losing that observability isn't worth it for
   logic that isn't actually that bad.
+- **The blueprint's `prefer_rgb_color_template` input is a deliberate,
+  one-off exception to "the blueprint doesn't know phase names."** Its
+  default - `{{ states(adaptive_sensor) in ['Evening', 'Night'] }}` -
+  hardcodes the four phase-name strings `curve.py`/`sensor.py` produce,
+  something every other blueprint input/condition/trigger up to this
+  point deliberately avoided (target resolution, occupancy, scene
+  handoff - none of it cares what phase it is). Accepted anyway,
+  explicit user call: "I had been avoiding coupling the blueprint to
+  the specific adaptive lighting phase names, but I think it's time."
+  Still just a *default* - it's a template input like `scene_template`/
+  `brightness_multiplier_template`, so anyone who doesn't want this
+  coupling can override it with a flat `{{ true }}` (there's no
+  separate "always on" toggle any more - a template already covers it:
+  set all four phases to prefer RGB, same as the old boolean set to
+  on). Renamed from `prefer_rgb_color` (a plain boolean) to
+  `prefer_rgb_color_template`, matching the existing `_template`-suffix
+  naming convention - a deliberate breaking rename, not an in-place
+  type change: a room automation still holding the old
+  `prefer_rgb_color: true` input has a now-unrecognized key, same
+  "misconfigured until updated" situation `docs/BLUEPRINT.md` already
+  documents for the earlier `scene_sensor`/`scene_name_prefix` rename.
+  Every already-migrated room automation needs that old key removed
+  outright (not left blank) as part of deploying this.
 
 **Lives in `custom_components/adaptive_lighting_helpers/` (a standalone
 HACS integration, four services - see "Current status" for the current
