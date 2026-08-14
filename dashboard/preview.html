@@ -82,10 +82,9 @@
           next_rising: new Date(data.sun.sunrise * 1000).toISOString(),
           next_setting: new Date(data.sun.sunset * 1000).toISOString(),
         }),
-        'sensor.default_adaptive_lighting_curve': state(new Date().toISOString(), { points: data.points }),
         // Combined entity: state = phase, attributes = brightness/color_temp/
         // morning_start/day_start/evening_start/night_start/
-        // evening_earliest/evening_latest - matches sensor.py's
+        // evening_earliest/evening_latest/points - matches sensor.py's
         // _AdaptiveLightingSensor shape, under the entity_ids a sensor
         // named "Default" would create (the card's DEFAULT_ENTITIES).
         'sensor.default_adaptive_lighting': state(data.now_phase, {
@@ -98,6 +97,7 @@
           night_start: data.boundaries.night,
           evening_earliest: data.boundaries.evening_earliest,
           evening_latest: data.boundaries.evening_latest,
+          points: data.points,
         }),
       };
 

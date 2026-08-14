@@ -3,15 +3,15 @@
  *
  * Renders the day's brightness + color-temperature curve as an actual
  * rendered-color chart (Kelvin -> RGB). The curve itself is NOT
- * recomputed here: it's read straight from the curve sensor, whose
- * `points` attribute is produced by the adaptive_lighting_helpers
+ * recomputed here: it's read straight off the combined sensor's
+ * `points` attribute, produced by the adaptive_lighting_helpers
  * integration's curve.py (custom_components/adaptive_lighting_helpers/) -
  * the same module the compute_curve service uses. That's the single
  * source of truth; this card just displays it. The "now" marker reads
- * the combined sensor's phase/brightness/color_temp attributes
- * directly for the same reason - and unlike the curve, those DO follow
- * a manual override via the phase select (see coordinator.py), since
- * they represent "right now" rather than the full-day schedule.
+ * the same sensor's phase/brightness/color_temp attributes directly -
+ * and unlike the curve, those DO follow a manual override via the phase
+ * select (see coordinator.py), since they represent "right now" rather
+ * than the full-day schedule.
  */
 
 const DEFAULT_ENTITIES = {
@@ -22,14 +22,13 @@ const DEFAULT_ENTITIES = {
   // phase/brightness_now/kelvin_now all read from the same combined
   // entity by default (state = phase, attributes = brightness/color_temp/
   // morning_start/day_start/evening_start/night_start/evening_earliest/
-  // evening_latest - see sensor.py's _AdaptiveLightingSensor) - see the
-  // fallback in `set hass()` below for custom configs still pointing at
-  // separate sensors.
+  // evening_latest/points - see sensor.py's _AdaptiveLightingSensor) -
+  // see the fallback in `set hass()` below for custom configs still
+  // pointing at separate sensors.
   phase: 'sensor.default_adaptive_lighting',
   brightness_now: 'sensor.default_adaptive_lighting',
   kelvin_now: 'sensor.default_adaptive_lighting',
   sun: 'sun.sun',
-  curve: 'sensor.default_adaptive_lighting_curve',
 };
 
 const VB_W = 960;
@@ -149,7 +148,6 @@ class AdaptiveLightingCurveCard extends HTMLElement {
       fromSensor.phase = base;
       fromSensor.brightness_now = base;
       fromSensor.kelvin_now = base;
-      fromSensor.curve = `${base}_curve`;
     }
     this._entities = { ...DEFAULT_ENTITIES, ...fromSensor, ...(this._config.entities || {}) };
     this._cacheKey = null;
@@ -183,7 +181,6 @@ class AdaptiveLightingCurveCard extends HTMLElement {
     }
 
     const sun = get(e.sun);
-    const curve = get(e.curve);
     const brightnessNow = get(e.brightness_now);
     const kelvinNow = get(e.kelvin_now);
 
@@ -202,7 +199,7 @@ class AdaptiveLightingCurveCard extends HTMLElement {
       eveningLatest: phase.attributes.evening_latest != null ? Number(phase.attributes.evening_latest) : null,
     };
 
-    const pointsRaw = curve && curve.attributes && curve.attributes.points;
+    const pointsRaw = phase.attributes.points;
     // brightness_now/kelvin_now default to the same combined entity as
     // phase, read via its brightness/color_temp attributes; a custom
     // config pointing them at separate plain-value sensors still works
