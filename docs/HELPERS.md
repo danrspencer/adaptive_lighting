@@ -112,16 +112,16 @@ Two ways to bypass the check for a single call:
   it as its own, rather than finding an orphaned record and getting stuck treating its *own* forced write as
   external. Use this when the caller wants to force through **and** keep normal protection working
   afterward — e.g. a script the user runs deliberately to bring a light back under adaptive control without
-  turning it off first, or an automation resyncing a light of its own that dropped off the network and came
-  back (see the blueprint's own handling of exactly this below).
+  turning it off first.
 
 A device regaining power gets a fresh context of its own too, so at this level alone it looks identical to a
-real external change and stays protected (i.e. unmanaged) indefinitely — nothing here ever un-marks it on its
-own; only a later call with `force: true` does. If you're using the blueprint, it already handles this for
-you (a dedicated `recovered` trigger force-resyncs just that light, passing its own `owner_id` alongside
-`force` so later ticks keep recognising it) — see [docs/BLUEPRINT.md](BLUEPRINT.md#override-detection).
-Calling these services directly from your own automation, you'd need the same kind of handling yourself if
-this matters to you.
+real external change - but this integration handles that case for you automatically, regardless of who's
+calling `apply_lighting`: it clears an entity's own protection record the moment it's *observed* going
+unavailable/unknown, so by the time it reconnects there's no stale record left for its new context to
+conflict with - a perfectly ordinary, non-forced call manages it again, the same as a brand new entity. No
+caller-side handling needed for this specific case - the blueprint's own `recovered` trigger exists purely so
+this happens *promptly* (the moment a light actually recovers, rather than waiting for whatever next calls
+`apply_lighting` for that room) - see [docs/BLUEPRINT.md](BLUEPRINT.md#override-detection).
 
 ## `adaptive_lighting_helpers.compute_lighting_groups`
 

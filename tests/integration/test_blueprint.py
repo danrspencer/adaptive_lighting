@@ -281,6 +281,31 @@ class TestOccupancyDrivenOnOff:
         calls = apply_lighting_calls
         assert calls and calls[-1].data["entities"] == ["light.a"]
 
+    async def test_real_occupancy_sensor_reporting_unoccupied_still_updates_an_already_on_light(
+        self, hass, apply_lighting_calls
+    ):
+        """The core simplification: occupancy only gates turning lights
+        *on* and *off* (see TestAllowTurnOn and the motion_off/reconcile
+        tests below) - it has no say over whether an already-on light
+        keeps tracking the curve. Before this, a room *with* a real
+        occupancy sensor stopped updating on-lights the instant it read
+        "unoccupied", while a room with no sensor never had that
+        restriction at all (its own occupied fallback is just "is
+        anything already on"). This test is the case that used to behave
+        differently depending on whether a sensor happened to be
+        present at all - now both are consistent."""
+        _occupancy(hass, "binary_sensor.occ", "off")
+        _light(hass, "light.a", "on", brightness=190, color_temp_kelvin=4000)
+        await hass.async_block_till_done()
+
+        await _setup_room_automation(hass, room_target={"entity_id": ["light.a", "binary_sensor.occ"]})
+
+        hass.states.async_set("sensor.test_adaptive", "Day", {"brightness": 210, "color_temp": 4000})
+        await hass.async_block_till_done()
+
+        calls = apply_lighting_calls
+        assert calls and calls[-1].data["entities"] == ["light.a"]
+
     async def test_fully_dark_unoccupied_room_periodic_tick_does_not_turn_anything_on(
         self, hass, apply_lighting_calls
     ):
@@ -356,7 +381,18 @@ class TestOverrideDetection:
 class TestRecoveredTrigger:
     """docs/BLUEPRINT.md's "A device regaining power after an outage"
     section - see also the dated CLAUDE.md incident this whole feature,
-    and its two follow-up bugs, came from."""
+    and its follow-up bugs and eventual redesign, came from.
+
+    As of the redesign, `recovered` carries no special handling of its
+    own at all - no force, no scoped call, no occupancy bypass. Its only
+    job is promptness: causing an ordinary tick to run right away
+    instead of waiting for the room's next unrelated trigger. The actual
+    "a recovered light is free to manage again" guarantee now lives in
+    write_tracking.py (LastWriteTracker.async_start_listening, which
+    clears an entity's record the moment it's seen going unavailable) -
+    tested directly against the real service in
+    tests/integration/test_services.py, not here, since apply_lighting
+    is mocked in this file and so never actually runs that logic."""
 
     async def test_fires_and_resyncs_a_light_that_reconnects_on(self, hass, apply_lighting_calls):
         """Regression test for the trigger's original dead-on-arrival bug:
@@ -364,7 +400,9 @@ class TestRecoveredTrigger:
         all (confirmed live against Jacob's real pendant) - the
         value_template could never become true because it referenced
         `trigger` inside its own arming evaluation, which is never in
-        scope there."""
+        scope there. No `force` involved any more (see class docstring)
+        - it's included because it's on, in a room that's (trivially)
+        occupied by virtue of being the only light and now being on."""
         _light(hass, "light.a", "unavailable")
         await hass.async_block_till_done()
         await _setup_room_automation(hass, room_target={"entity_id": "light.a"})
@@ -372,14 +410,15 @@ class TestRecoveredTrigger:
         _light(hass, "light.a", "on", brightness=255)
         await hass.async_block_till_done()
 
-        forced_calls = [c for c in apply_lighting_calls if c.data.get("force")]
-        assert any(c.data["entities"] == ["light.a"] for c in forced_calls)
+        assert any(c.data["entities"] == ["light.a"] and c.data["force"] is False for c in apply_lighting_calls)
 
     async def test_does_not_turn_on_a_light_that_reconnects_off_in_a_dark_room(self, hass, apply_lighting_calls):
         """The bug found immediately after fixing the trigger above:
         Jacob's only light, off at bedtime, turned on purely from a
         network blip. A light reconnecting *off*, in a room with
-        nothing else on, must stay off."""
+        nothing else on, must stay off - the same allow_turn_on rule
+        every other light in every other room is subject to, not
+        anything specific to recovery."""
         _light(hass, "light.a", "unavailable")
         await hass.async_block_till_done()
         await _setup_room_automation(hass, room_target={"entity_id": "light.a"})
@@ -393,8 +432,9 @@ class TestRecoveredTrigger:
     async def test_a_plain_off_to_on_transition_does_not_fire_it(self, hass, apply_lighting_calls):
         """recovered is specifically for unavailable/unknown -> real
         state - an ordinary off -> on never touches the "is anything
-        unavailable" aggregate at all, so it must not produce a forced,
-        unconditional resync."""
+        unavailable" aggregate at all, so it must not cause the
+        automation to run at all (nothing else in this room's trigger
+        list reacts to a plain light state change either)."""
         _light(hass, "light.a", "off")
         await hass.async_block_till_done()
         await _setup_room_automation(hass, room_target={"entity_id": "light.a"})
@@ -402,14 +442,13 @@ class TestRecoveredTrigger:
         _light(hass, "light.a", "on", brightness=255)
         await hass.async_block_till_done()
 
-        assert not any(c.data.get("force") for c in apply_lighting_calls)
+        assert apply_lighting_calls == []
 
-    async def test_only_resyncs_the_light_that_recovered_not_the_whole_room(self, hass, apply_lighting_calls):
-        """Deliberately scoped to trigger.entity_id alone (see the
-        blueprint's own comment on the force-resync step) - a genuinely
-        different light in the same room, under its own real manual
-        override, must not be clobbered just because something else
-        nearby blipped."""
+    async def test_recovery_joins_the_ordinary_room_wide_tick_not_a_separate_call(self, hass, apply_lighting_calls):
+        """No more dedicated scoped call (see class docstring) - a
+        recovered light is just part of the same single apply_lighting
+        call every other trigger already makes, alongside whatever else
+        in the room happens to be on."""
         _light(hass, "light.recovering", "unavailable")
         _light(hass, "light.sibling", "on", brightness=90, color_temp_kelvin=4000)
         await hass.async_block_till_done()
@@ -418,9 +457,9 @@ class TestRecoveredTrigger:
         _light(hass, "light.recovering", "on", brightness=255)
         await hass.async_block_till_done()
 
-        forced_calls = [c for c in apply_lighting_calls if c.data.get("force")]
-        assert all(c.data["entities"] == ["light.recovering"] for c in forced_calls)
-        assert not any("light.sibling" in c.data["entities"] for c in forced_calls)
+        assert len(apply_lighting_calls) == 1
+        assert set(apply_lighting_calls[0].data["entities"]) == {"light.recovering", "light.sibling"}
+        assert apply_lighting_calls[0].data["force"] is False
 
 
 class TestSceneHandoff:

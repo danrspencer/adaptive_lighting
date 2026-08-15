@@ -26,13 +26,28 @@ later keyed caller correctly sees them as someone else's).
 Persisted via Store (not just in-memory) so a HA restart doesn't make
 every already-on light look externally-set until it happens to change
 again some other way.
+
+A device regaining power after an outage is a real gap in the write-
+record model above: its own reconnect state report gets a fresh
+context too (confirmed against HA core's core.py - any state write
+without an explicit context, which a reconnecting device's own state
+report always is, gets `Context(id=ulid_at_time(...))`, unconditionally),
+indistinguishable from a genuine external change. Left as-is, a
+recovered light would look externally-set forever, since nothing else
+here ever un-marks it. async_start_listening() closes this by clearing
+an entity's own record the moment it's *observed* going unavailable/
+unknown - by the time it reconnects, there's no record left to compare
+against, so it's "free to manage" again (the same fallback already used
+for a brand new entity), through completely ordinary means - no forced
+write, no special-casing, just the next regular call finding no claim
+to conflict with.
 """
 
 from __future__ import annotations
 
 from typing import Optional, TypedDict
 
-from homeassistant.core import HomeAssistant
+from homeassistant.core import CALLBACK_TYPE, Event, EventStateChangedData, HomeAssistant, callback
 from homeassistant.helpers.storage import Store
 
 STORAGE_VERSION = 1
@@ -84,3 +99,31 @@ class LastWriteTracker:
         for entity_id in entity_ids:
             self._data[entity_id] = {"context_id": context_id, "owner_id": owner_id}
         await self._store.async_save(self._data)
+
+    def async_start_listening(self, hass: HomeAssistant) -> CALLBACK_TYPE:
+        """See the module docstring's "device regaining power" section -
+        clears an entity's record the instant it's seen going
+        unavailable/unknown, so its eventual reconnect (a write we have
+        no way to intercept, since it isn't a light.turn_on/turn_off
+        call at all) finds no claim to conflict with.
+
+        A single hass-wide "state_changed" listener, not a per-entity
+        subscription that would need to be kept in sync with self._data
+        as apply_lighting calls add new entities over time - the filter
+        below is a cheap dict lookup, and HA integrations commonly use
+        this same broad-listen-then-filter pattern rather than manage
+        dynamic per-entity subscriptions for something this cheap to
+        check."""
+
+        @callback
+        def _on_state_changed(event: Event[EventStateChangedData]) -> None:
+            entity_id = event.data["entity_id"]
+            if entity_id not in self._data:
+                return
+            new_state = event.data["new_state"]
+            if new_state is None or new_state.state not in ("unavailable", "unknown"):
+                return
+            del self._data[entity_id]
+            hass.async_create_task(self._store.async_save(self._data))
+
+        return hass.bus.async_listen("state_changed", _on_state_changed)

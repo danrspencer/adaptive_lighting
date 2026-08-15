@@ -293,6 +293,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # last-write provenance survives a HA restart.
     write_tracker = LastWriteTracker(hass)
     await write_tracker.async_load()
+    entry.async_on_unload(write_tracker.async_start_listening(hass))
 
     async def compute_lighting_groups(call: ServiceCall) -> ServiceResponse:
         """adaptive_lighting_helpers.compute_lighting_groups

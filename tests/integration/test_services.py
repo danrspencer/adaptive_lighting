@@ -308,3 +308,133 @@ async def test_force_bypasses_protection_and_reclaims_ownership(setup_integratio
     # not externally-set, and still short of target, so correctly
     # included for update.
     assert result["groups"][0]["combined"] == ["light.a"]
+
+
+async def test_write_tracking_record_is_cleared_when_light_goes_unavailable(setup_integration: HomeAssistant):
+    """Confirms LastWriteTracker.async_start_listening() (wired up by
+    async_setup_entry, already active via the setup_integration fixture)
+    actually does what it's for - see write_tracking.py's own module
+    docstring on the "device regaining power" gap this closes. Without
+    it, the light's post-reconnect context (never anything
+    apply_lighting itself wrote) would make it look externally-set
+    forever, needing a forced write to ever recover - this proves a
+    perfectly ordinary, non-forced call is enough once it's cleared."""
+    hass = setup_integration
+    turn_on_calls = async_mock_service(hass, "light", "turn_on")
+    _set_sensor(hass, brightness=180, color_temp=3200)
+
+    _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
+    await hass.services.async_call(
+        DOMAIN,
+        "apply_lighting",
+        {
+            "entities": ["light.a"],
+            "sensor_entity_id": "sensor.test_adaptive",
+            "transition": 2,
+            "owner_id": "automation.room",
+        },
+        blocking=True,
+    )
+    assert len(turn_on_calls) == 1
+
+    # The device drops off the network.
+    _set_light(hass, "light.a", "unavailable", supported_color_modes=["color_temp"])
+    await hass.async_block_till_done()
+
+    # It reconnects - a real device's own state report, carrying a
+    # context we never issued (matching HA core's own "no context given
+    # -> fresh Context()" fallback, which is exactly what a reconnecting
+    # device's own state report goes through).
+    _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=90, color_temp_kelvin=3200)
+    await hass.async_block_till_done()
+
+    # A normal, non-forced call still updates it - proving there was no
+    # stale record left to conflict with the light's new, unrelated
+    # context. Before this fix, this second call would have found the
+    # light "externally set" and left it alone.
+    await hass.services.async_call(
+        DOMAIN,
+        "apply_lighting",
+        {
+            "entities": ["light.a"],
+            "sensor_entity_id": "sensor.test_adaptive",
+            "transition": 2,
+            "owner_id": "automation.room",
+        },
+        blocking=True,
+    )
+    assert len(turn_on_calls) == 2
+
+
+async def test_recovered_light_is_freed_while_an_unrelated_override_stays_protected(
+    setup_integration: HomeAssistant,
+):
+    """The clear-on-unavailable fix only touches the entity that
+    actually went unavailable - a sibling under its own real, unrelated
+    override (never went unavailable, so its record is never cleared)
+    must stay protected exactly as before."""
+    hass = setup_integration
+    turn_on_calls = async_mock_service(hass, "light", "turn_on")
+    _set_sensor(hass, brightness=180, color_temp=3200)
+
+    for entity_id in ("light.recovering", "light.sibling"):
+        _set_light(hass, entity_id, "off", supported_color_modes=["color_temp"])
+
+    our_context = Context()
+    await hass.services.async_call(
+        DOMAIN,
+        "apply_lighting",
+        {
+            "entities": ["light.recovering", "light.sibling"],
+            "sensor_entity_id": "sensor.test_adaptive",
+            "transition": 2,
+            "owner_id": "automation.room",
+        },
+        blocking=True,
+        context=our_context,
+    )
+    assert len(turn_on_calls) == 1
+
+    # Reflect the write into state under our own context, matching what
+    # write_tracker just recorded for both lights.
+    for entity_id in ("light.recovering", "light.sibling"):
+        _set_light(
+            hass,
+            entity_id,
+            "on",
+            supported_color_modes=["color_temp"],
+            brightness=180,
+            color_temp_kelvin=3200,
+            context=our_context,
+        )
+
+    # light.recovering drops off the network and reconnects - its own
+    # state report, an unrelated fresh context.
+    _set_light(hass, "light.recovering", "unavailable", supported_color_modes=["color_temp"])
+    await hass.async_block_till_done()
+    _set_light(
+        hass, "light.recovering", "on", supported_color_modes=["color_temp"], brightness=90, color_temp_kelvin=3200
+    )
+
+    # light.sibling never went unavailable - someone just changed it
+    # directly (a wall switch, another automation).
+    _set_light(
+        hass, "light.sibling", "on", supported_color_modes=["color_temp"], brightness=90, color_temp_kelvin=3200
+    )
+    await hass.async_block_till_done()
+
+    result = await hass.services.async_call(
+        DOMAIN,
+        "compute_lighting_groups",
+        {
+            "entities": ["light.recovering", "light.sibling"],
+            "sensor_brightness": 180,
+            "sensor_color_temp_kelvin": 3200,
+            "owner_id": "automation.room",
+        },
+        blocking=True,
+        return_response=True,
+    )
+    combined = result["groups"][0]["combined"]
+    assert "light.recovering" in combined
+    assert "light.sibling" not in combined
