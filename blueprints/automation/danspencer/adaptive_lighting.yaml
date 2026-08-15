@@ -261,6 +261,29 @@ trigger:
         real external change to Adaptive Lighting Helpers - so left
         alone, it would otherwise never resync on its own (see
         docs/BLUEPRINT.md's "Override detection" section).
+
+        IMPORTANT: this template can't reference `trigger.*` itself -
+        confirmed against HA core's own template trigger source
+        (homeassistant/components/template/trigger.py): the value_template
+        that decides *whether to fire* is rendered with only this
+        automation's trigger_variables in scope; `trigger` is only
+        injected afterwards, into the fired action's own variables, from
+        the real state_changed event that caused the render - a
+        different pass entirely. An earlier version of this template did
+        reference `trigger.entity_id`/`from_state`/`to_state` here, which
+        meant `trigger is defined` was always false and this trigger
+        could never fire at all - caught live when Living Room/Study
+        never resynced after being power-cycled, despite the automation
+        traces showing no `recovered`-triggered run at all. Fixed by
+        testing an aggregate condition instead - "none of our lights are
+        currently unavailable/unknown" - which edge-triggers (false to
+        true) exactly when the last outstanding light recovers.
+        `trigger.entity_id`/`from_state`/`to_state` are still used
+        correctly further down (just_recovered, and the scoped
+        force-resync action) - those live in the automation's own
+        condition:/variables:/action: context, which does get `trigger`
+        populated from the real event, regardless of what this
+        value_template computed.
       #}
       {% set ns = namespace(entities=[]) %}
       {% if room_target is not none %}
@@ -282,18 +305,9 @@ trigger:
         {% endif %}
       {% endif %}
       {% set light_entity_ids = ns.entities | unique | list %}
-      {% set watch = namespace(items=[]) %}
-      {% for light_id in light_entity_ids %}
-        {# Touching each entity's state here is what makes this
-           template trigger re-evaluate whenever any of them changes #}
-        {% set watch.items = watch.items + [states(light_id)] %}
-      {% endfor %}
-      {{ trigger is defined
-         and trigger.entity_id in light_entity_ids
-         and trigger.from_state is not none
-         and trigger.from_state.state in ['unavailable', 'unknown']
-         and trigger.to_state is not none
-         and trigger.to_state.state not in ['unavailable', 'unknown'] }}
+      {{ light_entity_ids | length > 0
+         and light_entity_ids | select('is_state', 'unavailable') | list | length == 0
+         and light_entity_ids | select('is_state', 'unknown') | list | length == 0 }}
 
 condition:
   - or:
