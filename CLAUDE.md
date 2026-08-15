@@ -1373,21 +1373,71 @@ from the repo root (see CONTRIBUTING.md). Two layers:
   large `home-assistant-frontend` package for something these tests
   never touch); `test_blueprint.py` loads the real blueprint file into
   a test automation and fires real triggers, mocking only
-  `adaptive_lighting_helpers.apply_lighting` itself via
-  `async_mock_service` so these tests are purely about what the
-  blueprint decides to call it with. This is the only layer that can
-  catch a bug living in the blueprint's own trigger/condition/action
-  wiring - both the `recovered` trigger's dead-on-arrival bug and the
-  off-light-turn-on bug it then exposed (see their own dated entries
-  above) were exactly that kind of bug: syntactically fine, wrong only
-  at runtime, invisible to plain YAML parsing or an isolated
-  `ha_eval_template` check. `tests/integration/conftest.py` overrides
-  pytest-homeassistant-custom-component's own `hass_config_dir`
+  `adaptive_lighting_helpers.apply_lighting`/`scene.turn_on`/`light.turn_off`
+  via `async_mock_service` so these tests are purely about what the
+  blueprint decides to call with, for a given trigger and room state.
+  This is the only layer that can catch a bug living in the blueprint's
+  own trigger/condition/action wiring - both the `recovered` trigger's
+  dead-on-arrival bug and the off-light-turn-on bug it then exposed
+  (see their own dated entries above) were exactly that kind of bug:
+  syntactically fine, wrong only at runtime, invisible to plain YAML
+  parsing or an isolated `ha_eval_template` check. `tests/integration/conftest.py`
+  overrides pytest-homeassistant-custom-component's own `hass_config_dir`
   fixture (which otherwise points at the package's own bundled
   `testing_config/`, not this repo) to symlink this repo's
   `custom_components/` and `blueprints/` into a throwaway `tmp_path`,
   confirmed live as the fix for an initial "Integration not found"
   failure - not guessed.
+
+  **`test_blueprint.py` reorganised and substantially expanded the same
+  day, from an initial 7 tests to 26, one test class per feature -
+  user's own explicit push-back, not a self-driven expansion**: "7
+  tests doesn't feel like a lot for the blueprint... I'd expect the
+  tests to essentially act as documentation for the blueprint
+  behaviour." Restructured to mirror `docs/BLUEPRINT.md`'s own section
+  headings exactly (`TestAdaptiveScheduleAndTransitions`,
+  `TestRoomTargetResolution`, `TestOccupancyDrivenOnOff`,
+  `TestAllowTurnOn`, `TestOverrideDetection`, `TestRecoveredTrigger`,
+  `TestSceneHandoff`, `TestBrightnessScaling`, `TestRgbColour`,
+  `TestAdditionalTriggers`, `TestSelfHealing`) so the file reads
+  top-to-bottom as a spec of what the blueprint actually does, not just
+  a regression net for the two incidents that prompted it. Real bugs
+  caught building this out, not just added coverage for its own sake:
+  - **A scene can't be activated by a plain periodic `adaptive` sensor
+    tick once it's already considered active** - deliberate, existing
+    behaviour (the blueprint's own `condition:` comment: "extra stays
+    exempt from that suppression" - only `extra`/`motion_on`/a manual
+    run can activate a scene; `adaptive` is suppressed entirely once
+    `scene_active`, to avoid re-activating the same scene every minute).
+    The first version of the scene-handoff tests triggered via the
+    `adaptive` sensor changing, which is *never* the trigger that
+    actually activates a scene in production either - silently
+    asserting nothing, not failing, since `assert calls and ...` on an
+    empty list just reads as "no calls happened" rather than crashing
+    loud. Fixed by triggering those tests via a manual run instead,
+    which exercises the `action:` scene-handling logic directly without
+    tripping this specific suppression.
+  - **A same-force, same-entity-count heuristic can't tell a manual
+    run's own main call apart from the `recovered` trigger's scoped
+    resync call** - an earlier `_main_calls()` helper filtered
+    `apply_lighting` calls by "not forced, or more than one entity", to
+    exclude `recovered`'s always-forced, always-single-entity resync
+    call from assertions about the main room-wide call. Wrong for a
+    single-light room's *manual run*, which also produces a
+    single-entity, `force: true` main call - filtered out by the same
+    heuristic, silently breaking that test. Removed entirely: no test
+    in this file that isn't specifically about the `recovered` trigger
+    ever produces more than one `apply_lighting` call per tick, so a
+    plain `apply_lighting_calls[-1]` needs no filtering at all.
+  - `async_fire_time_changed(hass, dt_util.utcnow().replace(minute=5, ...))`
+    for testing the `reconcile` `time_pattern` trigger can silently
+    target a time *earlier* than "now" depending on real wall-clock
+    alignment at test-run time, rather than reliably crossing a future
+    trigger boundary. Fixed by advancing relative to `utcnow()` instead
+    (`utcnow() + timedelta(minutes=6)`, guaranteed past at least one
+    5-minute boundary regardless of current alignment) - confirmed
+    stable across 5 repeated local runs before landing, not just
+    "passed once."
 
   This is also why `pyproject.toml`'s `requires-python` floor moved to
   3.14 (from 3.9) the same day: pytest-homeassistant-custom-component
