@@ -60,11 +60,47 @@ data:
 ### Override protection
 
 A light already on gets left alone once something other than this integration's own last write has touched
-it since — a person, another automation, or a device regaining power. `owner_id` (optional, any string) is
-how a caller identifies itself for that check: the blueprint passes its own `this.entity_id` (Home
-Assistant's built-in "this automation's own state" template variable), so each room's writes are only ever
-recognised as "not overridden" by that same room's own next call — a write from a *different* `owner_id`
-counts as external too, even though it's still technically `apply_lighting`.
+it since — a person, another automation, or a device regaining power. Two independent pieces of information
+feed into that check:
+
+- **`context.id`** — not something you set; it's Home Assistant's own built-in causality marker. Every state
+  change carries one, and every service call gets one too - either passed explicitly, or a fresh, unrelated
+  one HA generates for it. Every write `apply_lighting` itself issues is recorded against the `context.id` it
+  used, so a later call can tell "has anything touched this light since my last write" just by comparing the
+  light's current context against what was recorded.
+- **`owner_id`** (optional, any string) — entirely your own invention, how a caller identifies *itself*. The
+  blueprint passes its own `this.entity_id` (e.g. `automation.living_room_lights`), so each room's writes
+  carry a stable identity distinguishing "the Living Room automation" from "the Kitchen automation" - two
+  calls that otherwise look identical to Home Assistant.
+
+Both get recorded together against each entity `apply_lighting` actually writes: `{context_id, owner_id}`,
+overwritten on every write - there's no history kept, just "what was the last thing we wrote this light
+with." The check itself asks, in this order, for one specific light:
+
+1. **Is the light currently off?** Free to manage - nothing to protect.
+2. **Was `force: true` passed?** Free to manage, unconditionally (the write is still recorded normally - see
+   below).
+3. **Was `owner_id` omitted?** Free to manage, unconditionally (recorded with `owner_id: null`).
+4. **Is there any recorded write for this light at all?** If not - a brand new light, or nothing's ever
+   claimed it - free to manage.
+5. **Does the light's current `context.id` match what was recorded?** If not, something touched it since -
+   a person, a different automation, or a device reconnecting with a fresh context. Externally set; left
+   alone.
+6. **Context matches (nothing's touched it since) - but was that write made under a *different* `owner_id`
+   than the one asking now?** Externally set too, even though the light's own state hasn't changed. A
+   recorded `owner_id` of `null` doesn't count against anyone here - there was no claim to conflict with.
+7. **Otherwise** - same context, same owner: genuinely this caller's own last write, still standing. Managed
+   normally.
+
+Step 6 is the one that's easy to miss: two different callers writing the *same* light with *different*
+`owner_id`s never look "externally set" to *each other* by context alone, since each one's own write is
+always the most recent context from its own point of view - only comparing `owner_id` catches it.
+Concretely: Kitchen's automation force-writes a light Living Room normally owns (`owner_id:
+"automation.kitchen_lights"`, `force: true`), and nothing else touches the light afterward. Living Room's
+next regular tick sees a perfectly valid, matching `context.id` - nothing's changed since Kitchen's write -
+but the recorded `owner_id` is Kitchen's, not its own, so it still correctly leaves the light alone rather
+than "helpfully" overwriting Kitchen's deliberate change. `context.id` answers "has *anything* changed";
+`owner_id` answers "was it *me*."
 
 Two ways to bypass the check for a single call:
 
