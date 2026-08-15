@@ -1,11 +1,30 @@
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Required by pytest-homeassistant-custom-component's fixtures (hass,
+# enable_custom_integrations, etc.) - they're async and need
+# auto-detection rather than a per-test @pytest.mark.asyncio, matching
+# how Home Assistant core's own test suite is configured.
+asyncio_mode = "auto"
 
 [project]
 name = "adaptive-lighting"
 version = "0.1.0"
 description = "Blueprint + standalone Home Assistant integration for adaptive lighting: a shareable, testable replacement for the Jinja-heavy version."
-requires-python = ">=3.9"
+requires-python = ">=3.14"
 
 [project.optional-dependencies]
-dev = ["pytest"]
+# A reference, not something `pip install -e ".[dev]"` can actually
+# install - this repo's flat layout (custom_components/, blueprints/,
+# dashboard/, brand/ all at root) isn't set up for setuptools package
+# discovery, and doesn't need to be (nothing here is ever distributed
+# as an installable Python package). See .github/workflows/tests.yml
+# and CONTRIBUTING.md, which install these two by name directly.
+#
+# pytest-homeassistant-custom-component pins a specific Home Assistant
+# release and, transitively, the Python floor that release requires -
+# 3.14 as of writing. Since the whole point of this repo is to run
+# inside a real HA install, tracking that floor rather than a separate
+# lower one is the right call, not just a CI convenience - a version of
+# this package that only worked on Python versions HA itself has
+# already dropped would be untested where it actually matters.
+dev = ["pytest", "pytest-homeassistant-custom-component"]
