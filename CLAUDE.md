@@ -1095,6 +1095,149 @@ designs were explored:
   confirms a subsequent same-phase brightness-only tick does not
   re-call `scene.turn_on`. `pytest` 27/27 in `test_blueprint.py` (83/83
   full suite), stable across repeated local runs.
+- **Recovery-from-unavailable's own dedicated scoped-resync step
+  removed entirely, and occupancy stopped gating already-on-light
+  updates at all - 2026-08-15, same day as the scene-activation fix
+  above.** Prompted by the user reading real automation traces and
+  asking a basic architectural question: "why is recovery from
+  unavailable its own step? this should just happen naturally right?"
+  Went through several rounds before landing on a materially simpler
+  design than what shipped that morning (the `recovered` trigger +
+  `just_recovered` + scoped force-resync mechanism documented
+  immediately above this entry).
+
+  **A proposed intermediate design was explicitly and emphatically
+  rejected by the user, and the rejection is a standing constraint, not
+  just feedback on that one idea.** Investigating "why doesn't recovery
+  just happen naturally," the blocker turned out to be real: a
+  reconnecting device's own state report carries a fresh `context.id`
+  (confirmed directly against `homeassistant/core.py` before relying on
+  it - `async_set_internal` does `if context is None: context =
+  Context(id=ulid_at_time(timestamp))`, and `Entity._context` is only
+  set by `async_set_context()` during a service call, expiring after
+  `CONTEXT_RECENT_TIME_SECONDS = 5`s - so a bare reconnect, not preceded
+  by a recent service call, always gets a brand-new context with no
+  owner_id attached). That fresh context makes `externally_set()` treat
+  the reconnect as an override, same as any other change from outside
+  this integration - which is *why* the scoped-resync mechanism existed
+  at all. Proposed fix at the time: clear the write-tracking record on
+  unavailable (uncontroversial - see below) *and* treat "whole room just
+  came back from unavailable" as a new event equivalent to motion, i.e.
+  eligible to turn lights on via `allow_turn_on`. **User's response, in
+  full, verbatim, because this is a hard boundary going forward:**
+  *"whow whow whow, did you just say that an entire room becoming
+  available can now turn on? bevcause that is EXPLICTLY WRONG, we NEVER
+  TRIGGER unless motion / occupied / manual run NEVER EVER THIS WILL NOT
+  CHANGE UNLESS EXPLICITLY ASKED FOR!!"* `allow_turn_on`
+  (`manual_run or trigger.id == 'motion_on' or occupied`) must never
+  gain a new way to become true without the user explicitly asking for
+  it in so many words - not implied, not inferred as "obviously
+  reasonable," asked for.
+
+  The user's own corrected framing, immediately after, is what actually
+  shipped: *"if we trigger on a bulb leaving unavailable then we just
+  hit our existing turn on guards, if its off then we don't do
+  anything, if its on then we can update."* No new turn-on permission
+  needed at all - `allow_turn_on` already handles "was the room
+  occupied," and a light that reconnects already-on only needs its
+  attributes *updated*, which was never gated by `allow_turn_on` in the
+  first place (that variable only guards `light.turn_on` calls to
+  currently-off lights).
+
+  **A second, independent simplification followed from the user
+  questioning the pre-existing occupancy-gating design itself**, not
+  just the new recovery mechanism: *"why do we care if a room is
+  occupied before deciding to update or not - we don't, we care if the
+  bulbs are off or not, the only thing we DO care about reconciling on
+  with regards to occupancy is when we're responsible for turning off,
+  so if the room is empty AND we're past the time it should've turned
+  off AND a bulb is still on, then turn it off."* Confirmed correct on
+  review: occupancy's only two real jobs were always turning a room on
+  (via `motion_on` + `allow_turn_on`) and turning it off once empty (via
+  `motion_off`/`reconcile`) - gating the *adaptive/extra* ticks on
+  occupancy never protected anything, it just meant an already-on light
+  in a room the room's own occupancy sensor briefly disagreed with (or a
+  light-only room with no occupancy sensor at all, see the
+  `room_target` merge note above) got skipped for a tick it should have
+  received. User confirmed both changes together: *"I think yes thats
+  right... do this."*
+
+  **Final three-part implementation, all shipped together:**
+  1. `write_tracking.py`'s `LastWriteTracker` gained
+     `async_start_listening(hass)` - a single hass-wide `state_changed`
+     listener (not a per-entity subscription needing to track
+     `apply_lighting`'s own entity set over time) that deletes an
+     entity's `{context_id, owner_id}` record the instant it's observed
+     going `unavailable`/`unknown`. Wired up in `__init__.py` via
+     `entry.async_on_unload(write_tracker.async_start_listening(hass))`,
+     right after the tracker loads. This is what actually closes the
+     "reconnect looks external" gap - by the time the device reports
+     its recovered state, there's no stale record left for the fresh
+     context to mismatch against, so `externally_set()`'s existing "no
+     record → free" branch (already there, see lesson 5's
+     `EntityLookup`) picks it up with no new logic of its own.
+  2. The blueprint's `condition:` block collapsed from three branches
+     (occupancy-gated adaptive/extra, a `motion_on` efficiency check, a
+     catch-all) down to two: `motion_on` still only proceeds if
+     something in scope is actually off (unchanged, an efficiency
+     check, not a permission check - `allow_turn_on` is what actually
+     permits the turn-on); every other trigger (`adaptive`, `extra`,
+     `manual`, `recovered`) now proceeds unconditionally. Occupancy is
+     no longer read anywhere in `condition:` at all.
+  3. The `recovered` trigger, `just_recovered` variable, and the scoped
+     "force-resync just this light" action step (documented in detail
+     immediately above this entry) were removed outright - not
+     deprecated, deleted. The `recovered` trigger itself (a light
+     leaving `unavailable`/`unknown`) is kept, but purely as a
+     promptness signal - it just causes the *ordinary*, unscoped,
+     room-wide `apply_lighting` call (unchanged: `owner_id: "{{
+     this.entity_id }}"`, `force: "{{ manual_run }}"`, no per-light
+     scoping) to run sooner than the next `reconcile` tick would have,
+     rather than waiting up to 5 minutes. `script_transition`'s
+     adaptive-transition bucket gained `'recovered'` alongside
+     `'adaptive'`/`'extra'` so a recovered light fades in smoothly
+     rather than snapping. The trigger's own aggregate arming template
+     ("none of this room's lights are currently unavailable/unknown")
+     needed no change - already correctly handles a single flaky bulb
+     among reliable siblings, confirmed by trace-through, not just
+     assumed.
+
+  **Test-layer consequence, not an oversight**: with no more
+  blueprint-level per-light scoping, the "a sibling under a genuine
+  external override stays protected while the recovered light gets
+  freed" guarantee no longer lives in the blueprint at all - it lives
+  entirely in `write_tracking.py`/`grouping.py`. Coverage moved
+  accordingly: `test_blueprint.py`'s old
+  `test_only_resyncs_the_light_that_recovered_not_the_whole_room` was
+  replaced with
+  `test_recovery_joins_the_ordinary_room_wide_tick_not_a_separate_call`
+  (asserts exactly one unscoped, unforced `apply_lighting` call covering
+  the whole room), and two new tests were added to `test_services.py`
+  instead, exercising the real service rather than a mocked one:
+  `test_write_tracking_record_is_cleared_when_light_goes_unavailable`
+  and
+  `test_recovered_light_is_freed_while_an_unrelated_override_stays_protected`
+  (two lights written under one context; one goes unavailable and
+  reconnects under a fresh context and is confirmed freed; the other is
+  externally changed without ever going unavailable and is confirmed
+  still protected, via `compute_lighting_groups`'s `combined` list).
+  `TestOccupancyDrivenOnOff` also gained
+  `test_real_occupancy_sensor_reporting_unoccupied_still_updates_an_already_on_light`,
+  directly regression-testing the second simplification. Full suite:
+  `test_blueprint.py` 28/28, `test_services.py` 9/9.
+
+  Docs updated to match: `docs/BLUEPRINT.md`'s "Occupancy-driven on/off"
+  section now opens by stating occupancy's exactly-two-jobs scope
+  directly; its "Override detection" section's "device regaining power"
+  paragraph now describes the automatic record-clearing as the real
+  mechanism (previously described the now-deleted scoped-force
+  mechanism); the transition-duration table moved "a light recovering
+  from a dropped connection" from the Motion On row to the Adaptive
+  Transition row. `docs/HELPERS.md`'s `force: true` bullet dropped the
+  now-inaccurate "resyncing a light that dropped off the network"
+  example, and its closing paragraph now states the integration handles
+  device-recovery automatically for *any* caller (not just the
+  blueprint), since the fix lives in `write_tracking.py` itself.
 **Deployment / operational notes:**
 - pyscript is fully gone, both from this repo and the live host.
 - The dev git-sync automation (polling this repo for new commits and

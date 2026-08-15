@@ -11,8 +11,11 @@ anything about how that service is implemented.
 ## Brightness & colour temperature schedule
 
 Tracks a target brightness and Kelvin value that follows the [Morning/Day/Evening/Night schedule](../README.md#why-four-phases-not-a-continuous-curve),
-applied roughly once a minute while the room is occupied, so lights drift with the schedule instead of jumping.
-`apply_lighting` itself isn't limited to this integration's own sensor - any entity following the
+applied roughly once a minute to whichever of the room's lights are already on, so they drift with the schedule
+instead of jumping - regardless of whether the room currently reads as occupied (see
+[Occupancy-driven on/off](#occupancy-driven-onoff) - occupancy decides whether to turn lights on or off, never
+whether an already-on light keeps tracking the curve). `apply_lighting` itself isn't limited to this integration's
+own sensor - any entity following the
 [attribute contract in docs/HELPERS.md](HELPERS.md#bring-your-own-sensor) works, and that's still true here. The
 Adaptive Lighting Sensor input's own picker, though, is filtered to just this integration's sensors (so you don't
 have to hunt through every sensor in the house to find the right one) - a hand-written "bring your own" sensor
@@ -40,9 +43,11 @@ those to also light a room.
 
 ## Occupancy-driven on/off
 
-Turns a room on when occupancy is detected and off `no_motion_wait` seconds after it clears. Occupancy is entirely
-optional — a Room with no occupancy-class sensor in it still keeps already-on lights updated with the adaptive
-curve, it just won't turn anything on by itself.
+Occupancy has exactly two jobs: turning a room on when it's detected, and turning it off `no_motion_wait` seconds
+after it clears. That's the whole scope - it has no say over whether an already-on light keeps tracking the curve
+(see [Brightness & colour temperature schedule](#brightness--colour-temperature-schedule)), only over switching
+lights on or off in the first place. Occupancy is entirely optional either way - a Room with no occupancy-class
+sensor in it just won't turn anything on by itself (see [When a light is allowed to turn on](#when-a-light-is-allowed-to-turn-on)).
 
 A room with no real occupancy sensor at all (or one you want to override manually — e.g. a nightlight mode) can
 use a template `binary_sensor` with `device_class: occupancy` as a stand-in - Home Assistant's occupancy machinery
@@ -86,8 +91,8 @@ free to manage — rather than getting stuck unmanaged until it happens to chang
 The blueprint identifies itself to this check via `apply_lighting`'s `owner_id` parameter, set to its own
 `this.entity_id` — so a room's automation only ever recognises its *own* previous writes as "not overridden";
 even a write from a different room's automation counts as external. There's no blueprint input for this, and
-none needed — it's automatic per room. `owner_id` is passed on every single call the blueprint makes,
-including the two cases below that bypass the check with `force: true` — force and owner_id aren't opposites;
+none needed — it's automatic per room. `owner_id` is passed on every single call the blueprint makes, including
+the manual-run case below that bypasses the check with `force: true` — force and owner_id aren't opposites;
 forcing *with* an owner_id still attributes the write, so the room's next regular tick correctly recognises it
 as its own rather than getting stuck treating its own forced write as external.
 
@@ -98,16 +103,21 @@ protection - the same "I ran this on purpose, take it back" intent as calling `a
 that - open an issue if you need it.
 
 **A device regaining power after an outage does *not* fall under the "not treated as an override" umbrella** —
-its own reconnect state report gets a fresh context too, indistinguishable from a real external change, so left
-alone it would never resync on its own. The blueprint handles this with a dedicated `recovered` trigger: whenever
-one of its lights transitions from `unavailable`/`unknown` back to a real state (a Zigbee mesh drop, or someone
-physically cutting and restoring power to the room), it force-resyncs *just that light* - calling `apply_lighting`
-with `force: true` (still passing its own `owner_id`) scoped to that one entity, rather than the whole room - so
-a genuinely different light in the same room that's under its own real manual override isn't clobbered just
-because something else nearby blipped. This resync is itself still subject to [the "when a light is allowed to
-turn on" rule](#when-a-light-is-allowed-to-turn-on) above: a light that reconnects already on gets brought to the
-adaptive target, but one that reconnects *off*, in a room with nothing else currently on, is left off rather than
-switched on.
+its own reconnect state report gets a fresh context too, indistinguishable from a real external change. [Adaptive
+Lighting Helpers](HELPERS.md) itself closes this gap directly: it clears a light's override-protection record the
+moment it's *observed* going unavailable, so by the time it reconnects there's no stale record left for its new
+context to conflict with - it's simply "free to manage" again, the same as a brand new light, through completely
+ordinary means. No forced write, no scoped call, nothing blueprint-specific at all - a genuinely different light
+in the same room, under its own real override, was never at risk either way, since only the entity that actually
+went unavailable ever has its record cleared.
+
+The blueprint's only remaining role here is promptness: a dedicated `recovered` trigger fires the moment one of
+its lights recovers from `unavailable`/`unknown` (a Zigbee mesh drop, or someone physically cutting and restoring
+power to the room), causing an ordinary tick to run right away rather than waiting for the room's next unrelated
+trigger. That tick treats the recovered light exactly like any other light on any other trigger - subject to
+[the "when a light is allowed to turn on" rule](#when-a-light-is-allowed-to-turn-on) above like everything else:
+a light that reconnects already on gets brought to the adaptive target, one that reconnects *off*, in a room with
+nothing else currently on, is left off rather than switched on.
 
 If you want to deliberately force a light back under adaptive control from your own script without turning it
 off first, call `apply_lighting` directly with `force: true` (with or without an `owner_id` of your own) - see
@@ -184,8 +194,8 @@ drifting smoothly the rest of the time:
 
 | Duration | Used for |
 |---|---|
-| Adaptive Transition | The periodic adaptive tick and Additional Triggers - covers both the scene-activation step and the main adaptive-lighting dispatch |
-| Motion On Transition | Motion being detected, running the automation manually, and a light resyncing after recovering from a dropped connection - all "something happened, respond promptly" triggers |
+| Adaptive Transition | The periodic adaptive tick, Additional Triggers, and a light recovering from a dropped connection (see [Override detection](#override-detection)) - none of these are a person waiting on a response in real time, so there's no reason to snap. Covers both the scene-activation step and the main adaptive-lighting dispatch |
+| Motion On Transition | Motion being detected, and running the automation manually - "something happened, respond promptly" triggers |
 | Motion Off Transition | Turning lights off - both the motion-cleared turn-off and the [self-healing](#self-healing) retry |
 
 ## Reachability and redundancy filtering

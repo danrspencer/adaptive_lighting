@@ -254,13 +254,25 @@ trigger:
       {#
         Fires when one of our lights recovers from unavailable/unknown -
         a Zigbee mesh drop, or a physical power switch cutting and then
-        restoring power to the room. Used below to force a resync of
-        just that light past whatever override-protection record it had
-        before it dropped off: the device's own reconnect state report
-        gets an unrelated fresh context.id, indistinguishable from a
-        real external change to Adaptive Lighting Helpers - so left
-        alone, it would otherwise never resync on its own (see
-        docs/BLUEPRINT.md's "Override detection" section).
+        restoring power to the room. Purely a promptness mechanism: it
+        causes an ordinary tick to run right away, the same as any
+        `extra` trigger firing, rather than waiting for the room's next
+        unrelated tick (the periodic adaptive sensor tick, at most a
+        minute or so) to notice. It carries no special handling of its
+        own beyond that - no forced write, no scoped resync, no
+        occupancy bypass. Whatever the recovered light's own current
+        state is (on or off) just flows through the exact same
+        adaptive_target_entities/allow_turn_on logic every other light
+        in the room does: off stays off, on gets corrected.
+
+        The reason this needs its own dedicated trigger at all, rather
+        than "just let the next tick handle it": write_tracking.py
+        (Adaptive Lighting Helpers) clears an entity's override-
+        protection record the moment it's observed going unavailable -
+        so by the time it reconnects there's no stale record for its
+        fresh post-reconnect context.id to conflict with - but nothing
+        makes that reconnect happen *promptly* on its own; this trigger
+        is what closes that gap.
 
         IMPORTANT: this template can't reference `trigger.*` itself -
         confirmed against HA core's own template trigger source
@@ -277,13 +289,13 @@ trigger:
         traces showing no `recovered`-triggered run at all. Fixed by
         testing an aggregate condition instead - "none of our lights are
         currently unavailable/unknown" - which edge-triggers (false to
-        true) exactly when the last outstanding light recovers.
-        `trigger.entity_id`/`from_state`/`to_state` are still used
-        correctly further down (just_recovered, and the scoped
-        force-resync action) - those live in the automation's own
-        condition:/variables:/action: context, which does get `trigger`
-        populated from the real event, regardless of what this
-        value_template computed.
+        true) exactly when the last outstanding light recovers. This
+        also correctly catches the common case of a single flaky bulb
+        among several reliable ones: the aggregate is only ever false
+        while *that* bulb is down (the others were never unavailable to
+        begin with), so it fires the moment that one bulb - and only
+        that one - clears, without needing per-entity information this
+        template structurally can't have.
       #}
       {% set ns = namespace(entities=[]) %}
       {% if room_target is not none %}
@@ -310,64 +322,27 @@ trigger:
          and light_entity_ids | select('is_state', 'unknown') | list | length == 0 }}
 
 condition:
+  # Occupancy has exactly two jobs in this blueprint, and neither of
+  # them is "should we update already-on lights" - see motion_off/
+  # reconcile in action: below for the two places occupancy actually
+  # gates anything (turning lights on via motion, and turning them off
+  # once the room's confirmed empty). condition: itself no longer checks
+  # occupancy at all: adaptive/extra/recovered always proceed (an
+  # already-on light should track the curve regardless of who's in the
+  # room right now - a room *with* a real occupancy sensor used to stop
+  # updating on-lights the moment it read "unoccupied", while a room
+  # with *no* sensor never had that restriction at all, since its own
+  # "occupied" fallback is just "is anything already on" - inconsistent
+  # for no real reason, removed); motion_on keeps its own efficiency
+  # check (skip the call entirely if there's nothing to turn on), purely
+  # to avoid a pointless apply_lighting round-trip, not a correctness
+  # requirement - adaptive_target_entities/allow_turn_on below already
+  # decide, correctly, whether anything's actually eligible to change.
   - or:
-      # Any trigger other than adaptive/extra/motion_on always passes
-      # here; motion_off/reconcile have their own gating logic in
-      # action: below, and recovered runs unconditionally (deliberately
-      # not occupancy-gated - see the force-resync step in action: below)
       - condition: not
         conditions:
           - condition: trigger
-            id:
-              - adaptive
-              - extra
-              - motion_on
-      # adaptive/extra: only reapply while the room is occupied. That's
-      # the only thing condition: decides here - scene handoff and
-      # adaptive lighting both live entirely in action: below (see
-      # scene_recheck_due there for how often the scene step itself
-      # actually re-checks), not smeared across this gate too. An
-      # earlier version also suppressed the whole tick here whenever
-      # trigger.id == 'adaptive' and a scene was already active, to
-      # avoid reactivating the scene every minute - removed as
-      # unnecessary complexity that had a real bug: it also blocked a
-      # phase-picked scene from ever activating in the first place when
-      # the room stayed continuously occupied across the phase
-      # boundary, since the very first tick where the scene becomes
-      # eligible is *also* an adaptive-id tick, caught the same day by
-      # asking whether the docs matched what the tests actually proved.
-      - condition: and
-        conditions:
-          - condition: trigger
-            id:
-              - adaptive
-              - extra
-          - condition: or
-            conditions:
-              # Room has an occupancy sensor in it - trust Home
-              # Assistant's own aggregated occupancy check directly,
-              # same precedence as the trigger block above. Gated on
-              # room_occupancy_entities (see variables: below), not on
-              # room_target itself, since room_target is basically
-              # always set (it's what's being lit) - occupancy.is_detected
-              # against a target with zero occupancy-class entities
-              # would otherwise always evaluate false and silently break
-              # the light-only-room fallback below.
-              - condition: and
-                conditions:
-                  - condition: template
-                    value_template: "{{ room_occupancy_entities | length > 0 }}"
-                  - condition: occupancy.is_detected
-                    target: !input room_target
-              # No occupancy sensor in Room - fall back to the
-              # light-based occupied variable (see variables: below)
-              - condition: and
-                conditions:
-                  - condition: template
-                    value_template: "{{ room_occupancy_entities | length == 0 }}"
-                  - condition: template
-                    value_template: "{{ occupied }}"
-      # motion_on: only bother running if at least one light isn't already on
+            id: motion_on
       - condition: and
         conditions:
           - condition: trigger
@@ -384,17 +359,15 @@ variables:
   rgb_phases: !input rgb_phases
   prefer_rgb_color: "{{ states(adaptive_sensor) in rgb_phases }}"
   script_transition: >
-    {# Slow transition for adaptive/scene/extra-trigger updates; snappier for motion or a manual run #}
-    {% if trigger is defined and trigger.id is defined and trigger.id in ['adaptive', 'extra'] %}
+    {# Slow, smooth transition for adaptive/extra/recovered updates -
+       none of these are a person waiting on a response in real time,
+       so there's no reason to snap. Snappier for actual motion or a
+       manual run instead. #}
+    {% if trigger is defined and trigger.id is defined and trigger.id in ['adaptive', 'extra', 'recovered'] %}
       {{ adaptive_transition }}
     {% else %}
       {{ motion_on_transition }}
     {% endif %}
-  # This tick is running because the `recovered` trigger fired - used
-  # below to also force-resync just the entity that recovered (see the
-  # dedicated action: step for it), past whatever stale
-  # override-protection record it had before it dropped off.
-  just_recovered: "{{ trigger is defined and trigger.id is defined and trigger.id == 'recovered' }}"
   # This run wasn't started by any of the triggers above at all - the
   # user hit "Run" on the automation itself, or called automation.trigger
   # directly. Used below to force this whole tick through regardless of
@@ -402,9 +375,7 @@ variables:
   # it back" intent a direct apply_lighting force call has. `trigger`
   # itself is still defined for a manual run (confirmed live - an
   # earlier `trigger is not defined` version of this check silently
-  # never fired), it's `trigger.id` that isn't - the same two-part
-  # is-defined guard `just_recovered` above already uses, for the same
-  # reason.
+  # never fired), it's `trigger.id` that isn't.
   manual_run: "{{ not (trigger is defined and trigger.id is defined) }}"
   # Brightness/colour temperature themselves are no longer extracted
   # here - adaptive_lighting_helpers.apply_lighting reads them straight
@@ -485,25 +456,22 @@ variables:
   # detecting someone, a deliberate manual run, or - the room already
   # being in active use (occupied: at least one of its lights is
   # already on). Everything else that reaches default: below (adaptive,
-  # extra, recovered while the room's fully dark) may only ever update
-  # lights that are already on, never switch a new one on. This matters
-  # most for `recovered`, which is deliberately not occupancy-gated
-  # (see its trigger: comment above) - without this guard, a light
-  # rejoining the network after a brief Zigbee/power blip would get
-  # switched on regardless of whether the room was in use at all, which
-  # is exactly what happened live: Jacob's only light, off at bedtime,
-  # turned on from a network blip (confirmed via apply_lighting's own
-  # trace - grouping.py's tolerance/externally-set checks both
-  # explicitly treat an off light as "not yet at target" and so include
-  # it for turning on, correct for motion_on, wrong for everything
-  # else). The `occupied` branch is what lets a *different* off light
-  # in an already-in-use multi-light room still get switched on to
-  # match the rest (e.g. a periodic tick topping up a room where one
-  # lamp's off but others are already on) - room-level, not per-light,
-  # matching how `occupied` itself already works for the no-sensor
-  # condition: branch above. Caught and fixed same day as the
-  # `recovered` trigger's own dead-on-arrival bug - that fix is what
-  # let this one actually run for the first time and surface it.
+  # extra, recovered) may only ever update lights that are already on,
+  # never switch a new one on. condition: doesn't gate any of these on
+  # occupancy at all (see its own comment) - this is the only place that
+  # actually decides it, for every trigger type uniformly, including
+  # recovered: a light rejoining the network after a brief Zigbee/power
+  # blip gets exactly the same treatment as any other light on any
+  # other trigger - included if it's on, left alone if it's off. This
+  # guard is what caught a real incident live: Jacob's only light, off
+  # at bedtime, turned on from a network blip, before this existed
+  # (grouping.py's tolerance/externally-set checks both explicitly
+  # treat an off light as "not yet at target" and so include it for
+  # turning on - correct for motion_on, wrong for everything else). The
+  # `occupied` branch is what lets a *different* off light in an
+  # already-in-use multi-light room still get switched on to match the
+  # rest (e.g. a periodic tick topping up a room where one lamp's off
+  # but others are already on) - room-level, not per-light.
   allow_turn_on: >
     {{ manual_run
        or (trigger is defined and trigger.id is defined and trigger.id == 'motion_on')
@@ -727,41 +695,3 @@ action:
           # a later, non-forced tick still recognises it as this
           # automation's own rather than finding an orphaned record.
           force: "{{ manual_run }}"
-      - if:
-          # Same allow_turn_on gate as adaptive_target_entities above -
-          # only resync (and so possibly switch on) the recovered light
-          # if it reconnected already on, or the room's otherwise
-          # already in active use (occupied: another light in it is on)
-          # - never switch it on ourselves in a fully-dark room just
-          # because it reconnected. is_state(trigger.entity_id, 'on')
-          # is deliberately not checked directly here: it's already
-          # subsumed by occupied whenever true, since the recovered
-          # light is itself one of resolved_entities. See
-          # allow_turn_on's comment above for the live incident this
-          # closes: a light that reconnects off, in a room with nothing
-          # else on, should stay off.
-          - "{{ just_recovered and allow_turn_on }}"
-        then:
-          # The call above still used owner_id (and wasn't forced,
-          # unless this also happens to be a manual run), so it just
-          # skipped the entity that recovered - it still carries the
-          # write record from before it dropped off, and its live
-          # context.id no longer matches (the device's own reconnect
-          # state report got a fresh, unrelated one). Force *just* that
-          # entity past it - deliberately scoped to trigger.entity_id
-          # alone, not the whole room, so a genuinely different light in
-          # this room that's under its own real manual override isn't
-          # clobbered just because something else nearby blipped. Still
-          # passes owner_id alongside force so this write is attributed
-          # too, not left orphaned for the next regular tick to trip
-          # over again.
-          - alias: "Force-resync the light that just recovered from unavailable"
-            action: adaptive_lighting_helpers.apply_lighting
-            data:
-              entities: "{{ [trigger.entity_id] }}"
-              brightness_multipliers: "{{ brightness_multipliers }}"
-              sensor_entity_id: "{{ adaptive_sensor }}"
-              transition: "{{ script_transition }}"
-              prefer_rgb_color: "{{ prefer_rgb_color }}"
-              owner_id: "{{ this.entity_id }}"
-              force: true
