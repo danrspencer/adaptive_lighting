@@ -837,7 +837,8 @@ designs were explored:
   `default:` re-applies adaptive lighting instead, which is a harmless
   no-op if the light's already correct.
 - **`recovered` trigger + scoped force-resync, unit-untestable (pure
-  blueprint YAML), not yet confirmed live.** User-caught gap, found by
+  blueprint YAML) - shipped broken, then fixed and confirmed live; see
+  the dated incident below for the full story.** User-caught gap, found by
   directly asking "if the zigbee drops off the network then comes back
   again - will that track as someone else having changed the entity?"
   while reviewing the owner_id feature above. Answer: yes, and this
@@ -881,13 +882,72 @@ designs were explored:
   `owner_id` *and* `force: true` together once a real gap in that
   approach was found afterward (see the `force` parameter bullet
   below), so the resync is properly attributed rather than left
-  orphaned. Not
-  unit-testable (pure blueprint YAML) - can't be exercised by unit
-  tests or easily simulated (no service call can force a real device to
-  report `unavailable` on demand the way every other case tested so far
-  could be), so this specific trigger firing has still only had its
-  surrounding logic (config validity, the rest of the tick) confirmed
-  live, not the transition itself.
+  orphaned. Not unit-testable (pure blueprint YAML) - can't be exercised
+  by unit tests or easily simulated (no service call can force a real
+  device to report `unavailable` on demand the way every other case
+  tested so far could be), so at the time this shipped, the trigger's
+  own firing had only had its surrounding logic (config validity, the
+  rest of the tick) confirmed live, not the transition itself - a gap
+  that turned out to be hiding a real bug (see below, 2026-08-15).
+
+  **2026-08-15: the `recovered` trigger never actually fired, in any
+  room, since it shipped - found and fixed the same day.** User report:
+  "I just turned the light on in both the living room and the study and
+  they haven't updated at all," testing the exact power-cycle-recovery
+  scenario this trigger exists for. Investigated by pulling real state
+  history for both rooms' lights first, not assuming - confirmed via
+  `ha_get_history` that `light.study_pendant` and
+  `light.living_room_pendant_1`/`_2` had genuinely gone
+  `unavailable` → `on` minutes earlier (this was a real recovery event,
+  not a misunderstanding of what the trigger covers), then pulled both
+  rooms' automation traces and found *zero* `recovered`-triggered runs
+  in either room's history - only `reconcile`/occupancy-triggered runs,
+  despite the light transitions happening well within the trace
+  retention window.
+
+  Root-caused by reading HA core's actual template-trigger source
+  (`homeassistant/components/template/trigger.py`) rather than
+  theorizing from the blueprint YAML alone, confirming a real
+  architectural fact: **the `value_template` that a `platform: template`
+  trigger uses to decide *whether to fire* is rendered with only that
+  automation's `trigger_variables` in scope - `trigger` itself is not
+  injected until *after* the template has already gone true, purely
+  for the fired action's own variable context, built directly from the
+  underlying `state_changed` event rather than from anything the
+  value_template computed.** The `recovered` trigger's `value_template`
+  referenced `trigger.entity_id`/`trigger.from_state`/`trigger.to_state`
+  *inside itself* - `trigger is defined` was therefore always `false`
+  there, making the whole boolean expression permanently `false`. The
+  trigger could never arm, in any room, from the moment it shipped -
+  confirmed directly via `ha_eval_template` reproducing the exact same
+  "always false" result outside of any automation context. This is
+  also why it was never caught by the "surrounding logic confirmed,
+  not the transition itself" caveat above - the parts that *could* be
+  tested (config validity, `just_recovered`, the scoped action) all
+  genuinely worked; only the trigger's own arming condition was dead on
+  arrival, and nothing short of a real recovery event plus trace
+  inspection could have surfaced that.
+
+  Fixed by replacing the `trigger.*`-referencing boolean with an
+  aggregate condition instead - "none of this room's watched lights are
+  currently `unavailable`/`unknown`" - which edge-triggers (false → true)
+  exactly when the last outstanding light recovers, without needing
+  `trigger` in scope at all.
+  `trigger.entity_id`/`from_state`/`to_state` downstream (`just_recovered`,
+  and the scoped force-resync action) needed no change - those already
+  run in the automation's own `condition:`/`variables:`/`action:`
+  context, which *does* get `trigger` populated correctly from the real
+  event, independent of what the value_template itself computed.
+  Deployed and confirmed: re-imported at the merge commit, deployed
+  `value_template` content verified via `ha_get_blueprint` to carry the
+  fixed aggregate check, and the fixed logic re-evaluated live via
+  `ha_eval_template` against `room_target: {area_id: study}` - correctly
+  resolved `light.study_pendant` and returned `true` (not currently
+  unavailable), confirming the template itself is now sound. The next
+  genuine power-cycle of either room will be the first real end-to-end
+  firing - still not something a service call can force on demand (see
+  above), so this remains the one piece of this feature that only a
+  real recovery event, not a live tool call, can fully exercise.
 - **`force` parameter added to `apply_lighting`/`compute_lighting_groups`,
   fixing a real bug in the two "omit `owner_id`" force paths shipped
   just before this - unit tested, live-deployment pending.** User-caught,
