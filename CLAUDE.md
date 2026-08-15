@@ -1022,6 +1022,79 @@ designs were explored:
   this fix, not evidence against it. The core claim - `force: true` now
   reaches `apply_lighting` on a manual run - is confirmed by the trace
   alone regardless.
+- **A scene could never be activated by the plain periodic `adaptive`
+  tick, in any room, from the moment scene handoff shipped - found and
+  fixed 2026-08-15, same session as the `test_blueprint.py` expansion
+  above.** Surfaced by the user directly questioning the doc-coverage
+  audit's finding #5 ("activating a scene should be in the same flow as
+  'apply adaptive lighting'... this bug should not exist"), not
+  discovered independently - the audit itself only characterised it as
+  a documentation gap, not recognising it as a real bug until pushed on
+  it. Root cause: `condition:`'s adaptive/extra branch had a clause
+  suppressing the *entire* tick - not just the scene-activation step,
+  the adaptive-lighting dispatch too - whenever `trigger.id == 'adaptive'`
+  and `scene_active` was already true, meant to avoid reactivating the
+  same scene every single minute. But `scene_active` is computed fresh
+  from *this* tick's own state, not "was it active last time" - so the
+  very first tick where a phase-picked scene becomes eligible (the
+  phase just changed) is *also* an adaptive-id tick, and got suppressed
+  identically to the 500th. A room with continuous occupancy across a
+  phase boundary (nobody leaving and re-triggering `motion_on`, nothing
+  in Additional Triggers to fall back on) would never switch over to a
+  configured phase scene at all - it would just keep receiving adaptive
+  lighting indefinitely.
+
+  Fixed by moving the concern out of `condition:` entirely, matching
+  the user's own explicitly-stated mental model ("should we try to
+  update the lighting? if yes: do we have scenes to apply? if yes apply
+  them. now we apply adaptive lighting to the remaining lights") -
+  `condition:` now only ever decides *whether this tick is relevant at
+  all* (occupancy), never *what kind of relevant*. Scene handoff and
+  adaptive dispatch both live entirely in `action:`, already coexisting
+  safely there since `adaptive_target_entities` has always excluded
+  scene-covered lights regardless of trigger type - the top-level
+  suppression was solving a problem the downstream logic didn't
+  actually have.
+
+  Removing the suppression outright would have reintroduced the
+  "reactivate every minute" concern it existed for in the first place -
+  scenes carry none of `apply_lighting`'s own tolerance/override
+  protections, so re-issuing `scene.turn_on` on every attribute-only
+  tick (brightness ticking, same phase, roughly once a minute) would
+  silently stomp a manual change to any of the scene's own lights
+  within a minute. **User's own explicit call, after being shown this
+  trade-off directly via `AskUserQuestion`**: still needed a guard, but
+  "keep it as linear as possible" - resolved with a single self-contained
+  variable, `scene_recheck_due`, consulted only at the point of the
+  "Activate matching scene" action step itself (not threaded back into
+  `condition:`): true for every trigger except a same-phase adaptive
+  tick (`trigger.id == 'adaptive'` and `trigger.from_state.state ==
+  trigger.to_state.state`) - extra/motion_on/manual/recovered are all
+  comparatively rare, meaningful events already and always recheck,
+  matching the precedent the blueprint already set for `extra` being
+  exempt from the old (now-removed) suppression.
+
+  Known, deliberately out-of-scope limitation this doesn't solve: a
+  `scene_template` that returns a *constant* scene (no phase dependency,
+  nothing wired to Additional Triggers) still can't activate via a pure
+  adaptive attribute tick - `scene_recheck_due`'s phase-comparison only
+  helps because phase-picked scenes and phase-reading templates are
+  inherently tied to the sensor's own state string. This is the same
+  "wire your template's real dependency to Additional Triggers"
+  requirement the docs already describe, not a new gap - a
+  no-dependency `scene_template` had exactly the same first-activation
+  problem *before* this fix too (the old suppression blocked every
+  adaptive tick unconditionally, not just phase-changing ones).
+
+  Regression-tested directly: `test_valid_scene_activates_via_a_phase_change_and_adaptive_lighting_only_covers_uncovered_entities`
+  triggers via a genuine phase transition (not a manual run, which
+  would have masked this bug entirely) with the room continuously
+  occupied throughout, confirming both the scene activates and adaptive
+  lighting still covers the uncovered light in the same tick;
+  `test_scene_recheck_is_skipped_on_a_same_phase_attribute_only_tick`
+  confirms a subsequent same-phase brightness-only tick does not
+  re-call `scene.turn_on`. `pytest` 27/27 in `test_blueprint.py` (83/83
+  full suite), stable across repeated local runs.
 **Deployment / operational notes:**
 - pyscript is fully gone, both from this repo and the live host.
 - The dev git-sync automation (polling this repo for new commits and

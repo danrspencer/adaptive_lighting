@@ -426,9 +426,17 @@ class TestRecoveredTrigger:
 class TestSceneHandoff:
     """docs/BLUEPRINT.md#scene-handoff"""
 
-    async def test_valid_scene_activates_and_adaptive_lighting_only_covers_uncovered_entities(
+    async def test_valid_scene_activates_via_a_phase_change_and_adaptive_lighting_only_covers_uncovered_entities(
         self, hass, apply_lighting_calls, scene_turn_on_calls
     ):
+        """Regression test for a real bug: an earlier version suppressed
+        the *entire* adaptive tick whenever trigger.id == 'adaptive' and
+        a scene was already active - which also blocked the very tick
+        meant to activate a phase-picked scene in the first place,
+        whenever the room stayed continuously occupied across the phase
+        boundary (no fresh motion to fall back on). Triggered here via a
+        genuine phase change on the adaptive sensor - the actual
+        real-world trigger for this feature - not a manual run."""
         _light(hass, "light.covered", "on")
         _light(hass, "light.uncovered", "on")
         hass.states.async_set("scene.evening_scene", "2024-01-01T00:00:00+00:00", {"entity_id": ["light.covered"]})
@@ -437,21 +445,45 @@ class TestSceneHandoff:
         await _setup_room_automation(
             hass,
             room_target={"entity_id": ["light.covered", "light.uncovered"]},
-            scene_template="scene.evening_scene",
+            evening_scene="scene.evening_scene",
         )
 
-        # Not a plain sensor tick ('adaptive' id): once a scene is
-        # already active, a periodic adaptive tick is deliberately
-        # suppressed entirely (see the blueprint's own condition: comment
-        # - "extra stays exempt from that suppression") to avoid
-        # re-activating the same scene every minute. A manual run is the
-        # simplest way to exercise the action: logic itself directly.
-        await hass.services.async_call("automation", "trigger", {"entity_id": "automation.room"}, blocking=True)
+        # A real phase change (Day -> Evening), not just an attribute
+        # tick - this is what actually happens at the phase boundary.
+        hass.states.async_set("sensor.test_adaptive", "Evening", {"brightness": 150, "color_temp": 3000})
         await hass.async_block_till_done()
 
         assert scene_turn_on_calls and scene_turn_on_calls[-1].data["entity_id"] == ["scene.evening_scene"]
         calls = apply_lighting_calls
         assert calls and calls[-1].data["entities"] == ["light.uncovered"]
+
+    async def test_scene_recheck_is_skipped_on_a_same_phase_attribute_only_tick(
+        self, hass, apply_lighting_calls, scene_turn_on_calls
+    ):
+        """Once the scene's been activated for the current phase, a
+        subsequent tick that's purely a brightness/colour-temp change
+        (same phase, no real transition - the common case, since the
+        sensor ticks roughly once a minute) shouldn't re-call
+        scene.turn_on - scenes carry none of apply_lighting's own
+        tolerance/override protections, so doing this every minute would
+        silently stomp any manual change to the scene's own lights."""
+        _light(hass, "light.covered", "on")
+        hass.states.async_set("scene.evening_scene", "2024-01-01T00:00:00+00:00", {"entity_id": ["light.covered"]})
+        await hass.async_block_till_done()
+
+        await _setup_room_automation(
+            hass, room_target={"entity_id": "light.covered"}, evening_scene="scene.evening_scene"
+        )
+
+        hass.states.async_set("sensor.test_adaptive", "Evening", {"brightness": 150, "color_temp": 3000})
+        await hass.async_block_till_done()
+        assert len(scene_turn_on_calls) == 1
+
+        # Same phase, only brightness ticked - no real transition.
+        hass.states.async_set("sensor.test_adaptive", "Evening", {"brightness": 140, "color_temp": 3000})
+        await hass.async_block_till_done()
+
+        assert len(scene_turn_on_calls) == 1
 
     async def test_scene_reaching_outside_scope_is_treated_as_invalid(
         self, hass, apply_lighting_calls, scene_turn_on_calls
@@ -478,13 +510,14 @@ class TestSceneHandoff:
     ):
         _light(hass, "light.covered", "on")
         hass.states.async_set("scene.day_scene", "2024-01-01T00:00:00+00:00", {"entity_id": ["light.covered"]})
+        # Start outside the phase day_scene is keyed to, so the
+        # transition into Day below is a genuine phase change.
+        hass.states.async_set("sensor.test_adaptive", "Night", {"brightness": 80, "color_temp": 2700})
         await hass.async_block_till_done()
 
         await _setup_room_automation(hass, room_target={"entity_id": "light.covered"}, day_scene="scene.day_scene")
 
-        # See the previous test's comment - a manual run, not a plain
-        # 'adaptive' sensor tick, which is suppressed once scene_active.
-        await hass.services.async_call("automation", "trigger", {"entity_id": "automation.room"}, blocking=True)
+        hass.states.async_set("sensor.test_adaptive", "Day", {"brightness": 210, "color_temp": 4000})
         await hass.async_block_till_done()
 
         assert scene_turn_on_calls and scene_turn_on_calls[-1].data["entity_id"] == ["scene.day_scene"]

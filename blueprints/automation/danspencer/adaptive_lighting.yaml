@@ -322,12 +322,20 @@ condition:
               - adaptive
               - extra
               - motion_on
-      # adaptive/extra: only reapply while the room is occupied, and
-      # (for the per-minute adaptive tick specifically) only when no
-      # scene has taken over responsibility for these lights - extra
-      # stays exempt from that suppression so a change in whatever it's
-      # watching (e.g. the scene template's own dependency, or one
-      # scene handing off to another) still gets applied
+      # adaptive/extra: only reapply while the room is occupied. That's
+      # the only thing condition: decides here - scene handoff and
+      # adaptive lighting both live entirely in action: below (see
+      # scene_recheck_due there for how often the scene step itself
+      # actually re-checks), not smeared across this gate too. An
+      # earlier version also suppressed the whole tick here whenever
+      # trigger.id == 'adaptive' and a scene was already active, to
+      # avoid reactivating the scene every minute - removed as
+      # unnecessary complexity that had a real bug: it also blocked a
+      # phase-picked scene from ever activating in the first place when
+      # the room stayed continuously occupied across the phase
+      # boundary, since the very first tick where the scene becomes
+      # eligible is *also* an adaptive-id tick, caught the same day by
+      # asking whether the docs matched what the tests actually proved.
       - condition: and
         conditions:
           - condition: trigger
@@ -359,14 +367,6 @@ condition:
                     value_template: "{{ room_occupancy_entities | length == 0 }}"
                   - condition: template
                     value_template: "{{ occupied }}"
-          - condition: or
-            conditions:
-              - condition: not
-                conditions:
-                  - condition: trigger
-                    id: adaptive
-              - condition: template
-                value_template: "{{ not scene_active }}"
       # motion_on: only bother running if at least one light isn't already on
       - condition: and
         conditions:
@@ -570,6 +570,27 @@ variables:
   # The scene only counts as usable if every entity it covers is within our scope
   scene_valid: "{{ scene_covered_entities | reject('in', scope_entities) | list | length == 0 }}"
   scene_active: "{{ desired_scene | length > 0 and scene_valid }}"
+  # Whether the "Activate matching scene" action step below should
+  # actually bother calling scene.turn_on again this tick. Scenes carry
+  # none of apply_lighting's own tolerance/override protections, so
+  # re-issuing scene.turn_on on every single adaptive tick (which fires
+  # roughly once a minute, on brightness/colour-temp alone - see the
+  # adaptive trigger's own comment) would silently stomp a manual
+  # change to any of the scene's own lights within a minute, for as
+  # long as the scene stays active. A plain attribute tick has nothing
+  # scene-relevant in it at all - desired_scene only depends on the
+  # sensor's phase (its state string) and scene_template's own
+  # dependencies (named via Additional Triggers, which fire their own
+  # 'extra' id and are exempt from this check below) - so this only
+  # actually recomputes to false for the specific case of an
+  # adaptive-id tick whose phase didn't change. Every other trigger
+  # (extra, motion_on, manual, recovered) is comparatively rare and
+  # meaningful already, so always re-checks.
+  scene_recheck_due: >
+    {{ not (trigger is defined and trigger.id is defined and trigger.id == 'adaptive')
+       or trigger.from_state is none
+       or trigger.to_state is none
+       or trigger.from_state.state != trigger.to_state.state }}
   # Lights the adaptive brightness/colour logic below should manage -
   # everything except what the active scene already covers, further
   # narrowed to already-on lights only when allow_turn_on is false (see
@@ -665,7 +686,7 @@ action:
     default:
       - if:
           - condition: template
-            value_template: "{{ scene_active }}"
+            value_template: "{{ scene_active and scene_recheck_due }}"
         then:
           - alias: "Activate matching scene"
             action: scene.turn_on
