@@ -49,6 +49,29 @@ use a template `binary_sensor` with `device_class: occupancy` as a stand-in - Ho
 can't tell it apart from a real sensor. Pick it directly as an entity in Room (rather than relying on area
 membership) so it's a deliberate addition, not something automatically swept in.
 
+If Room contains more than one occupancy-class sensor (for example, a real motion sensor *plus* the nightlight
+override sensor above), the room only counts as clear once **all** of them report clear — one sensor switching
+off while another is still "on" doesn't turn the lights off. This is what makes the nightlight pattern actually
+work as an override: leaving the override sensor "on" keeps the room lit through the night even while real motion
+has stopped, rather than racing against whichever sensor happens to report clear first.
+
+## When a light is allowed to turn on
+
+Only three things may bring an off light on: motion actually being detected, running the automation manually, or
+the room already being in active use (at least one of its *other* lights is already on). Every other trigger that
+updates a room's lighting — the periodic adaptive tick, an Additional Trigger firing, or a light recovering from a
+dropped connection (see [Override detection](#override-detection) below) — may only ever update lights that are
+already on; it never switches a dark room's light on by itself.
+
+This matters most for a light reconnecting after a Zigbee drop or a power cut: without this rule, a light that
+was deliberately left off would come back on the moment it reconnects to the network, purely because it just
+reconnected — not because anyone actually wanted it on. A light that reconnects off, in a room with nothing else
+on, stays off.
+
+The "room already occupied" branch is what lets a *different* off light in an already-in-use multi-light room
+still switch on to match the rest — for example, a periodic tick topping up a room where one lamp's off but the
+others are already lit. This looks at the whole room's state, not just the individual light being considered.
+
 ## Override detection
 
 A light changed by anything other than this integration's own last write — a wall switch, an app, a voice
@@ -81,7 +104,10 @@ one of its lights transitions from `unavailable`/`unknown` back to a real state 
 physically cutting and restoring power to the room), it force-resyncs *just that light* - calling `apply_lighting`
 with `force: true` (still passing its own `owner_id`) scoped to that one entity, rather than the whole room - so
 a genuinely different light in the same room that's under its own real manual override isn't clobbered just
-because something else nearby blipped.
+because something else nearby blipped. This resync is itself still subject to [the "when a light is allowed to
+turn on" rule](#when-a-light-is-allowed-to-turn-on) above: a light that reconnects already on gets brought to the
+adaptive target, but one that reconnects *off*, in a room with nothing else currently on, is left off rather than
+switched on.
 
 If you want to deliberately force a light back under adaptive control from your own script without turning it
 off first, call `apply_lighting` directly with `force: true` (with or without an `owner_id` of your own) - see
@@ -151,6 +177,17 @@ Defaults to Evening and Night selected, Morning and Day not - colour reads as "r
 plain warm white does, but isn't worth it for the rest of the day. Select all four (or none) if you want it
 on/off unconditionally.
 
+## Transition durations
+
+Three separate transition times, so a room can respond quickly to someone actually walking in while still
+drifting smoothly the rest of the time:
+
+| Duration | Used for |
+|---|---|
+| Adaptive Transition | The periodic adaptive tick and Additional Triggers - covers both the scene-activation step and the main adaptive-lighting dispatch |
+| Motion On Transition | Motion being detected, running the automation manually, and a light resyncing after recovering from a dropped connection - all "something happened, respond promptly" triggers |
+| Motion Off Transition | Turning lights off - both the motion-cleared turn-off and the [self-healing](#self-healing) retry |
+
 ## Reachability and redundancy filtering
 
 Lights reported `unavailable` or `unknown` are skipped. Lights already within tolerance of the target
@@ -182,7 +219,7 @@ Add an automation using the "Adaptive Lighting" blueprint per room, and set:
 | **Timing** section | | |
 | Wait time | no | Seconds to keep lights on after motion stops (default 120) |
 | Reconcile Interval | no | Self-healing check interval (default every 5 minutes) |
-| Motion On / Motion Off / Adaptive Transition | no | Transition durations for each trigger type |
+| Motion On / Motion Off / Adaptive Transition | no | Transition durations for each trigger type (see [Transition durations](#transition-durations)) |
 
 Note: if migrating from an older, pre-rewrite version of this blueprint, the inputs have changed
 (`scene_sensor`/`scene_name_prefix` → `scene_template`/`extra_triggers`) — every room automation using the old
