@@ -406,23 +406,6 @@ variables:
   # is-defined guard `just_recovered` above already uses, for the same
   # reason.
   manual_run: "{{ not (trigger is defined and trigger.id is defined) }}"
-  # Only motion actually detecting someone, or a deliberate manual run,
-  # is allowed to turn an off light on. Every other trigger that reaches
-  # default: below (adaptive, extra, recovered) may only ever update
-  # lights that are already on - never bring a dark light on by itself.
-  # This matters most for `recovered`, which is deliberately not
-  # occupancy-gated (see its trigger: comment above) - without this
-  # guard, a light rejoining the network after a brief Zigbee/power
-  # blip would get switched on regardless of whether it was actually on
-  # before it dropped, which is exactly what happened live: Jacob's
-  # light turned on from a network blip during bedtime, confirmed via
-  # apply_lighting's own trace (grouping.py's tolerance/externally-set
-  # checks both explicitly treat an off light as "not yet at target"
-  # and so include it for turning on - correct for motion_on, wrong for
-  # everything else). Caught and fixed same day as the `recovered`
-  # trigger's own dead-on-arrival bug - that fix is what let this one
-  # actually run for the first time and surface this.
-  allow_turn_on: "{{ manual_run or (trigger is defined and trigger.id is defined and trigger.id == 'motion_on') }}"
   # Brightness/colour temperature themselves are no longer extracted
   # here - adaptive_lighting_helpers.apply_lighting reads them straight
   # off adaptive_sensor (and applies rgb_color, tolerance-checking,
@@ -489,16 +472,42 @@ variables:
     {{ ns.entities | select('is_state_attr', 'device_class', 'occupancy') | unique | list }}
   occupied: >
     {#
-      Is the room "in use" right now, for the no-occupancy-sensor case
-      only (see condition: above for the occupancy-sensor branch, which
-      doesn't route through this variable - occupancy.is_detected is a
-      native condition type, not something a template can call).
+      Is the room "in use" right now - originally for the
+      no-occupancy-sensor condition: branch only (see below), now also
+      the "the room's clearly in use" half of allow_turn_on just below.
       Without a sensor, the only signal available is whether we've
       already turned something on - the same "a light being on doesn't
       really mean anyone's still there" imprecision the original bug
       this guard fixes was about, unavoidable without a real sensor.
     #}
     {{ resolved_entities | map('states') | select('eq', 'on') | list | count > 0 }}
+  # Only three things may turn an off light on: motion actually
+  # detecting someone, a deliberate manual run, or - the room already
+  # being in active use (occupied: at least one of its lights is
+  # already on). Everything else that reaches default: below (adaptive,
+  # extra, recovered while the room's fully dark) may only ever update
+  # lights that are already on, never switch a new one on. This matters
+  # most for `recovered`, which is deliberately not occupancy-gated
+  # (see its trigger: comment above) - without this guard, a light
+  # rejoining the network after a brief Zigbee/power blip would get
+  # switched on regardless of whether the room was in use at all, which
+  # is exactly what happened live: Jacob's only light, off at bedtime,
+  # turned on from a network blip (confirmed via apply_lighting's own
+  # trace - grouping.py's tolerance/externally-set checks both
+  # explicitly treat an off light as "not yet at target" and so include
+  # it for turning on, correct for motion_on, wrong for everything
+  # else). The `occupied` branch is what lets a *different* off light
+  # in an already-in-use multi-light room still get switched on to
+  # match the rest (e.g. a periodic tick topping up a room where one
+  # lamp's off but others are already on) - room-level, not per-light,
+  # matching how `occupied` itself already works for the no-sensor
+  # condition: branch above. Caught and fixed same day as the
+  # `recovered` trigger's own dead-on-arrival bug - that fix is what
+  # let this one actually run for the first time and surface it.
+  allow_turn_on: >
+    {{ manual_run
+       or (trigger is defined and trigger.id is defined and trigger.id == 'motion_on')
+       or occupied }}
   # Used by the reconcile action branch below to retry turning off anything still on
   entities_still_on: "{{ resolved_entities | select('is_state', 'on') | list }}"
   # Same as resolved_entities, but widened to every entity on each light's
@@ -698,13 +707,19 @@ action:
           # automation's own rather than finding an orphaned record.
           force: "{{ manual_run }}"
       - if:
-          # Only resync the recovered light if it actually rejoined the
-          # network already on (its own hardware default, or whatever
-          # it was doing right before the drop) - never switch it on
-          # ourselves just because it reconnected. See allow_turn_on's
-          # comment above for the live incident this closes: a light
-          # that reconnects off should stay off.
-          - "{{ just_recovered and is_state(trigger.entity_id, 'on') }}"
+          # Same allow_turn_on gate as adaptive_target_entities above -
+          # only resync (and so possibly switch on) the recovered light
+          # if it reconnected already on, or the room's otherwise
+          # already in active use (occupied: another light in it is on)
+          # - never switch it on ourselves in a fully-dark room just
+          # because it reconnected. is_state(trigger.entity_id, 'on')
+          # is deliberately not checked directly here: it's already
+          # subsumed by occupied whenever true, since the recovered
+          # light is itself one of resolved_entities. See
+          # allow_turn_on's comment above for the live incident this
+          # closes: a light that reconnects off, in a room with nothing
+          # else on, should stay off.
+          - "{{ just_recovered and allow_turn_on }}"
         then:
           # The call above still used owner_id (and wasn't forced,
           # unless this also happens to be a manual run), so it just
