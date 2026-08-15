@@ -1353,11 +1353,76 @@ update+restart runs; the dashboard-YAML half (section width, grid
 
 ## Testing
 
-`pip install pytest && pytest` from the repo root. No Home Assistant
-dependency for the test suite - `tests/conftest.py` puts
-`custom_components/adaptive_lighting_helpers/` on `sys.path` and tests
-import `curve`/`grouping` as bare modules (not through the package,
-which would pull in `homeassistant` via `__init__.py`); `tests/fakes.py`
-provides a fake `EntityLookup` so `grouping.py` is exercised with plain
-dicts. CI runs this on push/PR (`.github/workflows/tests.yml`) across
-Python 3.9 and 3.13.
+`pip install pytest pytest-homeassistant-custom-component && pytest`
+from the repo root (see CONTRIBUTING.md). Two layers:
+
+- `tests/test_curve.py`/`test_grouping.py`/`test_scenes.py` - no Home
+  Assistant dependency at all. `tests/conftest.py` puts
+  `custom_components/adaptive_lighting_helpers/` on `sys.path` and
+  tests import `curve`/`grouping` as bare modules (not through the
+  package, which would pull in `homeassistant` via `__init__.py`);
+  `tests/fakes.py` provides a fake `EntityLookup` so `grouping.py` is
+  exercised with plain dicts.
+- `tests/integration/` (`test_services.py`, `test_blueprint.py`) -
+  added 2026-08-15, real Home Assistant via
+  [pytest-homeassistant-custom-component](https://github.com/MatthewFlamm/pytest-homeassistant-custom-component).
+  `test_services.py` exercises the actual registered services
+  end-to-end (calling `async_setup_entry` directly, not
+  `hass.config_entries.async_setup()` - the latter also resolves the
+  manifest's `http`/`frontend` dependencies and pulls in the separate,
+  large `home-assistant-frontend` package for something these tests
+  never touch); `test_blueprint.py` loads the real blueprint file into
+  a test automation and fires real triggers, mocking only
+  `adaptive_lighting_helpers.apply_lighting` itself via
+  `async_mock_service` so these tests are purely about what the
+  blueprint decides to call it with. This is the only layer that can
+  catch a bug living in the blueprint's own trigger/condition/action
+  wiring - both the `recovered` trigger's dead-on-arrival bug and the
+  off-light-turn-on bug it then exposed (see their own dated entries
+  above) were exactly that kind of bug: syntactically fine, wrong only
+  at runtime, invisible to plain YAML parsing or an isolated
+  `ha_eval_template` check. `tests/integration/conftest.py` overrides
+  pytest-homeassistant-custom-component's own `hass_config_dir`
+  fixture (which otherwise points at the package's own bundled
+  `testing_config/`, not this repo) to symlink this repo's
+  `custom_components/` and `blueprints/` into a throwaway `tmp_path`,
+  confirmed live as the fix for an initial "Integration not found"
+  failure - not guessed.
+
+  This is also why `pyproject.toml`'s `requires-python` floor moved to
+  3.14 (from 3.9) the same day: pytest-homeassistant-custom-component
+  pins a specific Home Assistant release, which itself pins the Python
+  it needs - since this repo only ever runs inside a real HA install,
+  tracking that floor is the right target, not a separate, broader
+  compatibility matrix kept for its own sake. **User's own call, not a
+  default**: "just move everything to 3.14 - I'm not sure why you're
+  targeting multiple python versions?" - the previous 3.9/3.13 CI
+  matrix (3.9 as pyproject.toml's floor, 3.13 approximating a current
+  HA runtime) is gone, replaced by a single Python 3.14 job.
+  `pip install -e ".[dev]"` doesn't work here and isn't used anywhere
+  (CI, CONTRIBUTING.md) - confirmed live, not assumed: this repo's flat
+  layout (`custom_components/`, `blueprints/`, `dashboard/`, `brand/`
+  all at the root) isn't set up for setuptools package discovery, and
+  doesn't need to be, since nothing here is ever distributed as an
+  installable Python package (HACS copies `custom_components/`
+  directly; the blueprint is imported by URL) - `dev` in
+  `pyproject.toml`'s `[project.optional-dependencies]` is a versions
+  reference only, both dependencies installed by name directly instead.
+
+  **Known, pre-existing, not yet fixed**: running the blueprint's own
+  regex-matching templates (`resolved_entities`, `scope_entities`,
+  `room_occupancy_entities`, the `recovered` trigger - anywhere using
+  `select('match', '^light\.')` or `'^binary_sensor\.'`) through a real
+  Jinja engine for the first time (via `tests/integration/test_blueprint.py`)
+  surfaced a `DeprecationWarning`: `"\." is an invalid escape sequence.
+  Such sequences will not work in the future.` - not introduced by this
+  test suite, already present in the blueprint's own regex literals,
+  just never previously run through anything that would surface it at
+  this log level. Currently cosmetic (the templates still work
+  correctly - all `tests/integration/test_blueprint.py` cases pass),
+  but the warning's own text says future Python/Jinja versions may turn
+  this into a hard error, which would break entity resolution
+  everywhere this pattern is used. Flagged to the user, not yet
+  addressed - fix is presumably `'^light\\.'` (properly-escaped
+  backslash) or an equivalent raw-string-safe form, needs verifying
+  against a real Jinja render before landing, not assumed.

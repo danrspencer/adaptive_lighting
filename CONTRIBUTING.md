@@ -106,14 +106,28 @@ Renders the actual card component against generated data, without a Home Assista
 ## Testing
 
 ```bash
-pip install pytest
+pip install pytest pytest-homeassistant-custom-component
 pytest
 ```
 
-No Home Assistant dependency for `curve.py`/`grouping.py` themselves; `tests/fakes.py` provides a fake
-state/registry lookup, and `tests/conftest.py` imports them directly (bypassing the integration's `__init__.py`,
-which does need `homeassistant` — see its own comment for why). CI (`.github/workflows/tests.yml`) runs the
-suite on push and PR across Python 3.9 and 3.13.
+Two layers, both under `tests/`:
+
+- `test_curve.py`/`test_grouping.py`/`test_scenes.py` - pure logic, no Home Assistant dependency at all.
+  `tests/fakes.py` provides a fake state/registry lookup, and `tests/conftest.py` imports `curve.py`/`grouping.py`
+  directly (bypassing the integration's `__init__.py`, which does need `homeassistant` — see its own comment for
+  why).
+- `tests/integration/` - real Home Assistant, via
+  [pytest-homeassistant-custom-component](https://github.com/MatthewFlamm/pytest-homeassistant-custom-component).
+  `test_services.py` exercises the actual registered services (`__init__.py`, `write_tracking.py`) end to end;
+  `test_blueprint.py` loads the real blueprint file into a test automation and fires real triggers - the only
+  place bugs living in the blueprint's own trigger/condition/action wiring can be caught at all, as opposed to
+  pure YAML/template checks that are syntactically fine but wrong at runtime (see its own module docstring for
+  the two real incidents this suite exists to guard against).
+
+This is also why `pyproject.toml`'s `requires-python` floor is 3.14, not something lower: pytest-homeassistant-
+custom-component pins a specific Home Assistant release, which itself pins the Python it needs — since this repo
+only ever runs inside a real HA install, tracking that floor is the right target, not a separate, broader
+compatibility matrix. CI (`.github/workflows/tests.yml`) runs the full suite on push and PR.
 
 ## Status
 

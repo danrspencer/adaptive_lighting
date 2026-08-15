@@ -7,15 +7,23 @@ on:
 jobs:
   pytest:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        # 3.9 is the floor (requires-python in pyproject.toml); 3.13 is
-        # roughly what a current Home Assistant install runs.
-        python-version: ["3.9", "3.13"]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
-      - run: pip install pytest
+          # Matches pyproject.toml's requires-python floor - tracks
+          # whatever Python pytest-homeassistant-custom-component's
+          # pinned Home Assistant release itself needs, not a separate,
+          # broader compatibility target (this repo only ever runs
+          # inside a real HA install, so there's nothing else to target).
+          python-version: "3.14"
+      # Not `pip install -e ".[dev]"` - this repo's flat layout
+      # (custom_components/, blueprints/, dashboard/, brand/ all at
+      # root) isn't set up for setuptools package discovery, and it
+      # never needs to be: nothing here is ever distributed as an
+      # installable Python package (HACS copies custom_components/
+      # directly; the blueprint is imported by URL). pyproject.toml's
+      # dev extra is a versions reference, not something installed
+      # as-is.
+      - run: pip install pytest pytest-homeassistant-custom-component
       - run: pytest -v
