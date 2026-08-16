@@ -648,6 +648,82 @@ class TestAdditionalTriggers:
         calls = apply_lighting_calls
         assert calls and calls[-1].data["entities"] == ["light.a"]
 
+    async def test_extra_trigger_does_not_turn_on_an_off_light(self, hass, apply_lighting_calls):
+        """The whole distinction between the two trigger inputs: a plain
+        Additional Trigger only ever updates lights that are already on."""
+        _light(hass, "light.a", "off")
+        hass.states.async_set("binary_sensor.dependency", "off")
+        await hass.async_block_till_done()
+
+        await _setup_room_automation(
+            hass, room_target={"entity_id": "light.a"}, extra_triggers=["binary_sensor.dependency"]
+        )
+
+        hass.states.async_set("binary_sensor.dependency", "on")
+        await hass.async_block_till_done()
+
+        calls = apply_lighting_calls
+        assert calls and calls[-1].data["entities"] == []
+
+    async def test_activating_trigger_turns_on_an_off_light(self, hass, apply_lighting_calls):
+        _light(hass, "light.a", "off")
+        hass.states.async_set("binary_sensor.dusk", "off")
+        await hass.async_block_till_done()
+
+        await _setup_room_automation(
+            hass, room_target={"entity_id": "light.a"}, activating_triggers=["binary_sensor.dusk"]
+        )
+
+        hass.states.async_set("binary_sensor.dusk", "on")
+        await hass.async_block_till_done()
+
+        calls = apply_lighting_calls
+        assert calls and calls[-1].data["entities"] == ["light.a"]
+
+    async def test_activating_trigger_turns_on_an_off_light_even_when_the_room_reads_unoccupied(
+        self, hass, apply_lighting_calls
+    ):
+        """A room with a real occupancy sensor reporting clear: the
+        activating trigger is its own turn-on permission, so it doesn't
+        need the room to already read as occupied."""
+        _occupancy(hass, "binary_sensor.occ", "off")
+        _light(hass, "light.a", "off")
+        hass.states.async_set("binary_sensor.dusk", "off")
+        await hass.async_block_till_done()
+
+        await _setup_room_automation(
+            hass,
+            room_target={"entity_id": ["light.a", "binary_sensor.occ"]},
+            activating_triggers=["binary_sensor.dusk"],
+        )
+
+        hass.states.async_set("binary_sensor.dusk", "on")
+        await hass.async_block_till_done()
+
+        calls = apply_lighting_calls
+        assert calls and calls[-1].data["entities"] == ["light.a"]
+
+    async def test_activating_trigger_is_skipped_when_every_light_is_already_on(
+        self, hass, apply_lighting_calls
+    ):
+        """Same efficiency check motion_on has - nothing to switch on, so
+        the run is dropped in condition: rather than making a pointless
+        apply_lighting round-trip. The next adaptive tick still corrects
+        brightness/colour, so nothing is actually lost."""
+        _light(hass, "light.a", "on", brightness=190, color_temp_kelvin=4000)
+        hass.states.async_set("binary_sensor.dusk", "off")
+        await hass.async_block_till_done()
+
+        await _setup_room_automation(
+            hass, room_target={"entity_id": "light.a"}, activating_triggers=["binary_sensor.dusk"]
+        )
+        apply_lighting_calls.clear()
+
+        hass.states.async_set("binary_sensor.dusk", "on")
+        await hass.async_block_till_done()
+
+        assert apply_lighting_calls == []
+
 
 class TestSelfHealing:
     """docs/BLUEPRINT.md#self-healing"""

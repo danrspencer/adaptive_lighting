@@ -43,6 +43,22 @@ blueprint:
       description: >
         Entities that trigger an immediate re-evaluation, e.g. a
         dependency of Scene Template or Brightness Multiplier Template.
+        Only updates lights that are already on - never switches one on.
+        [Details](https://github.com/danrspencer/adaptive_lighting/blob/main/docs/BLUEPRINT.md#additional-triggers).
+      default: []
+      selector:
+        entity:
+          multiple: true
+    activating_triggers:
+      name: Additional Triggers - Turn Lights On (Optional)
+      description: >
+        Same as Additional Triggers, but these are also allowed to switch
+        the room's lights on when they fire, not just update ones already
+        on. For anything that should light the room by itself, e.g. a
+        helper that turns on at dusk. Pick entities whose state changes
+        once, when the thing actually happens - anything that updates
+        continuously (sun.sun, a numeric sensor) fires far more often
+        than you want.
         [Details](https://github.com/danrspencer/adaptive_lighting/blob/main/docs/BLUEPRINT.md#additional-triggers).
       default: []
       selector:
@@ -226,6 +242,13 @@ trigger:
   - id: extra
     platform: state
     entity_id: !input extra_triggers
+  # Same as `extra`, but additionally allowed to turn currently-off lights
+  # on - see allow_turn_on below, which is the only place the two differ.
+  # A separate trigger id rather than a flag on `extra` so which kind fired
+  # is visible directly in the trace.
+  - id: activating
+    platform: state
+    entity_id: !input activating_triggers
   # Room's occupancy-class sensors (entity/device/area/floor/label)
   # just reported occupied - aggregates every matching occupancy sensor
   # automatically via Home Assistant's built-in Occupancy triggers. Left
@@ -333,20 +356,25 @@ condition:
   # updating on-lights the moment it read "unoccupied", while a room
   # with *no* sensor never had that restriction at all, since its own
   # "occupied" fallback is just "is anything already on" - inconsistent
-  # for no real reason, removed); motion_on keeps its own efficiency
-  # check (skip the call entirely if there's nothing to turn on), purely
-  # to avoid a pointless apply_lighting round-trip, not a correctness
-  # requirement - adaptive_target_entities/allow_turn_on below already
-  # decide, correctly, whether anything's actually eligible to change.
+  # for no real reason, removed); the two triggers that can turn a light
+  # on - motion_on and activating - keep their own efficiency check (skip
+  # the call entirely if there's nothing to turn on), purely to avoid a
+  # pointless apply_lighting round-trip, not a correctness requirement -
+  # adaptive_target_entities/allow_turn_on below already decide,
+  # correctly, whether anything's actually eligible to change.
   - or:
       - condition: not
         conditions:
           - condition: trigger
-            id: motion_on
+            id:
+              - motion_on
+              - activating
       - condition: and
         conditions:
           - condition: trigger
-            id: motion_on
+            id:
+              - motion_on
+              - activating
           - condition: template
             value_template: "{{ resolved_entities | map('states') | select('ne', 'on') | list | count > 0 }}"
 
@@ -361,8 +389,9 @@ variables:
   script_transition: >
     {# Slow, smooth transition for adaptive/extra/recovered updates -
        none of these are a person waiting on a response in real time,
-       so there's no reason to snap. Snappier for actual motion or a
-       manual run instead. #}
+       so there's no reason to snap. Snappier for anything that can
+       switch a light on (motion, an activating trigger) or a manual
+       run instead - those are all "light the room now" events. #}
     {% if trigger is defined and trigger.id is defined and trigger.id in ['adaptive', 'extra', 'recovered'] %}
       {{ adaptive_transition }}
     {% else %}
@@ -472,9 +501,18 @@ variables:
   # already-in-use multi-light room still get switched on to match the
   # rest (e.g. a periodic tick topping up a room where one lamp's off
   # but others are already on) - room-level, not per-light.
+  # `activating` sits alongside motion_on here, and nowhere else: an
+  # entity in Additional Triggers - Turn Lights On is stating outright
+  # that its firing should light the room, so it gets the same one-shot
+  # permission and nothing more. No lasting "the room is in use" state is
+  # recorded for it - so in a room that has real occupancy sensors and
+  # reads as empty, the reconcile branch below will still turn those
+  # lights back off within reconcile_interval, exactly as it would after
+  # any other one-off turn-on. Rooms with no occupancy sensor never reach
+  # that branch at all, so the lights simply stay on.
   allow_turn_on: >
     {{ manual_run
-       or (trigger is defined and trigger.id is defined and trigger.id == 'motion_on')
+       or (trigger is defined and trigger.id is defined and trigger.id in ['motion_on', 'activating'])
        or occupied }}
   # Used by the reconcile action branch below to retry turning off anything still on
   entities_still_on: "{{ resolved_entities | select('is_state', 'on') | list }}"
