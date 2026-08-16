@@ -406,6 +406,54 @@ variables:
   # earlier `trigger is not defined` version of this check silently
   # never fired), it's `trigger.id` that isn't.
   manual_run: "{{ not (trigger is defined and trigger.id is defined) }}"
+  # The brightness-multiplier chain is resolved up here, before
+  # reachable_entities/entities_still_on below, because those two now
+  # need hands_off_entities to build their turn-off lists. HA renders
+  # variables: strictly top to bottom, each key only seeing the ones
+  # declared above it, so this block cannot be moved back down.
+  template_brightness_multipliers: !input brightness_multiplier_template
+  morning_exclude_lights: !input morning_exclude_lights
+  day_exclude_lights: !input day_exclude_lights
+  evening_exclude_lights: !input evening_exclude_lights
+  night_exclude_lights: !input night_exclude_lights
+  phase_exclude_lights: >
+    {% set m = {'Morning': morning_exclude_lights, 'Day': day_exclude_lights,
+                'Evening': evening_exclude_lights, 'Night': night_exclude_lights} %}
+    {{ m.get(states(adaptive_sensor), []) }}
+  # The per-phase exclude list only fills in entities the template
+  # doesn't already mention - its own per-entity values always win on
+  # collision, so a room's existing template logic (e.g. dining_room_lighting's
+  # illuminance-based override, unrelated to phase) can't be silently
+  # discarded by also setting a phase exclusion.
+  brightness_multipliers: >
+    {% set ns = namespace(m={}) %}
+    {% for e in phase_exclude_lights %}
+      {% set ns.m = dict(ns.m, **{e: 0}) %}
+    {% endfor %}
+    {{ dict(ns.m, **template_brightness_multipliers) }}
+  # Lights the multiplier template handed off entirely: a null/false
+  # multiplier means "something else owns this, don't touch it", as
+  # opposed to 0, which means "turn this one off". Those two must not be
+  # conflated - and in Jinja, as in Python, `0 == false` is true, so an
+  # `in [none, false]` membership test would wrongly swallow every 0 as
+  # well. `is sameas false` is an identity check, mirroring exactly what
+  # grouping.py's own `m is None or m is False` bucketing does.
+  #
+  # Used by the two turn-off paths below (motion_off and reconcile).
+  # apply_lighting already skips these on its own, so a hands-off light
+  # was never *dimmed* by this blueprint - but until this existed it was
+  # still being switched off with the rest of the room, which made the
+  # handoff only half-honoured. Caught live: a kitchen strip offloaded to
+  # its own gradient automation was still being turned off on every
+  # motion-clear and reconcile tick.
+  hands_off_entities: >
+    {% set ns = namespace(items=[]) %}
+    {% for entity_id, multiplier in brightness_multipliers.items() %}
+      {% if multiplier is none or multiplier is sameas false %}
+        {% set ns.items = ns.items + [entity_id] %}
+      {% endif %}
+    {% endfor %}
+    {{ ns.items }}
   # Brightness/colour temperature themselves are no longer extracted
   # here - adaptive_lighting_helpers.apply_lighting reads them straight
   # off adaptive_sensor (and applies rgb_color, tolerance-checking,
@@ -439,9 +487,12 @@ variables:
       {% endif %}
     {% endif %}
     {{ ns.entities | unique | list }}
-  # Entities HA already knows it can't reach right now - no point commanding them
+  # Entities HA already knows it can't reach right now - no point
+  # commanding them - minus anything the multiplier template handed off
+  # (see hands_off_entities above). Only feeds the motion_off turn-off.
   reachable_entities: >
-    {{ resolved_entities | reject('is_state', 'unavailable') | reject('is_state', 'unknown') | list }}
+    {{ resolved_entities | reject('is_state', 'unavailable') | reject('is_state', 'unknown')
+       | reject('in', hands_off_entities) | list }}
   # room_target's occupancy-class binary_sensor entities (entity/device/
   # area only - floor/label aren't resolvable through this hand-rolled
   # Jinja the way they are through the native occupancy.* trigger/
@@ -514,8 +565,12 @@ variables:
     {{ manual_run
        or (trigger is defined and trigger.id is defined and trigger.id in ['motion_on', 'activating'])
        or occupied }}
-  # Used by the reconcile action branch below to retry turning off anything still on
-  entities_still_on: "{{ resolved_entities | select('is_state', 'on') | list }}"
+  # Used by the reconcile action branch below to retry turning off
+  # anything still on - excluding handed-off lights (see
+  # hands_off_entities above), which also keeps reconcile from firing at
+  # all in a room where the only thing still lit is one we don't own.
+  entities_still_on: >
+    {{ resolved_entities | select('is_state', 'on') | reject('in', hands_off_entities) | list }}
   # Same as resolved_entities, but widened to every entity on each light's
   # device (not just the light itself) - lets scene-compatibility checking
   # below account for sibling entities, e.g. a light strip's effect selector.
@@ -609,27 +664,6 @@ variables:
     {% else %}
       {{ scoped | reject('is_state', 'off') | list }}
     {% endif %}
-  template_brightness_multipliers: !input brightness_multiplier_template
-  morning_exclude_lights: !input morning_exclude_lights
-  day_exclude_lights: !input day_exclude_lights
-  evening_exclude_lights: !input evening_exclude_lights
-  night_exclude_lights: !input night_exclude_lights
-  phase_exclude_lights: >
-    {% set m = {'Morning': morning_exclude_lights, 'Day': day_exclude_lights,
-                'Evening': evening_exclude_lights, 'Night': night_exclude_lights} %}
-    {{ m.get(states(adaptive_sensor), []) }}
-  # The per-phase exclude list only fills in entities the template
-  # doesn't already mention - its own per-entity values always win on
-  # collision, so a room's existing template logic (e.g. dining_room_lighting's
-  # illuminance-based override, unrelated to phase) can't be silently
-  # discarded by also setting a phase exclusion.
-  brightness_multipliers: >
-    {% set ns = namespace(m={}) %}
-    {% for e in phase_exclude_lights %}
-      {% set ns.m = dict(ns.m, **{e: 0}) %}
-    {% endfor %}
-    {{ dict(ns.m, **template_brightness_multipliers) }}
-
 action:
   - choose:
       # Motion timed out: turn everything reachable off - but only if

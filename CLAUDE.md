@@ -1370,6 +1370,83 @@ designs were explored:
   `test_activating_trigger_is_skipped_when_every_light_is_already_on`.
   `test_extra_trigger_does_not_turn_on_an_off_light` locks in the
   distinction from the other direction. Full suite: 91/91.
+- **A `null` brightness multiplier now means hands-off for *turning off*
+  too, not just for the adaptive step - a real asymmetry that had been
+  in place since multipliers existed, found live 2026-08-16.** Surfaced
+  while investigating a user report that the kitchen lightstrip wouldn't
+  come back on. That report turned out to have no bug in it at all (see
+  below), but reading the strip's logbook to prove it exposed **257
+  state changes in 14 hours** on that one entity, with
+  `automation.kitchen_lights` repeatedly switching it off.
+
+  Root cause: `_bucket_by_multiplier` in `grouping.py` correctly skips a
+  `None`/`False` multiplier, so `apply_lighting` never *dimmed* a
+  handed-off light - but the blueprint's two turn-off paths
+  (`motion_off`'s `reachable_entities` and `reconcile`'s
+  `entities_still_on`) were built straight off `resolved_entities` and
+  never consulted the multipliers at all. So a light explicitly handed
+  to another automation was still being switched off on every
+  motion-clear and every reconcile tick. Confirmed the skip half works
+  via a read-only `compute_lighting_groups` probe against the real
+  kitchen during Evening - `light.kitchen_strip_back` appeared in no
+  group whatsoever, while the turn-off logbook entries were attributed
+  to the same automation.
+
+  **User's call, unambiguous**: *"if the template says none then that
+  light is just hands off leave it"*. Fixed with a new
+  `hands_off_entities` variable, `reject`ed from both turn-off lists.
+
+  **Two non-obvious things this required:**
+  1. **`0 == false` in Jinja, exactly as in Python** - so the natural
+     `selectattr(1, 'in', [none, false])` membership test *silently
+     swallows every `0` multiplier as handed-off*, which would have
+     turned "turn this light off" into "never touch this light". Verified
+     live before writing the fix: that expression returns
+     `['false', 'null', 'zero']` for a dict containing `0`. The correct
+     form is an identity test - `multiplier is none or multiplier is
+     sameas false` - which returns `['null', 'false']` and mirrors
+     `grouping.py`'s own `m is None or m is False` exactly. `sameas` is
+     the Jinja identity test; there is no `is false` test.
+  2. **The whole brightness-multiplier variable chain had to move
+     earlier in the `variables:` block.** HA renders `variables:` strictly
+     top to bottom, each key seeing only the ones above it (documented in
+     the best-practices skill's `automation-patterns.md#variables`, and
+     the silent-failure modes there are nasty - `x | length` on an
+     undefined name returns `0` with no log and no trace entry).
+     `brightness_multipliers` was declared near the *end*, while
+     `reachable_entities`/`entities_still_on` are near the start, so
+     `hands_off_entities` and its dependencies
+     (`template_brightness_multipliers`, the four `*_exclude_lights`,
+     `phase_exclude_lights`, `brightness_multipliers`) were relocated to
+     just after `manual_run`. A comment there records why they can't move
+     back down.
+
+  Three tests added to `TestBrightnessScaling`, all **mutation-verified**:
+  removing the `reject` from both turn-off lists fails exactly
+  `test_a_null_multiplier_light_is_not_turned_off_when_occupancy_clears`
+  and `test_reconcile_does_not_retry_turning_off_a_null_multiplier_light`;
+  swapping the identity test for the naive `in [none, false]` fails
+  exactly `test_a_zero_multiplier_light_is_still_turned_off_when_occupancy_clears`
+  - i.e. the `0`-vs-`null` trap is directly covered, not just reasoned
+  about. Full suite: 94/94.
+
+  `docs/BLUEPRINT.md`'s multiplier table previously stated the old
+  behaviour outright ("skips the light entirely on power-on ... **but
+  still includes it when the room turns off**") - now corrected, with an
+  explicit "`0` and `null` are not the same thing" paragraph, plus notes
+  in the occupancy and self-healing sections.
+
+  **The original report itself was not a bug**, and is worth recording
+  so it isn't re-investigated: `automation.kitchen_strip_gradient` fired
+  correctly at 20:00:01.838 (`last_triggered`), and the device confirmed
+  it with an attribute-only update at 20:00:03.568 (`last_changed`
+  unchanged at 19:53:59, `last_updated` moved) - proving the MQTT topic
+  and payload both land. The user then turned the strip off at 20:08:30
+  via a **bare context** (no `context_user_id`, no automation - i.e.
+  from outside HA's service layer entirely, such as the Hue app). Nothing
+  re-asserted it because adaptive excludes it during Evening/Night by
+  that room's own template, and the gradient automation is a one-shot on
+  the `to: "Evening"` edge which had already passed.
 **Deployment / operational notes:**
 - pyscript is fully gone, both from this repo and the live host.
 - The dev git-sync automation (polling this repo for new commits and

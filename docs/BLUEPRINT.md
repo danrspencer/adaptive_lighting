@@ -50,6 +50,8 @@ after it clears. That's the whole scope - it has no say over whether an already-
 (see [Brightness & colour temperature schedule](#brightness--colour-temperature-schedule)), only over switching
 lights on or off in the first place. Occupancy is entirely optional either way - a Room with no occupancy-class
 sensor in it just won't turn anything on by itself (see [When a light is allowed to turn on](#when-a-light-is-allowed-to-turn-on)).
+Lights handed off via a `null` multiplier are exempt from the turn-off too — see
+[Per-light brightness scaling](#per-light-brightness-scaling).
 
 A room with no real occupancy sensor at all (or one you want to override manually — e.g. a nightlight mode) can
 use a template `binary_sensor` with `device_class: occupancy` as a stand-in - Home Assistant's occupancy machinery
@@ -157,7 +159,14 @@ Two ways to scale brightness down, usable together:
   |---|---|
   | a number | scales that light's brightness, floored at 1 |
   | `0` | turns the light off during the adaptive step |
-  | `null` / `false` | skips the light entirely on power-on (for another automation or a fixed scene to own), but still includes it when the room turns off |
+  | `null` / `false` | hands the light off entirely — this automation never touches it, on or off |
+
+  **`0` and `null` are not the same thing.** `0` means *"turn this light off"* — it's still this automation's
+  light, it just wants it dark right now. `null` means *"this light belongs to something else"* — another
+  automation, a fixed scene, a gradient effect — so it's excluded from the adaptive step *and* from both
+  turn-off paths ([occupancy clearing](#occupancy-driven-onoff) and the [self-healing](#self-healing) retry).
+  Handing a light off is all-or-nothing; if you want it dark when the room empties, that's something the owning
+  automation has to do.
 
 **The template's own per-entity values always win over the phase lists** on any light both mention - the lists
 only fill in lights the template doesn't already cover. This is additive, not a replacement: a room whose
@@ -236,6 +245,11 @@ left alone rather than recommanded on every tick.
 
 On a configurable interval, if the room is unoccupied but a light is still on, the off command is retried. This
 recovers from dropped commands (a missed Zigbee message, for example) without manual intervention.
+
+Lights handed off via a `null` multiplier (see
+[Per-light brightness scaling](#per-light-brightness-scaling)) are excluded from this retry, and don't count as
+"still on" for the purpose of triggering it — so a room whose only lit light is one this automation doesn't own
+is treated as already settled, rather than retrying an off command against it every interval.
 
 ## Configuration
 
