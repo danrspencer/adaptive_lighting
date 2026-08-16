@@ -438,3 +438,80 @@ async def test_recovered_light_is_freed_while_an_unrelated_override_stays_protec
     combined = result["groups"][0]["combined"]
     assert "light.recovering" in combined
     assert "light.sibling" not in combined
+
+
+async def test_a_restart_style_unavailable_blip_does_not_clear_an_existing_record(
+    setup_integration: HomeAssistant,
+):
+    """Live incident, 2026-08-16: a light dimmed by hand hours after a
+    plain HA restart got silently overwritten on the very next tick.
+    Root cause - the clear-on-unavailable listener cleared the record
+    for *any* observed transition into unavailable/unknown, and nearly
+    every entity passes through unavailable/unknown as a routine part
+    of every restart (a fresh process's state machine has no prior
+    state for anything yet - old_state is None), indistinguishable from
+    a genuine drop if only the destination state is checked.
+
+    This reproduces that shape directly: seed a real write record, then
+    fire a state_changed event for a transition INTO unavailable with
+    no real prior on/off state (old_state None, or old_state itself
+    already unavailable/unknown - both routine parts of startup, not a
+    real drop) - the record must survive, so a manual change made after
+    it is still correctly protected."""
+    hass = setup_integration
+    turn_on_calls = async_mock_service(hass, "light", "turn_on")
+    _set_sensor(hass, brightness=180, color_temp=3200)
+
+    _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
+    our_context = Context()
+    await hass.services.async_call(
+        DOMAIN,
+        "apply_lighting",
+        {
+            "entities": ["light.a"],
+            "sensor_entity_id": "sensor.test_adaptive",
+            "transition": 2,
+            "owner_id": "automation.room",
+        },
+        blocking=True,
+        context=our_context,
+    )
+    assert len(turn_on_calls) == 1
+    _set_light(
+        hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=180, color_temp_kelvin=3200,
+        context=our_context,
+    )
+    await hass.async_block_till_done()
+
+    # Simulate the entity's in-memory state vanishing and reappearing
+    # the way it does across a real HA restart - the write_tracker's
+    # own record survives (Store-persisted, untouched by hass.states),
+    # but the state machine has no history for this entity in the new
+    # process, so its first event has old_state=None, same as this.
+    hass.states.async_remove("light.a")
+    await hass.async_block_till_done()
+    _set_light(hass, "light.a", "unavailable", supported_color_modes=["color_temp"])
+    await hass.async_block_till_done()
+    _set_light(
+        hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=180, color_temp_kelvin=3200,
+        context=our_context,
+    )
+    await hass.async_block_till_done()
+
+    # Someone changes it by hand - a genuinely different context.
+    _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=90, color_temp_kelvin=3200)
+    await hass.async_block_till_done()
+
+    result = await hass.services.async_call(
+        DOMAIN,
+        "compute_lighting_groups",
+        {
+            "entities": ["light.a"],
+            "sensor_brightness": 180,
+            "sensor_color_temp_kelvin": 3200,
+            "owner_id": "automation.room",
+        },
+        blocking=True,
+        return_response=True,
+    )
+    assert "light.a" not in result["groups"][0]["combined"]

@@ -35,12 +35,25 @@ report always is, gets `Context(id=ulid_at_time(...))`, unconditionally),
 indistinguishable from a genuine external change. Left as-is, a
 recovered light would look externally-set forever, since nothing else
 here ever un-marks it. async_start_listening() closes this by clearing
-an entity's own record the moment it's *observed* going unavailable/
-unknown - by the time it reconnects, there's no record left to compare
-against, so it's "free to manage" again (the same fallback already used
-for a brand new entity), through completely ordinary means - no forced
-write, no special-casing, just the next regular call finding no claim
-to conflict with.
+an entity's own record the moment it's *observed* going from a real
+on/off state to unavailable/unknown - by the time it reconnects,
+there's no record left to compare against, so it's "free to manage"
+again (the same fallback already used for a brand new entity), through
+completely ordinary means - no forced write, no special-casing, just
+the next regular call finding no claim to conflict with.
+
+The transition must start from a real on/off state, not just end at
+unavailable/unknown - almost every entity passes through unavailable/
+unknown as a routine part of every HA restart (a fresh process's state
+machine has no prior state for anything yet), which is indistinguishable
+from a genuine drop if only the destination state is checked. Clearing
+on that alone wiped override protection for practically every managed
+light in the house on every single restart, not just ones that had
+actually dropped off the network - confirmed as the cause of a live
+incident where a light dimmed by hand hours after a restart was
+silently overwritten on the very next tick, because its record had
+been cleared during that restart and nothing had needed a real
+rewrite to it since.
 """
 
 from __future__ import annotations
@@ -119,6 +132,23 @@ class LastWriteTracker:
         def _on_state_changed(event: Event[EventStateChangedData]) -> None:
             entity_id = event.data["entity_id"]
             if entity_id not in self._data:
+                return
+            # Only a genuine drop - a light that WAS on/off actually
+            # going dark - should clear anything. Almost every entity
+            # passes through unavailable/unknown as a routine part of
+            # every HA restart (old_state is None - a fresh process's
+            # state machine has no history yet - or already
+            # unavailable/unknown itself), and treating that the same as
+            # a real drop wiped override protection for practically
+            # every managed light in the house on every restart, not
+            # just ones that had actually dropped off the network - a
+            # live incident: a light dimmed by hand hours after a
+            # restart got silently overwritten on the next tick, because
+            # its record had been cleared during that restart and never
+            # rewritten since (nothing had needed a real write to it in
+            # between).
+            old_state = event.data["old_state"]
+            if old_state is None or old_state.state in ("unavailable", "unknown"):
                 return
             new_state = event.data["new_state"]
             if new_state is None or new_state.state not in ("unavailable", "unknown"):
