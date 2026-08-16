@@ -602,6 +602,83 @@ class TestBrightnessScaling:
         # light.b: not in the template, so the phase list's 0 fills in.
         assert calls[-1].data["brightness_multipliers"] == {"light.a": 0.5, "light.b": 0}
 
+    async def test_a_null_multiplier_light_is_not_turned_off_when_occupancy_clears(
+        self, hass, light_turn_off_calls
+    ):
+        """A null multiplier means "something else owns this light" - so
+        unlike a 0 (which means "turn this one off"), the room emptying
+        must leave it alone. Caught live: a kitchen strip offloaded to its
+        own gradient automation was still being switched off on every
+        motion-clear."""
+        _occupancy(hass, "binary_sensor.occ", "on")
+        _light(hass, "light.a", "on")
+        _light(hass, "light.handed_off", "on")
+        await hass.async_block_till_done()
+
+        await _setup_room_automation(
+            hass,
+            room_target={"entity_id": ["light.a", "light.handed_off", "binary_sensor.occ"]},
+            brightness_multiplier_template="{{ {'light.handed_off': None} }}",
+            no_motion_wait=0,
+        )
+
+        _occupancy(hass, "binary_sensor.occ", "off")
+        await hass.async_block_till_done()
+
+        assert light_turn_off_calls, "motion_off should still turn off the lights it does own"
+        turned_off = light_turn_off_calls[-1].data["entity_id"]
+        assert "light.a" in turned_off
+        assert "light.handed_off" not in turned_off
+
+    async def test_a_zero_multiplier_light_is_still_turned_off_when_occupancy_clears(
+        self, hass, light_turn_off_calls
+    ):
+        """The other half of the distinction - 0 is not null. In Jinja, as
+        in Python, `0 == false`, so a naive membership test would wrongly
+        treat every 0 as handed-off too."""
+        _occupancy(hass, "binary_sensor.occ", "on")
+        _light(hass, "light.a", "on")
+        _light(hass, "light.dimmed_out", "on")
+        await hass.async_block_till_done()
+
+        await _setup_room_automation(
+            hass,
+            room_target={"entity_id": ["light.a", "light.dimmed_out", "binary_sensor.occ"]},
+            brightness_multiplier_template="{{ {'light.dimmed_out': 0} }}",
+            no_motion_wait=0,
+        )
+
+        _occupancy(hass, "binary_sensor.occ", "off")
+        await hass.async_block_till_done()
+
+        assert light_turn_off_calls
+        turned_off = light_turn_off_calls[-1].data["entity_id"]
+        assert "light.a" in turned_off
+        assert "light.dimmed_out" in turned_off
+
+    async def test_reconcile_does_not_retry_turning_off_a_null_multiplier_light(
+        self, hass, light_turn_off_calls
+    ):
+        """The second turn-off path. With the handed-off light the only
+        thing still lit, reconcile should find nothing to do at all rather
+        than switching it off every interval."""
+        _occupancy(hass, "binary_sensor.occ", "off")
+        _light(hass, "light.a", "off")
+        _light(hass, "light.handed_off", "on")
+        await hass.async_block_till_done()
+
+        await _setup_room_automation(
+            hass,
+            room_target={"entity_id": ["light.a", "light.handed_off", "binary_sensor.occ"]},
+            brightness_multiplier_template="{{ {'light.handed_off': None} }}",
+            reconcile_interval="/5",
+        )
+
+        async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=6))
+        await hass.async_block_till_done()
+
+        assert light_turn_off_calls == []
+
 
 class TestRgbColour:
     """docs/BLUEPRINT.md#rgb-colour"""
