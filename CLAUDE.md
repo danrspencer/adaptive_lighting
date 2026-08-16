@@ -1238,6 +1238,75 @@ designs were explored:
   example, and its closing paragraph now states the integration handles
   device-recovery automatically for *any* caller (not just the
   blueprint), since the fix lives in `write_tracking.py` itself.
+- **The clear-on-unavailable listener above shipped with a real bug the
+  same day it deployed: it wiped override protection for almost every
+  managed light in the house on every plain HA restart, not just ones
+  that had actually dropped off the network - found live, 2026-08-16,
+  from a user report** ("I just turned off one of the kitchen pendants
+  and dimmed the other, next time I looked they're both back on full
+  brightness"). Investigated with real evidence before concluding
+  anything - automation traces, state history, and logbook for both
+  kitchen pendants, not assumption. Two genuinely different things were
+  going on, and only one was a bug:
+  - The fully-off pendant coming back on was **correctly explained by
+    existing, intentional design, confirmed via live traces**: the user
+    turned it off via the app (a real `context.user_id`-bearing
+    `light.turn_off`), then ~90 seconds later the kitchen's own
+    occupancy sensor genuinely transitioned off→on (a real `motion_on`
+    trigger, confirmed via the automation trace), which is allowed to
+    turn a currently-off light back on regardless of who turned it off
+    - lesson 5's "turning off ends protection" is deliberate and
+    long-standing, not something this session's redesign touched. The
+    kitchen has two occupancy sensors covering one open-plan area
+    (`binary_sensor.kitchen_sensor_occupancy` and
+    `binary_sensor.extension_right_occupancy`), so real motion retriggers
+    happen every few minutes there - an inherent, foreseeable
+    consequence of the existing design in a busy/twin-sensor room, not
+    a new regression.
+  - The dimmed-but-still-on pendant resetting to full brightness had no
+    such explanation, and this is the part that turned out to be a real
+    bug. Root-caused by reading `write_tracking.py`'s
+    `async_start_listening()` (shipped hours earlier the same day, see
+    above): it deletes an entity's write-tracking record on *any*
+    observed transition into `unavailable`/`unknown`, with no check on
+    what the entity was *before* that. A HA restart routinely puts
+    almost every entity through `unavailable`/`unknown` as its platform
+    reconnects (confirmed directly: `light.kitchen_pendant_2`'s own
+    logbook showed exactly this at the timestamp of that day's earlier
+    restart) - indistinguishable, from the listener's point of view,
+    from a genuine network drop. Once cleared, a record only comes back
+    the next time that light actually *needs* a real write (brightness/
+    colour outside tolerance) - a light that happened to already be
+    correctly positioned right after the restart could go the rest of
+    the day with no record at all, meaning the very next manual touch
+    on it - context.id genuinely different, but with nothing to compare
+    against - was waved through as "free to manage" (the same "no
+    record → free" fallback that correctly handles a brand-new entity,
+    firing here for the wrong reason) and silently overwritten on the
+    next tick. This fully explains the observed timing: the pendant's
+    last *real* write was well before the restart; nothing after the
+    restart needed to touch it again until the user's manual dim, by
+    which point its record was long gone.
+
+  Fixed by requiring the transition to start from a genuine on/off
+  state, not just end at `unavailable`/`unknown`: `old_state is None`
+  (a fresh process's state machine has no history for the entity yet -
+  its first-ever event) or `old_state.state in ("unavailable",
+  "unknown")` (already mid-transition, e.g. `unavailable` → `unknown`
+  before its first real value) now both leave an existing record
+  alone. Only `old_state.state in ("on", "off")` transitioning to
+  `unavailable`/`unknown` - a light that really *was* being tracked,
+  now genuinely gone dark - clears anything, matching the mechanism's
+  actual intent. The two existing tests (`light` going `off` →
+  `unavailable` → `on`, and the sibling-protection test) were
+  unaffected, since `off` is a real prior state and still correctly
+  triggers clearing; a new
+  `test_a_restart_style_unavailable_blip_does_not_clear_an_existing_record`
+  reproduces the actual failure shape - `hass.states.async_remove()`
+  before setting `unavailable`, matching a fresh process's blank state
+  machine (`old_state=None`) rather than a real drop - and confirms a
+  manual change made afterward is still correctly protected. Full
+  suite: 87/87.
 **Deployment / operational notes:**
 - pyscript is fully gone, both from this repo and the live host.
 - The dev git-sync automation (polling this repo for new commits and
