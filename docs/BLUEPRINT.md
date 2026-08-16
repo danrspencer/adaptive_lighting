@@ -36,9 +36,8 @@ in that area automatically, including ones added later; picking specific entitie
 
 Occupancy detection uses Home Assistant's built-in Occupancy triggers/conditions, which only count `binary_sensor`
 entities with `device_class: occupancy` — motion-class sensors aren't picked up this way, so a room with only
-motion sensors won't have anything to trigger on here — put those in
-[Additional Triggers - Turn Lights On](#additional-triggers) instead, which is the input that can actually light
-the room off the back of them (the plain Additional Triggers input only updates lights already on).
+motion sensors won't have anything to trigger on here. To drive a room from a motion-class sensor, have a
+separate automation of your own watch it and call this one (see [Additional triggers](#additional-triggers)).
 Area/device selections only resolve *light* entities via entity/device/area (not floor/label) — a floor or label
 selection works for occupancy but won't control any lights, so pick specific entities directly if you need one of
 those to also light a room.
@@ -66,12 +65,11 @@ has stopped, rather than racing against whichever sensor happens to report clear
 
 ## When a light is allowed to turn on
 
-Only four things may bring an off light on: motion actually being detected, running the automation manually, an
-entity in [Additional Triggers - Turn Lights On](#additional-triggers) firing, or the room already being in
-active use (at least one of its *other* lights is already on). Every other trigger that updates a room's
-lighting — the periodic adaptive tick, a plain Additional Trigger firing, or a light recovering from a dropped
-connection (see [Override detection](#override-detection) below) — may only ever update lights that are already
-on; it never switches a dark room's light on by itself.
+Only three things may bring an off light on: motion actually being detected, running the automation manually, or
+the room already being in active use (at least one of its *other* lights is already on). Every other trigger that
+updates a room's lighting — the periodic adaptive tick, an Additional Trigger firing, or a light recovering from a
+dropped connection (see [Override detection](#override-detection) below) — may only ever update lights that are
+already on; it never switches a dark room's light on by itself.
 
 This matters most for a light reconnecting after a Zigbee drop or a power cut: without this rule, a light that
 was deliberately left off would come back on the moment it reconnects to the network, purely because it just
@@ -180,30 +178,10 @@ one of them depends on (a TV, for a brightness multiplier that dims the room whi
 template checks) can be added to Additional Triggers to take effect immediately, rather than waiting for the
 next adaptive tick.
 
-There are two of these inputs, differing in exactly one respect — whether firing is allowed to switch a light
-on:
-
-| Input | Updates lights already on | Switches off lights on |
-|---|---|---|
-| Additional Triggers | yes | no |
-| Additional Triggers - Turn Lights On | yes | yes |
-
-Use the plain one for a dependency of a template — it should take effect *if* the room is lit, but shouldn't
-light a dark room by itself. Use the turn-on variant for something whose whole purpose is to light the room,
-e.g. a helper that switches on at dusk. Everything else about the two is identical: same re-evaluation, same
-[transition duration](#transition-durations), same [override protection](#override-detection).
-
-Two things worth knowing before picking entities for the turn-on variant:
-
-- **Pick something whose state changes once, when the thing actually happens.** The trigger fires on any state
-  change of the chosen entity, *including attribute-only changes*. `sun.sun` is the classic trap: its elevation
-  and azimuth attributes update every ~30 seconds all day long, so it would grant turn-on permission almost
-  continuously. Its state also flips twice a day — at dusk *and* at dawn. A template `binary_sensor` or an
-  `input_boolean` that goes on once at the moment you care about is the right shape.
-- **It grants a one-shot permission, not a lasting "this room is in use" state.** In a room that has real
-  occupancy sensors and currently reads as clear, [self-healing](#self-healing) will still switch those lights
-  back off within the reconcile interval, exactly as it would after any other one-off turn-on. In a room with
-  no occupancy sensor that branch never runs at all, so the lights simply stay on.
+If you want an event to actually *light* the room rather than just refresh it, don't reach for this input — it
+deliberately can't turn a dark room on. Have a separate automation watch whatever the event is and call
+`automation.trigger` on this room's automation, which counts as a manual run and is allowed to turn lights on
+(see [When a light is allowed to turn on](#when-a-light-is-allowed-to-turn-on)).
 
 ## Two-step transitions
 
@@ -231,8 +209,8 @@ drifting smoothly the rest of the time:
 
 | Duration | Used for |
 |---|---|
-| Adaptive Transition | The periodic adaptive tick, plain Additional Triggers, and a light recovering from a dropped connection (see [Override detection](#override-detection)) - none of these are a person waiting on a response in real time, so there's no reason to snap. Covers both the scene-activation step and the main adaptive-lighting dispatch |
-| Motion On Transition | Motion being detected, an [Additional Trigger - Turn Lights On](#additional-triggers) firing, and running the automation manually - "light the room now" triggers |
+| Adaptive Transition | The periodic adaptive tick, Additional Triggers, and a light recovering from a dropped connection (see [Override detection](#override-detection)) - none of these are a person waiting on a response in real time, so there's no reason to snap. Covers both the scene-activation step and the main adaptive-lighting dispatch |
+| Motion On Transition | Motion being detected, and running the automation manually - "something happened, respond promptly" triggers |
 | Motion Off Transition | Turning lights off - both the motion-cleared turn-off and the [self-healing](#self-healing) retry |
 
 ## Reachability and redundancy filtering
@@ -259,8 +237,7 @@ Add an automation using the "Adaptive Lighting" blueprint per room, and set:
 |---|---|---|
 | Adaptive Lighting Sensor | yes | Sensor providing brightness/colour temperature - filtered to this integration's own sensors (see [Brightness & colour temperature schedule](#brightness--colour-temperature-schedule) for the "bring your own sensor" case) |
 | Room | no | Entity/device/area/floor/label - lights within it are controlled, occupancy sensors within it govern on/off (see [One target, two jobs](#one-target-two-jobs)) |
-| Additional Triggers | no | Entities that trigger immediate re-evaluation, updating only lights already on (see [Additional triggers](#additional-triggers)) |
-| Additional Triggers - Turn Lights On | no | Same, but also allowed to switch the room's lights on when they fire (see [Additional triggers](#additional-triggers)) |
+| Additional Triggers | no | Entities that trigger immediate re-evaluation (see [Additional triggers](#additional-triggers)) |
 | **Colour** section | | |
 | Prefer RGB During | no | Phases to send RGB colour instead of colour temperature to lights that support it - defaults to Evening/Night selected (see [RGB colour](#rgb-colour)) |
 | **Scene Handoff** section | | |
