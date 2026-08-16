@@ -1307,6 +1307,69 @@ designs were explored:
   machine (`old_state=None`) rather than a real drop - and confirms a
   manual change made afterward is still correctly protected. Full
   suite: 87/87.
+- **`activating_triggers` added - the first and so far only expansion of
+  `allow_turn_on`, and it happened because the user explicitly asked for
+  it in so many words (2026-08-16).** This is the "UNLESS EXPLICITLY
+  ASKED FOR" escape hatch in the standing rule recorded above actually
+  being used; the rule itself is unchanged and this is not precedent for
+  anything else. User's ask: "I'm wondering if we need to update the
+  automation to allow 2 types of additional triggers, one which allows
+  the light to turn on ... and ones that are update only", motivated by
+  a concrete case - "I want some lights to turn on at dusk via my
+  automation".
+
+  **Two findings were put to the user before building anything, because
+  the obvious implementation doesn't actually serve that use case:**
+  (1) the existing `extra` trigger is a bare `platform: state` with no
+  `to:`, which per HA's own docs fires on *attribute-only* changes too -
+  and `sun.sun` was confirmed live to report continuously
+  (`last_changed` 15:00:34 vs `last_reported` 20:14:21, five hours of
+  elevation/azimuth updates with no state change), so pointing a
+  turn-on trigger at it would grant turn-on permission roughly every 30
+  seconds, all day; its state also flips *twice* daily, so even
+  attribute-filtered it would light the room at dawn as well as dusk.
+  (2) In a room that has real occupancy sensors and currently reads
+  clear, the `reconcile` branch turns those lights back off within
+  `reconcile_interval` regardless.
+
+  Offered a phase-entry multi-select (mirroring `rgb_phases`) as the
+  precise fix for "at dusk", plus options for handling the reconcile
+  interaction. **User chose the plain second entity list and explicitly
+  rejected any extra machinery**: *"it should be exactly the same class
+  as a motion event, if someone puts it in there then they want the
+  lights turning on - do not over complicate is just treat it as
+  occupancy."* So the implementation is deliberately minimal - a new
+  `activating` trigger id that appears in exactly two places
+  (`allow_turn_on`, and the `condition:` efficiency check alongside
+  `motion_on`), with no lasting "room is in use" state recorded
+  anywhere. `script_transition` needed no change at all: `activating`
+  isn't in the `['adaptive','extra','recovered']` list, so it falls
+  through to `motion_on_transition` automatically - same class as
+  motion, exactly as asked.
+
+  Consequence accepted rather than engineered around: in an
+  occupancy-sensored room reading clear, reconcile still switches those
+  lights back off - documented in both the blueprint comment and
+  `docs/BLUEPRINT.md`, not hidden. Rooms with no occupancy sensor never
+  reach that branch, so lights simply stay on (which is where the dusk
+  use case actually lives).
+
+  The input's own `description:` deliberately does **not** describe it
+  as "like a motion event" - explicit user instruction ("don't use that
+  comparison in the docs for the field") - and instead states the
+  behaviour directly, plus a warning about picking continuously-updating
+  entities (the `sun.sun` trap above, which a user hitting this feature
+  is very likely to try first).
+
+  Four tests added to `test_blueprint.py`'s `TestAdditionalTriggers`,
+  and **each was mutation-verified rather than just observed passing** -
+  reverting `activating` out of `allow_turn_on` fails exactly
+  `test_activating_trigger_turns_on_an_off_light` and
+  `..._even_when_the_room_reads_unoccupied`; reverting it out of the
+  `condition:` efficiency check fails exactly
+  `test_activating_trigger_is_skipped_when_every_light_is_already_on`.
+  `test_extra_trigger_does_not_turn_on_an_off_light` locks in the
+  distinction from the other direction. Full suite: 91/91.
 **Deployment / operational notes:**
 - pyscript is fully gone, both from this repo and the live host.
 - The dev git-sync automation (polling this repo for new commits and
