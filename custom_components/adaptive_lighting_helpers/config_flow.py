@@ -48,7 +48,8 @@ from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers import selector
 from homeassistant.util import slugify
 
-from .const import DOMAIN, SUBENTRY_TYPE_SENSOR
+from .const import CONF_EXTRA_TWO_STEP_MODELS, DOMAIN, SUBENTRY_TYPE_SENSOR
+from .two_step import DEFAULT_TWO_STEP_MODEL_PATTERNS
 
 SUBENTRY_FIELDS = {vol.Required("name"): selector.TextSelector()}
 
@@ -69,6 +70,40 @@ class AdaptiveLightingHelpersConfigFlow(config_entries.ConfigFlow, domain=DOMAIN
     @callback
     def async_get_supported_subentry_types(cls, config_entry: ConfigEntry) -> dict[str, type[ConfigSubentryFlow]]:
         return {SUBENTRY_TYPE_SENSOR: SensorSubentryFlow}
+
+    @staticmethod
+    @callback
+    def async_get_options_flow(config_entry: ConfigEntry) -> config_entries.OptionsFlow:
+        return AdaptiveLightingHelpersOptionsFlow()
+
+
+class AdaptiveLightingHelpersOptionsFlow(config_entries.OptionsFlow):
+    """The only install-wide setting: extra two-step bulb model patterns.
+
+    Kept on the main entry rather than per sensor because it describes
+    hardware, not a schedule - which bulbs in this house can't take a
+    combined brightness+colour command. Nothing here affects the curve
+    or any room's behaviour; it only widens what the missing-label
+    repair looks for (see two_step.py)."""
+
+    async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        if user_input is not None:
+            return self.async_create_entry(data=user_input)
+
+        return self.async_show_form(
+            step_id="init",
+            data_schema=self.add_suggested_values_to_schema(
+                vol.Schema(
+                    {
+                        vol.Optional(CONF_EXTRA_TWO_STEP_MODELS, default=""): selector.TextSelector(
+                            selector.TextSelectorConfig(multiline=True)
+                        )
+                    }
+                ),
+                {CONF_EXTRA_TWO_STEP_MODELS: self.config_entry.options.get(CONF_EXTRA_TWO_STEP_MODELS, "")},
+            ),
+            description_placeholders={"defaults": ", ".join(DEFAULT_TWO_STEP_MODEL_PATTERNS)},
+        )
 
 
 class SensorSubentryFlow(ConfigSubentryFlow):

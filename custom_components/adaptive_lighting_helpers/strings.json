@@ -29,5 +29,32 @@
         "already_configured": "A sensor with this name already exists"
       }
     }
+  },
+  "issues": {
+    "missing_two_step_label": {
+      "title": "Bulbs missing the two-step transition label",
+      "fix_flow": {
+        "step": {
+          "confirm": {
+            "title": "Apply the two-step transition label",
+            "description": "{count} light(s) look like bulbs that can't transition brightness and colour temperature in one command, but aren't labelled, so Adaptive Lighting Helpers is sending them a single combined command - which those bulbs handle badly.\n\n{lights}\n\nSubmitting applies the \"{label}\" label to them (on the device, so it survives entity renames), creating the label if it doesn't exist yet. Nothing else changes. If you'd rather leave them as they are, ignore this repair instead."
+          }
+        },
+        "abort": {
+          "entry_gone": "Adaptive Lighting Helpers was removed, so there's nothing to label."
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Adaptive Lighting Helpers options",
+        "description": "Extra bulb models that need two-step transitions, one pattern per line. These are added to the ones already shipped with the integration ({defaults}) - you don't need to repeat those.\n\nPatterns are matched case-insensitively against \"manufacturer model\", and * is a wildcard, e.g. *TRADFRI bulb* or IKEA*. Used only to spot bulbs missing the two-step label; leave blank unless a repair missed one.",
+        "data": {
+          "extra_two_step_models": "Additional two-step bulb models"
+        }
+      }
+    }
   }
 }
