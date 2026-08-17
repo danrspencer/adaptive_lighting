@@ -9,7 +9,8 @@ PHASE_OPTIONS = ["Auto", "Morning", "Day", "Evening", "Night"]
 # schedule_instances().
 SUBENTRY_TYPE_SENSOR = "sensor"
 
-# Options key for this install's own additions to the shipped list of
-# bulb models needing two-step transitions - see two_step.py for why the
-# list is split between a shipped default and a per-install extra.
-CONF_EXTRA_TWO_STEP_MODELS = "extra_two_step_models"
+# Options key for the list of bulb models needing two-step transitions.
+# Holds the whole list, not additions to a hidden one - the field is
+# pre-populated with DEFAULT_TWO_STEP_MODEL_PATTERNS so what ships and
+# what you add are the same editable thing (see two_step.py).
+CONF_TWO_STEP_MODELS = "two_step_models"

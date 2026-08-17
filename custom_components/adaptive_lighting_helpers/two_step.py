@@ -24,15 +24,18 @@ patterns and reports anything matching that isn't labelled. Pure logic,
 no Home Assistant imports - the registry access lives in __init__.py and
 is injected, same split as curve.py/grouping.py/scenes.py.
 
-The pattern list is deliberately two-layered:
-  * DEFAULT_TWO_STEP_MODEL_PATTERNS ships with the integration, so the
-    common cases work with no configuration at all, and a newly
-    discovered bad bulb can be contributed back as a one-line PR that
-    every install picks up on its next update.
-  * A per-install list, configured through the integration's own options
-    (see config_flow.py), is merged on top - so an unusual bulb can be
-    handled immediately without waiting for a release, and without
-    editing anything that an update would overwrite.
+DEFAULT_TWO_STEP_MODEL_PATTERNS is the shipped list, and it is also
+literally what the options field is pre-populated with (see
+config_flow.py) - there is no hidden second list layered underneath.
+Whatever is in that field IS the list, so a user can remove a shipped
+pattern they disagree with as easily as they can add one, and what they
+see in the box is exactly what the check will use.
+
+The trade-off that buys: once a user saves the field, they own it, and
+a later release adding a newly discovered bulb to the shipped defaults
+will not reach them - their saved copy wins. That is the cost of "what
+you see is what runs"; contributing a pattern upstream still helps every
+install that hasn't customised the field.
 """
 
 from __future__ import annotations
@@ -82,7 +85,7 @@ class CandidateLight:
     model: str
 
 
-def parse_extra_patterns(raw: str | Iterable[str] | None) -> list[str]:
+def parse_patterns(raw: str | Iterable[str] | None) -> list[str]:
     """Turns the options-flow text field into a pattern list.
 
     Accepts a newline- or comma-separated string (what the multiline text

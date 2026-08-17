@@ -26,7 +26,7 @@ from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers import label_registry as lr
 
 from custom_components.adaptive_lighting_helpers import async_setup_entry
-from custom_components.adaptive_lighting_helpers.const import CONF_EXTRA_TWO_STEP_MODELS
+from custom_components.adaptive_lighting_helpers.const import CONF_TWO_STEP_MODELS
 from custom_components.adaptive_lighting_helpers.repairs import async_create_fix_flow
 from custom_components.adaptive_lighting_helpers.two_step import TWO_STEP_LABEL_ID
 from custom_components.adaptive_lighting_helpers.two_step_check import ISSUE_ID
@@ -120,16 +120,37 @@ async def test_a_non_matching_bulb_raises_nothing(hass, bulb_entry):
     assert ir.async_get(hass).async_get_issue(DOMAIN, ISSUE_ID) is None
 
 
-async def test_an_extra_configured_pattern_widens_detection(hass, bulb_entry):
-    """The per-install half of the model list, straight off the options
-    flow - a bulb the shipped defaults don't know about."""
+async def test_a_configured_pattern_detects_a_bulb_the_defaults_do_not_know(hass, bulb_entry):
+    """Straight off the options flow - a bulb the shipped list has never
+    heard of."""
     _add_light(hass, bulb_entry, "odd_1", manufacturer="Acme", model="Weird Bulb 9000")
 
-    await _setup(hass, **{CONF_EXTRA_TWO_STEP_MODELS: "*weird bulb*"})
+    await _setup(hass, **{CONF_TWO_STEP_MODELS: "*weird bulb*"})
 
     issue = ir.async_get(hass).async_get_issue(DOMAIN, ISSUE_ID)
     assert issue is not None
     assert "light.odd_1" in issue.translation_placeholders["lights"]
+
+
+async def test_a_saved_list_replaces_the_defaults_so_a_removed_pattern_stays_removed(hass, bulb_entry):
+    """The whole reason the field is pre-populated rather than additive:
+    deleting a shipped pattern has to actually take effect, or the box
+    would be lying about what it controls."""
+    _add_light(hass, bulb_entry, "spot_1")
+
+    await _setup(hass, **{CONF_TWO_STEP_MODELS: "*weird bulb*"})
+
+    assert ir.async_get(hass).async_get_issue(DOMAIN, ISSUE_ID) is None
+
+
+async def test_an_empty_list_falls_back_to_the_defaults(hass, bulb_entry):
+    """Clearing the box by accident mustn't silently switch detection
+    off - ignoring the repair is the way to stop being told."""
+    _add_light(hass, bulb_entry, "spot_1")
+
+    await _setup(hass, **{CONF_TWO_STEP_MODELS: "   \n  "})
+
+    assert ir.async_get(hass).async_get_issue(DOMAIN, ISSUE_ID) is not None
 
 
 async def test_fix_flow_applies_the_label_to_the_device_and_clears_the_issue(hass, bulb_entry):

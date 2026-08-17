@@ -1437,13 +1437,28 @@ designs were explored:
 
   **Shape**: `two_step.py` is pure (no HA imports, matching
   curve/grouping/scenes), `two_step_check.py` is the registry adapter,
-  `repairs.py` is the fix flow. The model list is deliberately two
-  layers - `DEFAULT_TWO_STEP_MODEL_PATTERNS` ships in the repo (so a
-  newly found bad bulb is a one-line PR every install inherits), and an
-  options-flow field adds per-install patterns on top. Additive only:
-  options can widen but never disable a shipped pattern, since "ignore
-  the repair" is already a clearer opt-out and HA persists it.
-  Case-insensitive globs against `"<manufacturer> <model>"`.
+  `repairs.py` is the fix flow. Case-insensitive globs against
+  `"<manufacturer> <model>"`.
+
+  **The model list started as two layers and was flattened the same day,
+  at the user's direction** - originally `DEFAULT_TWO_STEP_MODEL_PATTERNS`
+  shipped in the repo and an options field added *extra* patterns on top,
+  additive only. User's objection was consistency: *"you've let people
+  add new entries to the list of lights to manage, but you've hard coded
+  the ones we currently do - we should treat both the same, just
+  pre-populate the field with lights we'll handle by default."* Now the
+  options field is seeded with the shipped defaults and holds the whole
+  list; a saved value replaces them outright, so deleting a shipped
+  pattern actually takes effect. An empty/whitespace field falls back to
+  the defaults rather than disabling detection, so clearing the box by
+  accident can't silently switch the check off.
+
+  **Known, accepted trade-off**: once a user saves the field they own it,
+  and a later release adding a newly discovered bulb to
+  `DEFAULT_TWO_STEP_MODEL_PATTERNS` will not reach them. That partially
+  undercuts the original "easily updatable with a PR" goal - flagged to
+  the user, who chose consistency anyway. PR updates still reach every
+  install that hasn't customised the field.
 
   **The fix applies the label to the *device*, not the entity** -
   `grouping.py` accepts either, but device survives entity renames and
@@ -1478,13 +1493,36 @@ designs were explored:
   `async_get_label_by_name`. Note `demo`'s manifest does *not* list
   `repairs` in `dependencies`; this integration does, for explicitness.
 
-  Tests: 18 pure (`tests/test_two_step.py`) + 8 end-to-end
+  **Dismissal needed no code at all.** User asked for a way to dismiss
+  the repair and how to get it back; HA's issue registry already
+  provides Ignore, and an ignored issue stays in the registry (verified
+  live on this instance - a `playstation_network` repair showing
+  `ignored: true, dismissed_version: "2026.8.1"` and still listable, and
+  still ignored after the 2026.8.2 upgrade, so dismissal survives
+  version bumps). Recovery is Settings -> Repairs -> overflow menu ->
+  "Show ignored issues". Documented in `docs/HELPERS.md` rather than
+  reimplemented - don't build an opt-out for a repair, the platform has
+  one.
+
+  Tests: 20 pure (`tests/test_two_step.py`) + 10 end-to-end
   (`tests/integration/test_two_step_repair.py`, real entity/device/
   label/issue registries) - including that a device-level label counts
   the same as an entity-level one, that a Hue bulb isn't swept up by
-  pressing Fix, that a disabled entity is never flagged, and that the
-  issue *self-clears* after the fix via the registry-change watcher
-  rather than a manual re-check. Full suite: 116/116.
+  pressing Fix, that a disabled entity is never flagged, that a saved
+  list replaces rather than extends the defaults, that an empty field
+  falls back to them, and that the issue *self-clears* after the fix via
+  the registry-change watcher rather than a manual re-check. Full suite:
+  119/119.
+
+  **Verified live end-to-end, twice.** First with 2 bulbs
+  (`light.utility_spot_1`/`_2`): labels removed -> repair appeared within
+  the coalescing window naming exactly those two -> Fix pressed in the UI
+  -> labels written to the *devices* -> issue self-cleared -> a
+  read-only `compute_lighting_groups` probe put both in `two_step` while
+  an unlabelled Hue pendant stayed in `combined`, proving device-level
+  labels really do drive the routing (their entity labels were empty).
+  Then with all 25 at once, which is the current live state - all
+  detected, sorted, truncated at 8 with "and 17 more".
 
 **Deployment / operational notes:**
 - pyscript is fully gone, both from this repo and the live host.

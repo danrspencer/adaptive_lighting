@@ -225,20 +225,34 @@ devices, creating the label itself (with the correct id) if it doesn't already e
 the entity or device registry changes, so pairing a new bulb surfaces it without a restart, and the repair
 clears itself once the labels are in place.
 
-The model list is two layers:
-
-- **Shipped defaults** live in `custom_components/adaptive_lighting_helpers/two_step.py` as
-  `DEFAULT_TWO_STEP_MODEL_PATTERNS`. Currently just `*TRADFRI bulb*`. Adding a newly discovered bulb there is a
-  one-line PR that every install picks up on its next update — that's the intended way to contribute one.
-- **Per-install additions** go in the integration's own options (Settings → Devices & Services → Adaptive
-  Lighting Helpers → Configure), one pattern per line, for a bulb you don't want to wait on a release for.
+The model list lives in the integration's options (Settings → Devices & Services → Adaptive Lighting Helpers →
+**Configure**), one glob per line. The box comes **pre-filled with the shipped defaults**, so what you see there
+is the complete list the check uses — you can add to it or delete from it, and a pattern you remove is genuinely
+gone rather than being re-added from a hidden layer underneath.
 
 Patterns are case-insensitive globs matched against `"<manufacturer> <model>"`, so both `*TRADFRI bulb*` and
-`IKEA*` are valid. The two layers are additive — options can only widen the set, never switch off a shipped
-pattern. If you disagree with a default, ignore the repair instead; Home Assistant remembers that.
+`IKEA*` work. Clearing the box entirely falls back to the shipped defaults rather than disabling detection — to
+stop being told about unlabelled bulbs, [ignore the repair](#dismissing-the-repair) instead.
 
-Keep the defaults narrow: a pattern that's too broad is worse than a missing one, since it produces a repair
-recommending a label that would make those bulbs transition *worse* — two calls where one was fine.
+The shipped defaults live in `custom_components/adaptive_lighting_helpers/two_step.py` as
+`DEFAULT_TWO_STEP_MODEL_PATTERNS` (currently just `*TRADFRI bulb*`). Adding a newly discovered bulb there is a
+one-line PR — that's the intended way to contribute one, and it reaches every install that hasn't customised
+the field. **Once you save your own list, it's yours**: later releases adding models won't change it, which is
+the trade-off for the box showing exactly what runs.
+
+Keep patterns narrow. One that's too broad is worse than a missing one — it produces a repair recommending a
+label that would make those bulbs transition *worse*, two calls where one was fine.
+
+### Dismissing the repair
+
+The repair uses Home Assistant's own issue mechanism, so it gets the standard **Ignore** action from the
+three-dot menu on the repair card — nothing specific to this integration. Ignoring is remembered permanently
+(it records the HA version at the time and stays ignored across upgrades).
+
+To bring it back, open **Settings → Repairs**, use the overflow menu at the top right and enable **Show ignored
+issues** — the repair reappears in the list and can be un-ignored from there. Ignoring only silences the
+notification; it doesn't change any lighting behaviour, and the check keeps running, so if you later label the
+bulbs the issue clears itself as normal.
 
 ## Optional: day-phase/curve sensors
 
