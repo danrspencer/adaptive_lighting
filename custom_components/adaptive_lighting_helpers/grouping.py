@@ -20,6 +20,16 @@ from typing import Callable, Optional
 
 _RGB_COLOR_MODES = {"rgb", "rgbw", "rgbww", "hs", "xy"}
 
+# Home Assistant's own brightness scale. light.turn_on validates with
+# vol.Clamp(min=0, max=255), so it silently accepts an out-of-range value
+# and writes the clamped one - which is exactly what makes an unclamped
+# target here dangerous rather than merely wrong: the light reports 255,
+# _already_set compares it against the un-clamped target, never finds it
+# within tolerance, and re-commands the light on every single tick
+# forever. Clamping here keeps our idea of "at target" identical to what
+# the light can actually report.
+MAX_BRIGHTNESS = 255
+
 
 @dataclass
 class EntityLookup:
@@ -201,7 +211,13 @@ def build_groups(
     groups = []
     for multiplier, group_entities in _bucket_by_multiplier(entities, brightness_multipliers).items():
         m = float(multiplier)
-        brightness = 0 if m == 0 else max(round(sensor_brightness * m), 1)
+        # Clamped at both ends: floored at 1 so a tiny multiplier still
+        # leaves the light on rather than silently off (0 means off, and
+        # that's the multiplier's job to say explicitly), and capped at
+        # MAX_BRIGHTNESS so a multiplier above 1 is a plain "as bright as
+        # it goes" rather than something a template has to do arithmetic
+        # against the current curve value to avoid.
+        brightness = 0 if m == 0 else min(max(round(sensor_brightness * m), 1), MAX_BRIGHTNESS)
         group = Group(multiplier=multiplier, brightness=brightness)
 
         if brightness <= 0:

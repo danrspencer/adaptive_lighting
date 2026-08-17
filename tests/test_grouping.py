@@ -5,7 +5,7 @@ groupings) - the Python and the Jinja it replaced agree on every case
 here.
 """
 
-from grouping import build_groups
+from grouping import MAX_BRIGHTNESS, build_groups
 from fakes import make_lookup
 
 
@@ -165,6 +165,40 @@ def test_multiplier_floors_at_one_never_accidentally_off():
         lookup=lookup,
     )
     assert groups[0].brightness == 1
+
+
+def test_multiplier_caps_at_max_brightness():
+    """A multiplier above 1 means "as bright as it goes", so a template
+    can just say 1.5 without knowing what the curve is currently at."""
+    lookup = make_lookup(states={"light.bright": {"state": "off", "attributes": {}}})
+    groups = build_groups(
+        entities=["light.bright"],
+        brightness_multipliers={"light.bright": 1.5},
+        sensor_brightness=200,
+        sensor_color_temp_kelvin=3000,
+        lookup=lookup,
+    )
+    assert groups[0].brightness == MAX_BRIGHTNESS
+
+
+def test_a_light_already_at_max_is_not_recommanded_when_the_multiplier_overshoots():
+    """The reason the cap matters beyond ergonomics. light.turn_on
+    validates brightness with vol.Clamp(0, 255), so an un-clamped target
+    of 300 is silently written as 255 - and then the light reporting 255
+    would never match a 300 target, so it'd be re-commanded on every
+    tick forever. Capping keeps "at target" reachable."""
+    lookup = make_lookup(
+        states={"light.bright": {"state": "on", "attributes": {"brightness": 255, "color_temp_kelvin": 3000}}},
+    )
+    groups = build_groups(
+        entities=["light.bright"],
+        brightness_multipliers={"light.bright": 1.5},
+        sensor_brightness=200,
+        sensor_color_temp_kelvin=3000,
+        lookup=lookup,
+    )
+    assert groups[0].combined == []
+    assert groups[0].two_step == []
 
 
 # Overrides: a light currently on whose live context.id doesn't match

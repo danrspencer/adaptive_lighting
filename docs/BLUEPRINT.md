@@ -155,9 +155,13 @@ Two ways to scale brightness down, usable together:
 
   | Value | Effect |
   |---|---|
-  | a number | scales that light's brightness, floored at 1 |
+  | a number | scales that light's brightness, clamped to 1-255 |
   | `0` | turns the light off during the adaptive step |
   | `null` / `false` | hands the light off entirely — this automation never touches it, on or off |
+
+  Values above `1` are allowed and simply mean *"as bright as this bulb goes"* — the result is capped at 255,
+  so a template can say `1.5` without having to know what the curve is currently at and do arithmetic to avoid
+  overshooting.
 
   **`0` and `null` are not the same thing.** `0` means *"turn this light off"* — it's still this automation's
   light, it just wants it dark right now. `null` means *"this light belongs to something else"* — another

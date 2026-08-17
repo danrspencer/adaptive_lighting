@@ -27,8 +27,9 @@ compute_lighting_groups:
       name: Brightness multipliers
       description: >-
         Map of entity_id to multiplier. 0 turns that light off; other
-        numbers scale brightness (floored at 1); null/false skips the
-        light entirely (excluded from every group). Entities not listed
+        numbers scale brightness, clamped to 1-255 (so a value above 1
+        just means "as bright as it goes"); null/false skips the light
+        entirely (excluded from every group). Entities not listed
         default to a multiplier of 1.
       example: '{"light.lamp": 0.5, "light.strip": 0}'
       selector:
@@ -170,8 +171,9 @@ apply_lighting:
       name: Brightness multipliers
       description: >-
         Map of entity_id to multiplier. 0 turns that light off; other
-        numbers scale brightness (floored at 1); null/false skips the
-        light entirely (excluded from every group). Entities not listed
+        numbers scale brightness, clamped to 1-255 (so a value above 1
+        just means "as bright as it goes"); null/false skips the light
+        entirely (excluded from every group). Entities not listed
         default to a multiplier of 1.
       example: '{"light.lamp": 0.5, "light.strip": 0}'
       selector:
