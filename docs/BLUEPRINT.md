@@ -191,6 +191,17 @@ Everything else gets a single combined call. Entirely handled inside `apply_ligh
 [docs/HELPERS.md](HELPERS.md)) — the blueprint itself has no branching for this, it's just a label you add to a
 light or device.
 
+The label can go on either the **entity** or its **device** — device is better, since it survives entity renames
+and covers every light entity that device exposes. What matters is the label's *id* (`no_combined_transition`),
+not its display name; the lookup is an exact match, so a label whose id doesn't line up silently does nothing at
+all — no error, no log, just a bulb quietly back on combined transitions.
+
+Because that failure is invisible, the integration watches for it: if a bulb whose model is known to need
+two-step transitions isn't labelled, it raises a **repair** with a Fix button that applies the label for you
+(creating it correctly if it doesn't exist). The list of known models ships with the integration and can be
+extended per-install — see [docs/HELPERS.md](HELPERS.md#two-step-transition-bulbs) for the model patterns and
+how to add one.
+
 ## RGB colour
 
 Prefer RGB During is a multi-select - pick which phases send RGB colour instead of colour temperature to lights

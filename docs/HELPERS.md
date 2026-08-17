@@ -201,6 +201,45 @@ response_variable: coverage
 # coverage.scene_active / scene_valid / covered_entities / uncovered_entities
 ```
 
+## Two-step transition bulbs
+
+Some bulbs can't take brightness and colour temperature in one command — sent together, they snap or drop one of
+the two. `apply_lighting` sends those as two sequential half-length calls instead, and picks which bulbs get that
+treatment from a Home Assistant **label**:
+
+| | |
+|---|---|
+| Label id | `no_combined_transition` |
+| Goes on | the light **entity** or its **device** — either works, device is more durable |
+| Overridable per call | `two_step_label` on `apply_lighting` / `compute_lighting_groups` |
+
+The match is on the label's *id*, not its display name. That makes it easy to get silently wrong: a label whose
+id doesn't line up produces no error and no log line — the bulb just goes back to combined transitions, and the
+only symptom is a fade that looks slightly off.
+
+### Keeping the list current
+
+Because that failure is invisible, the integration checks for it. Any light whose device matches a known
+two-step model but has no label raises a **repair** with a Fix button; pressing it applies the label to those
+devices, creating the label itself (with the correct id) if it doesn't already exist. The check re-runs whenever
+the entity or device registry changes, so pairing a new bulb surfaces it without a restart, and the repair
+clears itself once the labels are in place.
+
+The model list is two layers:
+
+- **Shipped defaults** live in `custom_components/adaptive_lighting_helpers/two_step.py` as
+  `DEFAULT_TWO_STEP_MODEL_PATTERNS`. Currently just `*TRADFRI bulb*`. Adding a newly discovered bulb there is a
+  one-line PR that every install picks up on its next update — that's the intended way to contribute one.
+- **Per-install additions** go in the integration's own options (Settings → Devices & Services → Adaptive
+  Lighting Helpers → Configure), one pattern per line, for a bulb you don't want to wait on a release for.
+
+Patterns are case-insensitive globs matched against `"<manufacturer> <model>"`, so both `*TRADFRI bulb*` and
+`IKEA*` are valid. The two layers are additive — options can only widen the set, never switch off a shipped
+pattern. If you disagree with a default, ignore the repair instead; Home Assistant remembers that.
+
+Keep the defaults narrow: a pattern that's too broad is worse than a missing one, since it produces a repair
+recommending a label that would make those bulbs transition *worse* — two calls where one was fine.
+
 ## Optional: day-phase/curve sensors
 
 If you'd rather have this running continuously as sensors than call `compute_curve` yourself, add a sensor from

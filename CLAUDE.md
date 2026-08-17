@@ -1416,6 +1416,76 @@ designs were explored:
   re-asserted it because adaptive excludes it during Evening/Night by
   that room's own template, and the gradient automation is a one-shot on
   the `to: "Evening"` edge which had already passed.
+- **Two-step-label drift detection added as a fixable repair
+  (2026-08-16).** Prompted by the user asking whether the
+  `no_combined_transition` list was maintainable at all: *"have we
+  exposed a way to keep that list up to date as part of our
+  integration?"* Answer was no - it's pure HA label-registry data that
+  `grouping.py` only ever reads, applied by hand, and getting it wrong
+  fails completely silently (exact `label_id` string match; a typo, or a
+  new bulb nobody remembered to label, just quietly goes back to
+  combined transitions). User asked for detection **plus** a
+  configurable model list **plus** auto-fix: *"the list of bulbs types
+  it should detect should be configurable once the integration is
+  installed (and easily updatable with a PR into the repo) - can we make
+  the repair diagnostic autorepair?"*
+
+  Audited the live instance first, before building anything: 27 TRADFRI
+  GU10s, 25 labelled, and the 2 unlabelled ones both decommissioned
+  ("Ex ..." names, parked in dead areas). So the list was *correct* -
+  this is drift-prevention, not a bug fix.
+
+  **Shape**: `two_step.py` is pure (no HA imports, matching
+  curve/grouping/scenes), `two_step_check.py` is the registry adapter,
+  `repairs.py` is the fix flow. The model list is deliberately two
+  layers - `DEFAULT_TWO_STEP_MODEL_PATTERNS` ships in the repo (so a
+  newly found bad bulb is a one-line PR every install inherits), and an
+  options-flow field adds per-install patterns on top. Additive only:
+  options can widen but never disable a shipped pattern, since "ignore
+  the repair" is already a clearer opt-out and HA persists it.
+  Case-insensitive globs against `"<manufacturer> <model>"`.
+
+  **The fix applies the label to the *device*, not the entity** -
+  `grouping.py` accepts either, but device survives entity renames and
+  covers every light entity the device exposes. It also *creates* the
+  label if absent, which is what actually guarantees the `label_id` is
+  right: HA derives the id from the name at creation, so creating it
+  here removes the one genuinely error-prone manual step.
+
+  **Two real bugs the test harness caught, both dormant-until-invoked:**
+  1. **`Debouncer(hass, None, ...)` - lesson 10 repeating verbatim.**
+     Debouncer needs a real `logging.Logger` *and* a genuinely awaitable
+     `function`; a sync lambda type-checks fine, then fails only when
+     the timer actually fires - and the resulting "log the exception"
+     path itself dies on the `None` logger, burying the original error.
+     Same shape as the `DataUpdateCoordinator(__name__)` bug. Worth
+     re-reading lesson 10 before passing anything to an HA helper
+     constructor.
+  2. **A lingering timer after every run.** `Debouncer` schedules a
+     further cooldown timer *after* each execution, so it outlives a
+     reload unless explicitly shut down. Replaced with a single tracked
+     `async_call_later` handle cancelled on unload - less machinery, and
+     nothing pending once it has fired. `pytest-homeassistant-custom-component`
+     fails the test on a lingering timer, which is the only reason
+     either of these surfaced.
+
+  Verified against HA source before building, not recalled:
+  `ir.async_create_issue`'s required args, that `repairs.py` +
+  `async_create_fix_flow` is the (registration-free) mechanism, that
+  `ConfirmRepairFlow`/`RepairsFlow` come from
+  `homeassistant.components.repairs`, and that
+  `LabelRegistry.async_get_label(label_id)` exists alongside
+  `async_get_label_by_name`. Note `demo`'s manifest does *not* list
+  `repairs` in `dependencies`; this integration does, for explicitness.
+
+  Tests: 18 pure (`tests/test_two_step.py`) + 8 end-to-end
+  (`tests/integration/test_two_step_repair.py`, real entity/device/
+  label/issue registries) - including that a device-level label counts
+  the same as an entity-level one, that a Hue bulb isn't swept up by
+  pressing Fix, that a disabled entity is never flagged, and that the
+  issue *self-clears* after the fix via the registry-change watcher
+  rather than a manual re-check. Full suite: 116/116.
+
 **Deployment / operational notes:**
 - pyscript is fully gone, both from this repo and the live host.
 - The dev git-sync automation (polling this repo for new commits and

@@ -58,6 +58,7 @@ from .coordinator import CURVE_KEYS, ScheduleCoordinator, schedule_instances
 from .curve import phase_at, targets_for_phase
 from .grouping import EntityLookup, Group, build_groups
 from .scenes import SceneLookup, compute_scene_coverage
+from .two_step_check import async_start_watching
 from .write_tracking import LastWriteTracker
 
 SCHEDULE_PLATFORMS = [Platform.SENSOR, Platform.SELECT, Platform.NUMBER, Platform.TIME, Platform.SWITCH]
@@ -294,6 +295,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     write_tracker = LastWriteTracker(hass)
     await write_tracker.async_load()
     entry.async_on_unload(write_tracker.async_start_listening(hass))
+
+    # Raises a fixable repair when a bulb that's known to need two-step
+    # transitions isn't carrying the label that routes it there - the
+    # one part of this integration's behaviour that depends on registry
+    # data a user has to maintain by hand, and which fails silently when
+    # they forget (see two_step.py).
+    entry.async_on_unload(async_start_watching(hass, entry))
 
     async def compute_lighting_groups(call: ServiceCall) -> ServiceResponse:
         """adaptive_lighting_helpers.compute_lighting_groups
