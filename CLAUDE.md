@@ -1524,6 +1524,35 @@ designs were explored:
   Then with all 25 at once, which is the current live state - all
   detected, sorted, truncated at 8 with "and 17 more".
 
+- **Brightness multipliers are now clamped at 255, not just floored at
+  1 (2026-08-17).** User's ask was ergonomic - *"it should clamp the top
+  end at 255 so templates don't have to do complicated maths to figure
+  out the correct brightness"* - but checking what actually happened
+  first turned it into a real bug fix.
+
+  `light.turn_on` validates brightness with
+  `VALID_BRIGHTNESS = vol.All(vol.Coerce(int), vol.Clamp(min=0, max=255))`
+  - confirmed by grepping the pinned HA in `.venv-integration`, not
+  recalled. **`vol.Clamp`, not `vol.Range`**: HA silently writes the
+  clamped value rather than rejecting the call. So a multiplier of 1.5
+  against a curve at 200 computed a target of 300, HA wrote 255, and
+  then `_already_set` compared the light's reported 255 against the
+  un-clamped 300 target, never found it within the 2-point tolerance,
+  and re-commanded that light **on every single tick, indefinitely** -
+  the same silent churn shape as the kitchen strip's 257 state changes
+  in 14 hours. Clamping in `grouping.py` keeps our notion of "at target"
+  reachable by a real bulb.
+
+  `MAX_BRIGHTNESS = 255` is a named constant in `grouping.py` with the
+  reasoning attached, since the number alone doesn't explain why the cap
+  is load-bearing rather than cosmetic. Two tests, both
+  mutation-verified (removing the cap fails exactly
+  `test_multiplier_caps_at_max_brightness` and
+  `test_a_light_already_at_max_is_not_recommanded_when_the_multiplier_overshoots`).
+  Docs updated in `docs/BLUEPRINT.md`'s multiplier table and both copies
+  of the `brightness_multipliers` description in `services.yaml`. Full
+  suite: 121/121.
+
 **Deployment / operational notes:**
 - pyscript is fully gone, both from this repo and the live host.
 - The dev git-sync automation (polling this repo for new commits and
