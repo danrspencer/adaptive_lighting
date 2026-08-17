@@ -15,7 +15,7 @@ from two_step import (
     describe,
     find_unlabelled_two_step_lights,
     model_matches,
-    parse_extra_patterns,
+    parse_patterns,
 )
 
 
@@ -57,17 +57,17 @@ class TestModelMatching:
 
 class TestParseExtraPatterns:
     def test_splits_on_newlines_and_strips(self):
-        assert parse_extra_patterns(" *foo*\n\n  *bar* \n") == ["*foo*", "*bar*"]
+        assert parse_patterns(" *foo*\n\n  *bar* \n") == ["*foo*", "*bar*"]
 
     def test_also_accepts_commas(self):
-        assert parse_extra_patterns("*foo*, *bar*") == ["*foo*", "*bar*"]
+        assert parse_patterns("*foo*, *bar*") == ["*foo*", "*bar*"]
 
     def test_blank_and_none_yield_nothing(self):
         """A misconfigured options field should fall back to the shipped
         defaults, never raise during setup."""
-        assert parse_extra_patterns("") == []
-        assert parse_extra_patterns(None) == []
-        assert parse_extra_patterns("\n  \n") == []
+        assert parse_patterns("") == []
+        assert parse_patterns(None) == []
+        assert parse_patterns("\n  \n") == []
 
 
 class TestFindUnlabelled:
@@ -86,14 +86,21 @@ class TestFindUnlabelled:
         found = find_unlabelled_two_step_lights(lights, DEFAULT_TWO_STEP_MODEL_PATTERNS, lambda c: False)
         assert found == []
 
-    def test_an_extra_pattern_widens_detection(self):
-        """The per-install half of the list - a bulb the shipped
-        defaults don't know about yet."""
+    def test_a_configured_pattern_detects_a_bulb_the_defaults_do_not_know(self):
         lights = [_light("light.odd", manufacturer="Acme", model="Weird Bulb 9000")]
         assert find_unlabelled_two_step_lights(lights, DEFAULT_TWO_STEP_MODEL_PATTERNS, lambda c: False) == []
 
-        patterns = [*DEFAULT_TWO_STEP_MODEL_PATTERNS, *parse_extra_patterns("*weird bulb*")]
-        found = find_unlabelled_two_step_lights(lights, patterns, lambda c: False)
+        found = find_unlabelled_two_step_lights(lights, parse_patterns("*weird bulb*"), lambda c: False)
+        assert [c.entity_id for c in found] == ["light.odd"]
+
+    def test_a_configured_list_replaces_the_defaults_rather_than_adding_to_them(self):
+        """The point of pre-populating the options field: what's in the
+        box is the whole list, so a shipped pattern the user deleted is
+        really gone rather than silently re-added underneath."""
+        tradfri = _light("light.spot_1")
+        odd = _light("light.odd", manufacturer="Acme", model="Weird Bulb 9000")
+
+        found = find_unlabelled_two_step_lights([tradfri, odd], parse_patterns("*weird bulb*"), lambda c: False)
         assert [c.entity_id for c in found] == ["light.odd"]
 
     def test_results_are_sorted_so_the_repair_text_is_stable(self):

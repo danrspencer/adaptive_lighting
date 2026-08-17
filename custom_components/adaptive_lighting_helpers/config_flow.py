@@ -48,7 +48,7 @@ from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers import selector
 from homeassistant.util import slugify
 
-from .const import CONF_EXTRA_TWO_STEP_MODELS, DOMAIN, SUBENTRY_TYPE_SENSOR
+from .const import CONF_TWO_STEP_MODELS, DOMAIN, SUBENTRY_TYPE_SENSOR
 from .two_step import DEFAULT_TWO_STEP_MODEL_PATTERNS
 
 SUBENTRY_FIELDS = {vol.Required("name"): selector.TextSelector()}
@@ -78,31 +78,40 @@ class AdaptiveLightingHelpersConfigFlow(config_entries.ConfigFlow, domain=DOMAIN
 
 
 class AdaptiveLightingHelpersOptionsFlow(config_entries.OptionsFlow):
-    """The only install-wide setting: extra two-step bulb model patterns.
+    """The only install-wide setting: which bulb models need two-step
+    transitions.
 
     Kept on the main entry rather than per sensor because it describes
     hardware, not a schedule - which bulbs in this house can't take a
     combined brightness+colour command. Nothing here affects the curve
-    or any room's behaviour; it only widens what the missing-label
-    repair looks for (see two_step.py)."""
+    or any room's behaviour; it only decides what the missing-label
+    repair looks for (see two_step.py).
+
+    The field is pre-populated with the shipped defaults rather than
+    being an "extras" box layered on top of a hidden list, so what's in
+    the box is exactly what runs: a pattern can be removed as easily as
+    added, with no invisible half to reason about."""
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         if user_input is not None:
             return self.async_create_entry(data=user_input)
 
+        # Shows the user's own list once saved, otherwise seeds the box
+        # with the shipped defaults so the first thing they see is the
+        # real, complete list rather than an empty field.
+        current = self.config_entry.options.get(CONF_TWO_STEP_MODELS)
         return self.async_show_form(
             step_id="init",
             data_schema=self.add_suggested_values_to_schema(
                 vol.Schema(
                     {
-                        vol.Optional(CONF_EXTRA_TWO_STEP_MODELS, default=""): selector.TextSelector(
+                        vol.Optional(CONF_TWO_STEP_MODELS, default=""): selector.TextSelector(
                             selector.TextSelectorConfig(multiline=True)
                         )
                     }
                 ),
-                {CONF_EXTRA_TWO_STEP_MODELS: self.config_entry.options.get(CONF_EXTRA_TWO_STEP_MODELS, "")},
+                {CONF_TWO_STEP_MODELS: current or "\n".join(DEFAULT_TWO_STEP_MODEL_PATTERNS)},
             ),
-            description_placeholders={"defaults": ", ".join(DEFAULT_TWO_STEP_MODEL_PATTERNS)},
         )
 
 

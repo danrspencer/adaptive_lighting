@@ -26,7 +26,7 @@ from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers import label_registry as lr
 from homeassistant.helpers.event import async_call_later
 
-from .const import CONF_EXTRA_TWO_STEP_MODELS, DOMAIN
+from .const import CONF_TWO_STEP_MODELS, DOMAIN
 from .two_step import (
     DEFAULT_TWO_STEP_MODEL_PATTERNS,
     TWO_STEP_LABEL_DESCRIPTION,
@@ -36,7 +36,7 @@ from .two_step import (
     CandidateLight,
     describe,
     find_unlabelled_two_step_lights,
-    parse_extra_patterns,
+    parse_patterns,
 )
 
 ISSUE_ID = "missing_two_step_label"
@@ -44,16 +44,21 @@ _DEBOUNCE_SECONDS = 5.0
 
 
 def configured_patterns(entry: ConfigEntry) -> list[str]:
-    """Shipped defaults plus whatever this install added on top.
+    """Whatever the options field holds, or the shipped defaults if untouched.
 
-    Additive by design - the options field can only ever widen the set,
-    never disable a shipped pattern. A user who disagrees with a default
-    can ignore the repair itself (Home Assistant persists that), which
-    is a clearer escape hatch than a subtractive config field nobody
-    would think to look at.
+    Not additive: the field is pre-populated with the shipped list (see
+    config_flow.py), so a saved value already contains everything the
+    user wants and replacing wholesale is what makes the box honest -
+    remove a pattern from it and it really is gone, rather than being
+    silently re-added from a hidden layer underneath.
+
+    An empty field falls back to the defaults rather than disabling the
+    check, so clearing the box by accident can't quietly switch off
+    detection - to stop being told about it, ignore the repair, which
+    Home Assistant persists.
     """
-    extra = parse_extra_patterns(entry.options.get(CONF_EXTRA_TWO_STEP_MODELS))
-    return [*DEFAULT_TWO_STEP_MODEL_PATTERNS, *extra]
+    configured = parse_patterns(entry.options.get(CONF_TWO_STEP_MODELS))
+    return configured or list(DEFAULT_TWO_STEP_MODEL_PATTERNS)
 
 
 def collect_candidates(hass: HomeAssistant) -> list[CandidateLight]:

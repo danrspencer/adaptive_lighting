@@ -50,9 +50,9 @@
     "step": {
       "init": {
         "title": "Adaptive Lighting Helpers options",
-        "description": "Extra bulb models that need two-step transitions, one pattern per line. These are added to the ones already shipped with the integration ({defaults}) - you don't need to repeat those.\n\nPatterns are matched case-insensitively against \"manufacturer model\", and * is a wildcard, e.g. *TRADFRI bulb* or IKEA*. Used only to spot bulbs missing the two-step label; leave blank unless a repair missed one.",
+        "description": "Bulb models that need two-step transitions, one pattern per line. This is the complete list the check uses — the box starts pre-filled with the models shipped with the integration, and you can add to it or remove from it freely.\n\nPatterns are matched case-insensitively against “manufacturer model”, and * is a wildcard, e.g. *TRADFRI bulb* or IKEA*. Clearing the box entirely falls back to the shipped defaults; to stop being told about unlabelled bulbs, ignore the repair instead.\n\nOnce you save your own list it stays as you left it — a later release adding a newly discovered bulb won't change it.",
         "data": {
-          "extra_two_step_models": "Additional two-step bulb models"
+          "two_step_models": "Two-step bulb models"
         }
       }
     }
