@@ -214,14 +214,40 @@ trigger_variables:
   room_target: !input room_target
 
 trigger:
-  # The live brightness/colour-temperature sensor; fires roughly once a
-  # minute. With no to:/from:/attribute: filter, a state trigger fires on
-  # attribute-only changes too - which is the usual case here, since the
-  # sensor's state (the phase name) only changes four times a day while
-  # its brightness/color_temp attributes tick every minute.
+  # The live brightness/colour-temperature sensor. With no
+  # to:/from:/attribute: filter, a state trigger fires on attribute-only
+  # changes too - which is the usual case here, since the sensor's state
+  # (the phase name) only changes four times a day while its
+  # brightness/color_temp attributes tick every minute.
   - platform: state
     entity_id: !input adaptive_sensor
     id: adaptive
+  # ...but only while those attributes are actually *changing*. Morning
+  # and Night are flat stretches of the curve (constant brightness and
+  # Kelvin for the whole phase), so the sensor re-reports identical
+  # values and Home Assistant raises `state_reported` rather than
+  # `state_changed` - which a `platform: state` trigger does not see.
+  # The effect is that the `adaptive` trigger above goes completely
+  # silent for the whole of Morning and Night, in every room.
+  #
+  # Diagnosed live: the sensor's own last_updated sat unmoved for ~56
+  # minutes while last_reported kept advancing every minute, and no
+  # room had a single `adaptive`-triggered run in its trace history
+  # across that window. The visible symptom was lights that came back
+  # from unavailable during Morning and then just sat at whatever
+  # brightness they powered on at, because nothing was left to correct
+  # them - the room had no occupancy sensor, and `recovered` was
+  # independently broken by an orphaned entity (see below).
+  #
+  # This is the unconditional floor: a tick that happens whether or not
+  # the curve is moving, so "the next tick will fix it" is always a
+  # true statement. Deliberately a separate id rather than reusing
+  # `adaptive` - scene_recheck_due reads trigger.from_state/to_state,
+  # which a time_pattern trigger has no equivalent of, and attribute
+  # access on an undefined name raises and aborts the whole run.
+  - id: adaptive_tick
+    platform: time_pattern
+    minutes: /1
   # Anything named in Additional Triggers changed - e.g. a TV for a
   # brightness multiplier, or whatever the scene template depends on
   - id: extra
@@ -287,16 +313,28 @@ trigger:
         meant `trigger is defined` was always false and this trigger
         could never fire at all - caught live when Living Room/Study
         never resynced after being power-cycled, despite the automation
-        traces showing no `recovered`-triggered run at all. Fixed by
-        testing an aggregate condition instead - "none of our lights are
-        currently unavailable/unknown" - which edge-triggers (false to
-        true) exactly when the last outstanding light recovers. This
-        also correctly catches the common case of a single flaky bulb
-        among several reliable ones: the aggregate is only ever false
-        while *that* bulb is down (the others were never unavailable to
-        begin with), so it fires the moment that one bulb - and only
-        that one - clears, without needing per-entity information this
-        template structurally can't have.
+        traces showing no `recovered`-triggered run at all. So it has to
+        be an aggregate over the room, with no per-entity information.
+
+        The aggregate is "at least one of our lights is reachable",
+        which arms while the whole room is dark and fires as the first
+        bulb comes back. It used to be the inverse - "none of our lights
+        are unavailable" - and that had a fatal flaw in any real house:
+        a single orphaned entity that is *permanently* unavailable (a
+        deleted Zigbee group whose entity was never cleaned up, say)
+        holds the aggregate false forever, so the trigger can never fire
+        again in that room. Found live in the Ensuite, where
+        light.ensuite_spots - a group that no longer exists - had
+        silently disabled recovery for the whole room.
+
+        Known and accepted blind spot of this shape: one flaky bulb
+        dropping and recovering while its siblings stay up doesn't move
+        the aggregate at all, so nothing fires. That case is left to the
+        periodic adaptive tick (see the `adaptive_tick` trigger below,
+        which exists precisely so there is always a tick to fall back
+        on, even when the curve is flat and the sensor stops changing).
+        Trading a rare miss that something else mops up for an entire
+        room going permanently dead is the right way round.
       #}
       {% set ns = namespace(entities=[]) %}
       {% if room_target is not none %}
@@ -318,9 +356,9 @@ trigger:
         {% endif %}
       {% endif %}
       {% set light_entity_ids = ns.entities | unique | list %}
-      {{ light_entity_ids | length > 0
-         and light_entity_ids | select('is_state', 'unavailable') | list | length == 0
-         and light_entity_ids | select('is_state', 'unknown') | list | length == 0 }}
+      {{ light_entity_ids
+         | reject('is_state', 'unavailable') | reject('is_state', 'unknown')
+         | list | length > 0 }}
 
 condition:
   # Occupancy has exactly two jobs in this blueprint, and neither of
@@ -364,7 +402,7 @@ variables:
        none of these are a person waiting on a response in real time,
        so there's no reason to snap. Snappier for actual motion or a
        manual run instead. #}
-    {% if trigger is defined and trigger.id is defined and trigger.id in ['adaptive', 'extra', 'recovered'] %}
+    {% if trigger is defined and trigger.id is defined and trigger.id in ['adaptive', 'adaptive_tick', 'extra', 'recovered'] %}
       {{ adaptive_transition }}
     {% else %}
       {{ motion_on_transition }}
@@ -610,11 +648,21 @@ variables:
   # adaptive-id tick whose phase didn't change. Every other trigger
   # (extra, motion_on, manual, recovered) is comparatively rare and
   # meaningful already, so always re-checks.
+  # The periodic floor tick is excluded outright: it carries no phase
+  # information to compare (no from_state/to_state at all - reading
+  # those on a time_pattern trigger would raise and abort the run), and
+  # treating every minute as "recheck due" is exactly the re-activate-
+  # the-scene-every-minute behaviour this variable exists to prevent.
+  # Same answer as a same-phase `adaptive` tick, for the same reason.
   scene_recheck_due: >
-    {{ not (trigger is defined and trigger.id is defined and trigger.id == 'adaptive')
-       or trigger.from_state is none
-       or trigger.to_state is none
-       or trigger.from_state.state != trigger.to_state.state }}
+    {% if trigger is defined and trigger.id is defined and trigger.id == 'adaptive_tick' %}
+      false
+    {% else %}
+      {{ not (trigger is defined and trigger.id is defined and trigger.id == 'adaptive')
+         or trigger.from_state is none
+         or trigger.to_state is none
+         or trigger.from_state.state != trigger.to_state.state }}
+    {% endif %}
   # Lights the adaptive brightness/colour logic below should manage -
   # everything except what the active scene already covers, further
   # narrowed to already-on lights only when allow_turn_on is false (see

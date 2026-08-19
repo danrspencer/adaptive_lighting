@@ -132,6 +132,48 @@ class TestAdaptiveScheduleAndTransitions:
         calls = apply_lighting_calls
         assert calls and calls[-1].data["entities"] == ["light.a"]
 
+    async def test_a_flat_curve_still_gets_a_tick_from_the_time_pattern(self, hass, apply_lighting_calls):
+        """Morning and Night are flat stretches of the curve, so the
+        sensor re-reports identical state *and* attributes and Home
+        Assistant raises state_reported rather than state_changed -
+        which a platform: state trigger never sees. Found live: the
+        sensor's last_updated sat unmoved for ~56 minutes while
+        last_reported kept advancing, and no room logged a single
+        adaptive-triggered run in that window. The time_pattern floor is
+        what guarantees a tick regardless."""
+        _light(hass, "light.a", "on", brightness=190, color_temp_kelvin=4000)
+        hass.states.async_set("sensor.test_adaptive", "Morning", {"brightness": 255, "color_temp": 6667})
+        await hass.async_block_till_done()
+        await _setup_room_automation(hass, room_target={"entity_id": "light.a"})
+        apply_lighting_calls.clear()
+
+        # Deliberately no sensor write at all - the flat-curve case is
+        # precisely "nothing changes", so anything that fires here can
+        # only have come from the periodic trigger.
+        async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=2))
+        await hass.async_block_till_done()
+
+        assert apply_lighting_calls, "a flat curve must still produce a tick"
+        assert apply_lighting_calls[-1].data["entities"] == ["light.a"]
+
+    async def test_the_periodic_tick_does_not_reactivate_a_scene(self, hass, apply_lighting_calls, scene_turn_on_calls):
+        """The floor tick carries no phase information to compare, so
+        treating it as "recheck due" would re-fire scene.turn_on every
+        single minute - exactly what scene_recheck_due exists to stop."""
+        _light(hass, "light.a", "on", brightness=190, color_temp_kelvin=4000)
+        hass.states.async_set("scene.test_evening", "unknown", {"entity_id": ["light.a"]})
+        hass.states.async_set("sensor.test_adaptive", "Evening", {"brightness": 180, "color_temp": 3000})
+        await hass.async_block_till_done()
+        await _setup_room_automation(
+            hass, room_target={"entity_id": "light.a"}, evening_scene="scene.test_evening"
+        )
+        scene_turn_on_calls.clear()
+
+        async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=2))
+        await hass.async_block_till_done()
+
+        assert scene_turn_on_calls == []
+
     async def test_adaptive_tick_uses_the_adaptive_transition_duration(self, hass, apply_lighting_calls):
         _light(hass, "light.a", "on")
         await hass.async_block_till_done()
@@ -448,18 +490,62 @@ class TestRecoveredTrigger:
         """No more dedicated scoped call (see class docstring) - a
         recovered light is just part of the same single apply_lighting
         call every other trigger already makes, alongside whatever else
-        in the room happens to be on."""
+        in the room happens to be on.
+
+        Whole room goes dark and comes back, which is what the aggregate
+        actually arms on."""
         _light(hass, "light.recovering", "unavailable")
-        _light(hass, "light.sibling", "on", brightness=90, color_temp_kelvin=4000)
+        _light(hass, "light.sibling", "unavailable")
         await hass.async_block_till_done()
         await _setup_room_automation(hass, room_target={"entity_id": ["light.recovering", "light.sibling"]})
 
         _light(hass, "light.recovering", "on", brightness=255)
+        _light(hass, "light.sibling", "on", brightness=90, color_temp_kelvin=4000)
         await hass.async_block_till_done()
 
-        assert len(apply_lighting_calls) == 1
-        assert set(apply_lighting_calls[0].data["entities"]) == {"light.recovering", "light.sibling"}
-        assert apply_lighting_calls[0].data["force"] is False
+        assert apply_lighting_calls
+        assert set(apply_lighting_calls[-1].data["entities"]) == {"light.recovering", "light.sibling"}
+        assert apply_lighting_calls[-1].data["force"] is False
+
+    async def test_an_orphaned_permanently_unavailable_entity_does_not_veto_recovery(
+        self, hass, apply_lighting_calls
+    ):
+        """Found live in the Ensuite. light.ensuite_spots was a Zigbee
+        group that no longer existed, so its entity sat unavailable
+        forever - and under the old "none of our lights are
+        unavailable" aggregate that held the trigger false permanently,
+        silently disabling recovery for the entire room. The aggregate
+        now asks whether *anything* is reachable, so a dead entity is
+        just one more member of the dark set rather than a veto."""
+        _light(hass, "light.orphan", "unavailable")  # never comes back
+        _light(hass, "light.real", "unavailable")
+        await hass.async_block_till_done()
+        await _setup_room_automation(hass, room_target={"entity_id": ["light.orphan", "light.real"]})
+
+        _light(hass, "light.real", "on", brightness=255)
+        await hass.async_block_till_done()
+
+        assert apply_lighting_calls, "orphaned entity must not block the room from ever recovering"
+        assert "light.real" in apply_lighting_calls[-1].data["entities"]
+
+    async def test_one_bulb_recovering_beside_available_siblings_does_not_fire(
+        self, hass, apply_lighting_calls
+    ):
+        """The accepted blind spot of the aggregate shape: a single bulb
+        dropping and returning while its siblings stay up never moves
+        "is anything reachable", so `recovered` doesn't fire. Left to the
+        periodic adaptive_tick to mop up - which is exactly why that
+        trigger exists. Asserted so the trade-off is visible rather than
+        discovered."""
+        _light(hass, "light.flaky", "unavailable")
+        _light(hass, "light.steady", "on", brightness=90, color_temp_kelvin=4000)
+        await hass.async_block_till_done()
+        await _setup_room_automation(hass, room_target={"entity_id": ["light.flaky", "light.steady"]})
+
+        _light(hass, "light.flaky", "on", brightness=255)
+        await hass.async_block_till_done()
+
+        assert apply_lighting_calls == []
 
 
 class TestSceneHandoff:

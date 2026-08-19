@@ -11,7 +11,7 @@ anything about how that service is implemented.
 ## Brightness & colour temperature schedule
 
 Tracks a target brightness and Kelvin value that follows the [Morning/Day/Evening/Night schedule](../README.md#why-four-phases-not-a-continuous-curve),
-applied roughly once a minute to whichever of the room's lights are already on, so they drift with the schedule
+applied once a minute to whichever of the room's lights are already on, so they drift with the schedule
 instead of jumping - regardless of whether the room currently reads as occupied (see
 [Occupancy-driven on/off](#occupancy-driven-onoff) - occupancy decides whether to turn lights on or off, never
 whether an already-on light keeps tracking the curve). `apply_lighting` itself isn't limited to this integration's
@@ -21,6 +21,12 @@ Adaptive Lighting Sensor input's own picker, though, is filtered to just this in
 have to hunt through every sensor in the house to find the right one) - a hand-written "bring your own" sensor
 won't show up in that dropdown. It still works if you point at it via the automation's **Edit in YAML** view
 instead of the picker.
+
+That once-a-minute cadence comes from two triggers, not one. The sensor's own changes drive it while the curve is
+moving, but Morning and Night are *flat* — constant brightness and Kelvin for the whole phase — so the sensor
+re-reports identical values and Home Assistant raises `state_reported` rather than `state_changed`, which a state
+trigger never sees. A plain time pattern therefore runs alongside it as an unconditional floor, so "the next tick
+will correct it" is true at every hour of the day rather than only while the curve happens to be sloping.
 
 The [dashboard curve card](../README.md#previewing-the-dashboard-card) also plots today's actual sunrise/sunset
 (from `sun.sun`) against the schedule, so it's easy to see at a glance how far the configured boundaries and
@@ -114,10 +120,19 @@ ordinary means. No forced write, no scoped call, nothing blueprint-specific at a
 in the same room, under its own real override, was never at risk either way, since only the entity that actually
 went unavailable ever has its record cleared.
 
-The blueprint's only remaining role here is promptness: a dedicated `recovered` trigger fires the moment one of
-its lights recovers from `unavailable`/`unknown` (a Zigbee mesh drop, or someone physically cutting and restoring
-power to the room), causing an ordinary tick to run right away rather than waiting for the room's next unrelated
-trigger. That tick treats the recovered light exactly like any other light on any other trigger - subject to
+The blueprint's only remaining role here is promptness: a dedicated `recovered` trigger fires when the room comes
+back from being entirely unreachable (a Zigbee mesh drop, or someone physically cutting and restoring power to
+the room), causing an ordinary tick to run right away rather than waiting for the room's next unrelated trigger.
+
+Precisely, it arms while *every* light in the room is `unavailable`/`unknown` and fires as the first one returns.
+It deliberately does **not** ask "is nothing unavailable", which sounds equivalent but isn't: a single orphaned
+entity that is permanently unavailable — a deleted Zigbee group whose entity was never cleaned up, for instance —
+would hold that condition false forever and silently disable recovery for the entire room. Asking whether
+*anything* is reachable makes a dead entity just one more member of the dark set rather than a permanent veto.
+
+The trade-off is that one flaky bulb dropping and returning while its siblings stay up doesn't move the aggregate,
+so `recovered` won't fire for it. That case is left to the periodic tick described in
+[Brightness & colour temperature schedule](#brightness--colour-temperature-schedule), which runs regardless. That tick treats the recovered light exactly like any other light on any other trigger - subject to
 [the "when a light is allowed to turn on" rule](#when-a-light-is-allowed-to-turn-on) above like everything else:
 a light that reconnects already on gets brought to the adaptive target, one that reconnects *off*, in a room with
 nothing else currently on, is left off rather than switched on.
