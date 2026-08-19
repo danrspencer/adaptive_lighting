@@ -1553,6 +1553,78 @@ designs were explored:
   of the `brightness_multipliers` description in `services.yaml`. Full
   suite: 121/121.
 
+- **Two independent faults found from one user report, 2026-08-19:
+  ensuite lights came on and never updated until a manual run.** Both
+  found by diagnosis-before-fix at the user's explicit instruction
+  ("Diagnose rather than fix right now"), and both are general rather
+  than ensuite-specific.
+
+  **Fault 1 - the `adaptive` trigger goes silent whenever the curve is
+  flat, in every room.** Morning and Night are constant stretches
+  (verified against the sensor's own `points`: Morning is
+  `brightness [255] kelvin [6667]` across all 24 samples, Night is
+  `[50]/[2700]`), so the coordinator re-writes identical state *and*
+  identical attributes every minute. Home Assistant treats that as a
+  `state_reported`, not a `state_changed`, and `platform: state` only
+  sees the latter. Proven live without reading any source: the sensor's
+  `last_updated` sat unmoved at 06:00:41 while `last_reported` advanced
+  to 06:56:41, and *no* room had a single `adaptive`-triggered run in
+  its trace history over that window - Jacob's pendant, on the same
+  sensor, showed only reconciles too. Earlier the same day it had been
+  ticking every minute, because that was during Day when the Kelvin
+  ramp genuinely changes.
+
+  Fixed with a `time_pattern` floor tick (`minutes: /1`) under its own
+  id, `adaptive_tick`. Deliberately **not** reusing the `adaptive` id:
+  `scene_recheck_due` reads `trigger.from_state`/`to_state`, which a
+  time_pattern trigger has no equivalent of, and attribute access on an
+  undefined name raises and aborts the whole run (the silent-failure
+  table in the best-practices skill's `automation-patterns.md#variables`).
+  `scene_recheck_due` returns false for `adaptive_tick` outright - it
+  carries no phase to compare, and treating every minute as "recheck
+  due" is precisely the re-activate-the-scene-every-minute behaviour
+  that variable exists to prevent. `script_transition` gained the new id
+  alongside adaptive/extra/recovered.
+
+  **Fault 2 - the `recovered` trigger's aggregate was the wrong way
+  round, and one orphaned entity disabled it permanently.** It asked
+  "none of our lights are unavailable", which a single entity that is
+  *always* unavailable holds false forever. The Ensuite had exactly
+  that: `light.ensuite_spots`, a Zigbee group that no longer exists,
+  still in the area and permanently unavailable - so recovery had been
+  silently dead for that whole room. **User's own correction, and the
+  right one**: *"this trigger is WRONG - the trigger should be ALL of
+  the lights in this room were unavailable, but now at least one
+  isn't."* Now `{{ ids | reject(unavailable) | reject(unknown) | length > 0 }}`,
+  which arms while the room is entirely dark and fires as the first bulb
+  returns, making a dead entity just one more member of the dark set.
+
+  **Accepted blind spot, asserted in a test rather than left to be
+  discovered**: one flaky bulb recovering beside available siblings no
+  longer moves the aggregate, so `recovered` doesn't fire for it. That
+  is only tolerable *because* of fault 1's fix - the periodic floor tick
+  is what mops it up. The two changes are complementary, not
+  independent; shipping the trigger change without the tick would have
+  traded one gap for another.
+
+  Neither fault alone explains the report - the ensuite has no occupancy
+  sensor, so with `adaptive` silent (flat Morning curve) and `recovered`
+  vetoed (orphan), and `reconcile` only ever turning lights *off* and
+  gated on occupancy entities existing, there was genuinely no path left
+  that could update those lights. 17 minutes elapsed between the lights
+  coming on (06:29:58) and the manual run (06:47:07).
+
+  Four tests added, all mutation-verified: reverting the aggregate fails
+  exactly `test_an_orphaned_permanently_unavailable_entity_does_not_veto_recovery`
+  and `test_one_bulb_recovering_beside_available_siblings_does_not_fire`;
+  removing the floor tick fails exactly
+  `test_a_flat_curve_still_gets_a_tick_from_the_time_pattern`; letting
+  the floor tick recheck scenes fails exactly
+  `test_the_periodic_tick_does_not_reactivate_a_scene`.
+  `test_recovery_joins_the_ordinary_room_wide_tick_not_a_separate_call`
+  was rewritten to black out the whole room, since that is what the new
+  aggregate actually arms on. Full suite: 125/125.
+
 **Deployment / operational notes:**
 - pyscript is fully gone, both from this repo and the live host.
 - The dev git-sync automation (polling this repo for new commits and
