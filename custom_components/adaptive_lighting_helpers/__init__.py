@@ -163,8 +163,10 @@ def _build_lookup(hass: HomeAssistant, tracker: LastWriteTracker) -> EntityLooku
         device_id=device_id,
         labels=labels,
         context_id=context_id,
-        last_write_context_id=tracker.last_context_id,
-        last_write_owner_id=tracker.last_owner_id,
+        confirmed_context_id=tracker.confirmed_context_id,
+        confirmed_owner_id=tracker.confirmed_owner_id,
+        pending_context_id=tracker.pending_context_id,
+        pending_owner_id=tracker.pending_owner_id,
     )
 
 
@@ -384,12 +386,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         owner_id = call.data.get("owner_id")
         force = call.data["force"]
         brightness, color_temp_kelvin, rgb_color = _read_sensor_targets(hass, call.data["sensor_entity_id"])
+        lookup = _build_lookup(hass, write_tracker)
         groups = build_groups(
             entities=call.data["entities"],
             brightness_multipliers=call.data["brightness_multipliers"],
             sensor_brightness=brightness,
             sensor_color_temp_kelvin=color_temp_kelvin,
-            lookup=_build_lookup(hass, write_tracker),
+            lookup=lookup,
             brightness_tolerance=call.data["brightness_tolerance"],
             color_temp_tolerance=call.data["color_temp_tolerance"],
             two_step_label=call.data["two_step_label"],
@@ -476,10 +479,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     )
                 )
 
+        # Snapshotted *before* any of the writes above are dispatched -
+        # nothing async has run yet since build_groups() returned (the
+        # gather below is the first await point), so this is a true
+        # walking-in value. write_tracker needs it to tell whether the
+        # *previous* pending write actually landed, which can only be
+        # judged against state as it was before this call's own writes -
+        # reading it after would risk comparing a light's context against
+        # the very write about to be recorded, if it happened to land
+        # synchronously. See write_tracking.py's async_record docstring.
+        live_context_before_write = {e: lookup.context_id(e) for e in written_entities}
+
         if tasks:
             await asyncio.gather(*tasks)
         if written_entities:
-            await write_tracker.async_record(written_entities, call.context.id, owner_id)
+            await write_tracker.async_record(written_entities, live_context_before_write, call.context.id, owner_id)
 
         return _groups_response(groups)
 

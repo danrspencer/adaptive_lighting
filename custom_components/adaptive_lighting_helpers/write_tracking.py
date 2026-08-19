@@ -54,6 +54,52 @@ incident where a light dimmed by hand hours after a restart was
 silently overwritten on the very next tick, because its record had
 been cleared during that restart and nothing had needed a real
 rewrite to it since.
+
+Each entity's record holds not one write but two - `confirmed` and
+`pending`:
+
+- `confirmed` is a write some *earlier* call actually observed landing
+  (a later tick found the entity's live context.id matching it).
+- `pending` is the most recent write attempted, not yet verified either
+  way.
+
+apply_lighting records the context it *issued*, not the context the
+device actually adopted - the two calls are asynchronous, and nothing
+here waits to confirm the physical bulb applied the command before
+recording it. A single-record design (what this used to be) treats
+that recorded-but-never-adopted context as gospel: the next tick
+compares the light's real, unchanged context against it, finds a
+mismatch, and concludes the light was touched externally - permanently,
+since nothing that ever happens next can make the live context
+retroactively equal a value the device never adopted. Confirmed live:
+a kitchen light dropped a colour-mode switch command at the Evening
+boundary and sat stuck on Day's stale colour temperature for over an
+hour, silently excluded from every tick in between.
+
+The fix doesn't need to know *why* a write failed, only to notice when
+one did and try again: on each call, if the live context matches
+`pending`, the previous attempt is now known-good and gets promoted
+(`confirmed <- pending`) before the new attempt overwrites `pending`.
+If live context instead still matches the *old* `confirmed` - meaning
+`pending` never landed - `confirmed` is left exactly as it was and only
+`pending` is replaced. Either way the light is still recognised as ours
+and retried on the very next tick, rather than locked out. `confirmed`
+is never evicted except by an observed match, so it survives any number
+of consecutive dropped writes - the record needs exactly two slots, not
+a growing history, to be self-healing (see async_record's own
+docstring for the promotion logic in full, and grouping.py's
+externally_set() for how the two slots are actually checked).
+
+A light's very first-ever write (no prior record at all) has no
+earlier `confirmed` claim to fall back on if it drops. Rather than
+either staying lenient (which would leave a real external change in
+that same narrow window unprotected) or going strict (which would
+resurrect permanent lockout for exactly this case), the context.id
+live *before* that first write is itself recorded as `confirmed` -
+not because it's ours, but because "the light hasn't changed" is
+already the retry signal every later dropped write relies on, and a
+dropped first write leaves the light's context at exactly that
+pre-write value. See async_record's docstring for the full reasoning.
 """
 
 from __future__ import annotations
@@ -67,17 +113,21 @@ STORAGE_VERSION = 1
 STORAGE_KEY = "adaptive_lighting_helpers.last_write_context_ids"
 
 
-class _WriteRecord(TypedDict):
+class _ContextClaim(TypedDict):
     context_id: str
     owner_id: Optional[str]
 
 
+class _WriteRecord(TypedDict):
+    confirmed: Optional[_ContextClaim]
+    pending: Optional[_ContextClaim]
+
+
 class LastWriteTracker:
-    """entity_id -> {context_id, owner_id} of the last light.turn_on/
-    turn_off this integration issued for it, across every apply_lighting
-    call regardless of which automation made it - one record per entity,
-    not a history, since only the most recent write ever matters to
-    grouping.py's override check."""
+    """entity_id -> {confirmed, pending} claims for the last two writes
+    this integration issued for it, across every apply_lighting call
+    regardless of which automation made it - see the module docstring
+    for why exactly two, not one and not a growing history."""
 
     def __init__(self, hass: HomeAssistant) -> None:
         self._store: Store[dict[str, _WriteRecord]] = Store(hass, STORAGE_VERSION, STORAGE_KEY)
@@ -85,32 +135,120 @@ class LastWriteTracker:
 
     async def async_load(self) -> None:
         raw = await self._store.async_load() or {}
-        # Defensively drop anything not shaped like a _WriteRecord - covers
-        # the pre-owner_id storage format (a bare context.id string per
-        # entity), which would otherwise crash last_context_id()/
-        # last_owner_id() below. Treating those entities as having no
-        # record at all is exactly the safe fallback already in place for
-        # a brand new entity or a fresh restart - no real migration needed
-        # for what's disposable cache data to begin with.
-        self._data = {k: v for k, v in raw.items() if isinstance(v, dict) and "context_id" in v}
+        data: dict[str, _WriteRecord] = {}
+        for entity_id, value in raw.items():
+            if not isinstance(value, dict):
+                continue
+            if "confirmed" in value and "pending" in value:
+                data[entity_id] = value  # already this shape
+            elif "context_id" in value:
+                # The single-record format this integration shipped with
+                # before confirmed/pending existed - one {context_id,
+                # owner_id} per entity. Treated as an already-established
+                # confirmed baseline with nothing pending, not dropped
+                # outright - an upgrade shouldn't itself reopen "no
+                # record -> free" for every currently-protected light in
+                # the house, the same class of incident the restart-blip
+                # fix above exists to prevent.
+                data[entity_id] = {
+                    "confirmed": {"context_id": value["context_id"], "owner_id": value.get("owner_id")},
+                    "pending": None,
+                }
+            # Anything else (the even older bare-string format, or
+            # malformed data) is dropped - same safe "no record -> free"
+            # fallback this integration has always used for data it
+            # doesn't recognise.
+        self._data = data
 
-    def last_context_id(self, entity_id: str) -> str | None:
+    def confirmed_context_id(self, entity_id: str) -> str | None:
         record = self._data.get(entity_id)
-        return record["context_id"] if record else None
+        claim = record.get("confirmed") if record else None
+        return claim["context_id"] if claim else None
 
-    def last_owner_id(self, entity_id: str) -> str | None:
+    def confirmed_owner_id(self, entity_id: str) -> str | None:
         record = self._data.get(entity_id)
-        return record.get("owner_id") if record else None
+        claim = record.get("confirmed") if record else None
+        return claim.get("owner_id") if claim else None
 
-    async def async_record(self, entity_ids: list[str], context_id: str, owner_id: str | None = None) -> None:
+    def pending_context_id(self, entity_id: str) -> str | None:
+        record = self._data.get(entity_id)
+        claim = record.get("pending") if record else None
+        return claim["context_id"] if claim else None
+
+    def pending_owner_id(self, entity_id: str) -> str | None:
+        record = self._data.get(entity_id)
+        claim = record.get("pending") if record else None
+        return claim.get("owner_id") if claim else None
+
+    async def async_record(
+        self,
+        entity_ids: list[str],
+        live_context_before_write: dict[str, str | None],
+        context_id: str,
+        owner_id: str | None = None,
+    ) -> None:
         """Called once per apply_lighting invocation with every entity it
         actually issued a light.turn_on/turn_off for - not entities it
         merely considered (already-at-target, unreachable, or currently
-        externally-set are never passed here)."""
+        externally-set are never passed here).
+
+        live_context_before_write is each entity's context.id as read
+        *before* any of this call's writes were dispatched - the caller
+        (apply_lighting) snapshots it straight after build_groups()
+        returns, since nothing async happens between that point and
+        actually issuing the writes below it, so it's a true "walking in"
+        value. It cannot be read fresh in here instead: by the time this
+        function runs, this call's own writes have already been awaited,
+        so the light's live context may already reflect the very write
+        about to be recorded as `pending` - comparing against that would
+        make every write look like it promoted itself instantly, whether
+        or not the device actually adopted anything.
+
+        For each entity, this is the one and only place promotion
+        happens: if the *previous* pending claim's context.id matches
+        what was live just before this new write went out, that previous
+        attempt is now proven to have landed, and gets promoted into
+        `confirmed` - overwriting whatever `confirmed` held before
+        it, since it's necessarily newer. Otherwise `confirmed` is left
+        completely untouched, and only `pending` is replaced. This is
+        what keeps `confirmed` valid across any number of consecutive
+        dropped writes - it is only ever replaced by an *observed*
+        match, never by assumption, so a light can be retried
+        indefinitely without the fallback that's still known-good ever
+        being discarded on a guess.
+
+        The one exception is the entity's very first-ever write (no
+        prior record at all): there is no previous `confirmed` to fall
+        back on, so the context.id that was live *before* this write -
+        almost certainly not ours - is recorded as `confirmed` instead,
+        with owner_id=None. This isn't claiming that write as ours; it's
+        using "the light hasn't changed" as the retry signal it already
+        is for every later write. If this first write drops, the light's
+        context stays exactly that pre-write value (nothing else can
+        produce the same context.id without actually touching the
+        entity), so the next call sees a `confirmed` match and retries
+        cleanly instead of reading "no record -> free" and losing track
+        of the attempt. owner_id=None means this synthetic baseline
+        never itself blocks a different owner_id's claim - see
+        grouping.py's externally_set()."""
         if not entity_ids:
             return
         for entity_id in entity_ids:
-            self._data[entity_id] = {"context_id": context_id, "owner_id": owner_id}
+            old = self._data.get(entity_id)
+            confirmed: Optional[_ContextClaim]
+            if old is not None:
+                old_pending = old.get("pending")
+                if old_pending is not None and old_pending["context_id"] == live_context_before_write.get(entity_id):
+                    confirmed = old_pending
+                else:
+                    confirmed = old.get("confirmed")
+            else:
+                baseline_context = live_context_before_write.get(entity_id)
+                confirmed = {"context_id": baseline_context, "owner_id": None} if baseline_context is not None else None
+            self._data[entity_id] = {
+                "confirmed": confirmed,
+                "pending": {"context_id": context_id, "owner_id": owner_id},
+            }
         await self._store.async_save(self._data)
 
     def async_start_listening(self, hass: HomeAssistant) -> CALLBACK_TYPE:

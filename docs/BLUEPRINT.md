@@ -91,11 +91,13 @@ others are already lit. This looks at the whole room's state, not just the indiv
 A light changed by anything other than this integration's own last write — a wall switch, an app, a voice
 assistant, or another automation entirely (including one with no identifiable "user" of its own, such as one
 triggered directly by a physical button) — is left alone rather than being overwritten on the next adaptive tick.
-Detected by comparing the light's current `context.id` against the `context.id` [Adaptive Lighting
-Helpers](HELPERS.md) itself last wrote that light with: if they still match, nothing has touched it since our own
-last update and it's updated normally; if they don't, something else has, and it's left alone. A light with no
-recorded write at all yet (brand new, or right after this integration's own restart) is treated the same way —
-free to manage — rather than getting stuck unmanaged until it happens to change some other way.
+Detected by comparing the light's current `context.id` against the `context.id`(s) [Adaptive Lighting
+Helpers](HELPERS.md) itself last wrote that light with: if either still matches, nothing has touched it since our
+own last update and it's updated normally; if neither does, something else has, and it's left alone. A light with
+no recorded write at all yet (brand new, or right after this integration's own restart) is treated the same way —
+free to manage — rather than getting stuck unmanaged until it happens to change some other way. [Adaptive Lighting
+Helpers](HELPERS.md#override-protection) covers the full mechanism, including how a single write that silently
+fails to land self-heals on the next tick instead of locking the light out permanently.
 
 The blueprint identifies itself to this check via `apply_lighting`'s `owner_id` parameter, set to its own
 `this.entity_id` — so a room's automation only ever recognises its *own* previous writes as "not overridden";

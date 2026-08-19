@@ -202,16 +202,29 @@ def test_a_light_already_at_max_is_not_recommanded_when_the_multiplier_overshoot
 
 
 # Overrides: a light currently on whose live context.id doesn't match
-# the context.id this integration itself last wrote it with under the
-# *same owner_id* (per write_tracking.LastWriteTracker) is left exactly
-# alone, even if it doesn't match the current adaptive target -
-# regardless of *what* changed it (a person, another automation with no
-# context.user_id of its own, a device regaining power, or a different
-# owner_id entirely) - checked fresh against live state on every call,
-# so nothing needs to be remembered here or explicitly expired.
-# build_groups' own owner_id defaults to None, which skips this check
-# altogether (every light is free to manage) - the explicit force path,
-# tested separately below.
+# either of the two claims this integration itself last wrote it with
+# under the *same owner_id* (per write_tracking.LastWriteTracker) is
+# left exactly alone, even if it doesn't match the current adaptive
+# target - regardless of *what* changed it (a person, another
+# automation with no context.user_id of its own, a device regaining
+# power, or a different owner_id entirely) - checked fresh against live
+# state on every call, so nothing needs to be remembered here or
+# explicitly expired. build_groups' own owner_id defaults to None,
+# which skips this check altogether (every light is free to manage) -
+# the explicit force path, tested separately below.
+#
+# The tests below through test_turning_the_light_off_ends_the_protection
+# all use only `confirmed_*` - the steady-state case where there's no
+# outstanding, unverified write in flight, which is the vast majority of
+# ticks. The *promotion* behaviour itself - how a `pending` claim earns
+# its way into `confirmed`, and how `confirmed` survives any number of
+# consecutive dropped writes along the way - is a property of
+# write_tracking.LastWriteTracker.async_record, not of this pure check,
+# so it's exercised end-to-end against a real Store in
+# tests/integration/test_services.py instead. What belongs here is
+# narrower: given a specific {confirmed, pending} snapshot, does the
+# check land on the right answer - see the "Confirmed vs pending" tests
+# right after this section for that.
 
 
 def test_externally_set_light_is_not_recommanded_even_when_mismatched():
@@ -223,8 +236,8 @@ def test_externally_set_light_is_not_recommanded_even_when_mismatched():
                 "context_id": "ctx-someone-else",
             }
         },
-        last_write_context_ids={"light.a": "ctx-ours"},
-        last_write_owner_ids={"light.a": "ours"},
+        confirmed_context_ids={"light.a": "ctx-ours"},
+        confirmed_owner_ids={"light.a": "ours"},
     )
     groups = build_groups(
         entities=["light.a"],
@@ -244,8 +257,8 @@ def test_externally_set_light_is_protected_from_being_turned_off_too():
     # forced off
     lookup = make_lookup(
         states={"light.a": {"state": "on", "attributes": {}, "context_id": "ctx-someone-else"}},
-        last_write_context_ids={"light.a": "ctx-ours"},
-        last_write_owner_ids={"light.a": "ours"},
+        confirmed_context_ids={"light.a": "ctx-ours"},
+        confirmed_owner_ids={"light.a": "ours"},
     )
     groups = build_groups(
         entities=["light.a"],
@@ -298,8 +311,8 @@ def test_our_own_last_write_is_not_treated_as_externally_set():
                 "context_id": "ctx-ours",
             }
         },
-        last_write_context_ids={"light.a": "ctx-ours"},
-        last_write_owner_ids={"light.a": "ours"},
+        confirmed_context_ids={"light.a": "ctx-ours"},
+        confirmed_owner_ids={"light.a": "ours"},
     )
     groups = build_groups(
         entities=["light.a"],
@@ -325,8 +338,8 @@ def test_different_owner_id_is_treated_as_externally_set_even_with_matching_cont
                 "context_id": "ctx-shared",
             }
         },
-        last_write_context_ids={"light.a": "ctx-shared"},
-        last_write_owner_ids={"light.a": "other_automation"},
+        confirmed_context_ids={"light.a": "ctx-shared"},
+        confirmed_owner_ids={"light.a": "other_automation"},
     )
     groups = build_groups(
         entities=["light.a"],
@@ -352,8 +365,8 @@ def test_no_owner_id_forces_past_the_check():
                 "context_id": "ctx-someone-else",
             }
         },
-        last_write_context_ids={"light.a": "ctx-ours"},
-        last_write_owner_ids={"light.a": "ours"},
+        confirmed_context_ids={"light.a": "ctx-ours"},
+        confirmed_owner_ids={"light.a": "ours"},
     )
     groups = build_groups(
         entities=["light.a"],
@@ -376,8 +389,8 @@ def test_force_true_bypasses_the_check_even_with_a_matching_owner_id_given():
                 "context_id": "ctx-someone-else",
             }
         },
-        last_write_context_ids={"light.a": "ctx-ours"},
-        last_write_owner_ids={"light.a": "someone_else"},
+        confirmed_context_ids={"light.a": "ctx-ours"},
+        confirmed_owner_ids={"light.a": "someone_else"},
     )
     groups = build_groups(
         entities=["light.a"],
@@ -407,8 +420,8 @@ def test_a_write_recorded_with_no_owner_id_does_not_block_a_later_owner_id_check
                 "context_id": "ctx-forced",
             }
         },
-        last_write_context_ids={"light.a": "ctx-forced"},
-        # No last_write_owner_ids entry for light.a - the earlier write
+        confirmed_context_ids={"light.a": "ctx-forced"},
+        # No confirmed_owner_ids entry for light.a - the earlier write
         # that produced ctx-forced was made with no owner_id at all.
     )
     groups = build_groups(
@@ -435,8 +448,8 @@ def test_force_write_is_recognised_by_a_later_non_forced_call_with_the_same_owne
                 "context_id": "ctx-forced-write",
             }
         },
-        last_write_context_ids={"light.a": "ctx-forced-write"},
-        last_write_owner_ids={"light.a": "ours"},
+        confirmed_context_ids={"light.a": "ctx-forced-write"},
+        confirmed_owner_ids={"light.a": "ours"},
     )
     groups = build_groups(
         entities=["light.a"],
@@ -457,8 +470,8 @@ def test_force_write_is_recognised_by_a_later_non_forced_call_with_the_same_owne
                 "context_id": "ctx-forced-write",
             }
         },
-        last_write_context_ids={"light.a": "ctx-forced-write"},
-        last_write_owner_ids={"light.a": "ours"},
+        confirmed_context_ids={"light.a": "ctx-forced-write"},
+        confirmed_owner_ids={"light.a": "ours"},
     )
     groups_mismatched = build_groups(
         entities=["light.a"],
@@ -477,8 +490,179 @@ def test_turning_the_light_off_ends_the_protection():
     # decision
     lookup = make_lookup(
         states={"light.a": {"state": "off", "attributes": {}, "context_id": "ctx-someone-else"}},
-        last_write_context_ids={"light.a": "ctx-ours"},
-        last_write_owner_ids={"light.a": "ours"},
+        confirmed_context_ids={"light.a": "ctx-ours"},
+        confirmed_owner_ids={"light.a": "ours"},
+    )
+    groups = build_groups(
+        entities=["light.a"],
+        brightness_multipliers={},
+        sensor_brightness=200,
+        sensor_color_temp_kelvin=3000,
+        lookup=lookup,
+        owner_id="ours",
+    )
+    assert groups[0].combined == ["light.a"]
+
+
+# Confirmed vs pending: which of the two claims the live context.id
+# matches, and what that implies, given a specific {confirmed, pending}
+# snapshot. The *dynamic* promotion behaviour (how a snapshot like this
+# actually comes to exist over a sequence of real writes) is exercised
+# separately in tests/integration/test_services.py against a real Store.
+
+
+def test_matching_pending_is_recognised_as_ours_even_with_a_different_confirmed():
+    # The most recent write landed (context matches pending) - ours,
+    # regardless of what confirmed still says from before it.
+    lookup = make_lookup(
+        states={
+            "light.a": {
+                "state": "on",
+                "attributes": {"brightness": 40, "color_temp_kelvin": 6000},
+                "context_id": "ctx-pending",
+            }
+        },
+        confirmed_context_ids={"light.a": "ctx-confirmed"},
+        confirmed_owner_ids={"light.a": "ours"},
+        pending_context_ids={"light.a": "ctx-pending"},
+        pending_owner_ids={"light.a": "ours"},
+    )
+    groups = build_groups(
+        entities=["light.a"],
+        brightness_multipliers={},
+        sensor_brightness=200,
+        sensor_color_temp_kelvin=3000,
+        lookup=lookup,
+        owner_id="ours",
+    )
+    assert groups[0].combined == ["light.a"]
+
+
+def test_matching_confirmed_survives_any_number_of_stale_pending_attempts():
+    # Live context is still the OLD confirmed value - pending never
+    # landed (could be one dropped attempt or a dozen; the check itself
+    # can't tell the difference, and doesn't need to). Still ours.
+    lookup = make_lookup(
+        states={
+            "light.a": {
+                "state": "on",
+                "attributes": {"brightness": 40, "color_temp_kelvin": 6000},
+                "context_id": "ctx-confirmed",
+            }
+        },
+        confirmed_context_ids={"light.a": "ctx-confirmed"},
+        confirmed_owner_ids={"light.a": "ours"},
+        pending_context_ids={"light.a": "ctx-pending-attempt-47"},
+        pending_owner_ids={"light.a": "ours"},
+    )
+    groups = build_groups(
+        entities=["light.a"],
+        brightness_multipliers={},
+        sensor_brightness=200,
+        sensor_color_temp_kelvin=3000,
+        lookup=lookup,
+        owner_id="ours",
+    )
+    assert groups[0].combined == ["light.a"]
+
+
+def test_matching_neither_confirmed_nor_pending_is_externally_set():
+    # A confirmed baseline exists, but live context matches neither it
+    # nor the outstanding pending attempt - something genuinely
+    # different has touched this light.
+    lookup = make_lookup(
+        states={
+            "light.a": {
+                "state": "on",
+                "attributes": {"brightness": 40, "color_temp_kelvin": 6000},
+                "context_id": "ctx-someone-else",
+            }
+        },
+        confirmed_context_ids={"light.a": "ctx-confirmed"},
+        confirmed_owner_ids={"light.a": "ours"},
+        pending_context_ids={"light.a": "ctx-pending"},
+        pending_owner_ids={"light.a": "ours"},
+    )
+    groups = build_groups(
+        entities=["light.a"],
+        brightness_multipliers={},
+        sensor_brightness=200,
+        sensor_color_temp_kelvin=3000,
+        lookup=lookup,
+        owner_id="ours",
+    )
+    assert groups[0].combined == []
+
+
+def test_an_unconfirmed_first_attempt_that_does_not_match_is_not_yet_external():
+    # No confirmed claim has ever been established for this light - only
+    # a single pending attempt, which doesn't match live state either
+    # (it may have landed after we last checked, or may never land at
+    # all; there's no way to tell yet). Deliberately lenient rather than
+    # locking this light out over one write of unknown fate - the one
+    # gap the two-claim design doesn't close, documented on
+    # externally_set() and write_tracking.py's module docstring.
+    lookup = make_lookup(
+        states={
+            "light.a": {
+                "state": "on",
+                "attributes": {"brightness": 40, "color_temp_kelvin": 6000},
+                "context_id": "ctx-whatever-this-light-had-before",
+            }
+        },
+        pending_context_ids={"light.a": "ctx-first-attempt"},
+        pending_owner_ids={"light.a": "ours"},
+    )
+    groups = build_groups(
+        entities=["light.a"],
+        brightness_multipliers={},
+        sensor_brightness=200,
+        sensor_color_temp_kelvin=3000,
+        lookup=lookup,
+        owner_id="ours",
+    )
+    assert groups[0].combined == ["light.a"]
+
+
+def test_a_different_owners_pending_write_is_still_externally_set():
+    # The owner check applies on a pending match exactly as it does on a
+    # confirmed one - a different caller's in-flight write is still not
+    # mine, even though nothing about the light's context is stale.
+    lookup = make_lookup(
+        states={
+            "light.a": {
+                "state": "on",
+                "attributes": {"brightness": 40, "color_temp_kelvin": 6000},
+                "context_id": "ctx-pending",
+            }
+        },
+        pending_context_ids={"light.a": "ctx-pending"},
+        pending_owner_ids={"light.a": "other_automation"},
+    )
+    groups = build_groups(
+        entities=["light.a"],
+        brightness_multipliers={},
+        sensor_brightness=200,
+        sensor_color_temp_kelvin=3000,
+        lookup=lookup,
+        owner_id="ours",
+    )
+    assert groups[0].combined == []
+
+
+def test_a_pending_write_with_no_owner_id_does_not_block_a_later_owner_id_check():
+    # Mirrors test_a_write_recorded_with_no_owner_id_does_not_block_a_later_owner_id_check
+    # above, but for a match on pending rather than confirmed.
+    lookup = make_lookup(
+        states={
+            "light.a": {
+                "state": "on",
+                "attributes": {"brightness": 40, "color_temp_kelvin": 6000},
+                "context_id": "ctx-pending",
+            }
+        },
+        pending_context_ids={"light.a": "ctx-pending"},
+        # No pending_owner_ids entry - that attempt was made with no owner_id at all.
     )
     groups = build_groups(
         entities=["light.a"],
@@ -666,8 +850,8 @@ def test_rgb_external_override_and_reachability_still_apply():
             },
             "light.unreachable": {"state": "unavailable", "attributes": {"supported_color_modes": ["rgb"]}},
         },
-        last_write_context_ids={"light.overridden": "ctx-ours"},
-        last_write_owner_ids={"light.overridden": "ours"},
+        confirmed_context_ids={"light.overridden": "ctx-ours"},
+        confirmed_owner_ids={"light.overridden": "ours"},
     )
     groups = build_groups(
         entities=["light.overridden", "light.unreachable"],

@@ -1625,6 +1625,127 @@ designs were explored:
   was rewritten to black out the whole room, since that is what the new
   aggregate actually arms on. Full suite: 125/125.
 
+- **Override protection redesigned a second time, from a single write
+  record to two named claims (`confirmed`/`pending`) - 2026-08-19,
+  prompted by a real live incident and a genuinely collaborative design
+  process, not a self-driven refactor.** User report: "the living room
+  lights are definately whiter than usual at the moment." Diagnosed via
+  `compute_lighting_groups` with and without `force` against the real
+  instance: the living room pendants were permanently excluded from
+  every tick, and forcing brought them to the correct target - override
+  protection was stuck locked on, not a curve/sensor bug.
+
+  Root cause, confirmed by rereading `write_tracking.py`'s own design:
+  `apply_lighting` records the `context.id` it *issued* right after
+  dispatching a write, without ever confirming the physical bulb
+  adopted it - the two are asynchronous. A single dropped write (the
+  device silently ignoring or failing a command) leaves the recorded
+  context permanently mismatched against the light's real, unchanged
+  one. Nothing that happens afterward can retroactively make them equal
+  again, so the single-record design (in place since `owner_id`
+  shipped) had a real, previously-undiscussed failure mode: **any one
+  dropped write locks a light out forever**, not just a genuine
+  external change.
+
+  **User explicitly rejected the first fix proposed** (extending the
+  existing clear-on-unavailable `state_changed` listener to also do
+  write-confirmation) as over-engineered, verbatim: *"stop, wait wait
+  wait - I think you've over complicated things here, this is easy...
+  I'm not totally convinced we even need any sort of additional
+  internal state tracking... Don't make any changes yet I want to
+  understand this problem thoroughly."* What followed was a genuine,
+  multi-round design conversation, not a single correction:
+  - Verified against the actual pinned HA source in `.venv-integration`
+    (not recalled) in response to the user's own question about
+    `context.id`'s constraints: `Context.__init__`'s `self.id = id or
+    ulid_now()` accepts any string with zero validation, but the
+    recorder's `ulid_to_bytes_or_none()` requires exactly 26 characters
+    or silently stores `NULL` for that row - ruling out a "salted,
+    still-unique context.id" scheme without breaking logbook/recorder
+    attribution for the write it's used on.
+  - **User proposed the mechanism that shipped**, verbatim: *"we store
+    the last N writes from an apply_lighting, when we do another run we
+    check if the current context.id is in our list... I *think* this
+    means we only need to store 2 context ids but possibly we might
+    want to store more?"* Validated by tracing a naive FIFO-of-2 against
+    a concrete counterexample: two consecutive dropped writes evict the
+    still-valid earlier entry under an unconditional shift, silently
+    reopening the exact bug being fixed. The correct mechanism isn't a
+    FIFO at all - it's two **named** slots, `confirmed` (a write an
+    *earlier* call actually observed landing) and `pending` (the most
+    recent attempt, unverified), with promotion (`confirmed <-
+    pending`) happening only when a later call *observes* the live
+    context matching the old `pending` - never on a schedule, never by
+    assumption. This is provably bounded at exactly two stored values
+    regardless of how many consecutive writes fail, since `confirmed`
+    is only ever replaced by an observed match. User's go-ahead,
+    verbatim: *"nope, that sounds good, make it so!"*
+
+  **A second gap surfaced only after implementing and running the real
+  test suite, not from further design discussion up front.** Three
+  `tests/integration/test_services.py` tests failed -
+  `test_override_protection_survives_a_real_write_tracking_round_trip`,
+  `test_recovered_light_is_freed_while_an_unrelated_override_stays_protected`,
+  `test_a_restart_style_unavailable_blip_does_not_clear_an_existing_record`
+  - all for the identical reason: each does exactly one `apply_lighting`
+  call before checking protection, so `confirmed` never gets promoted
+  from `None`. Traced this to a real, structural ambiguity rather than
+  a test artifact: a light's **very first-ever write** (or first write
+  after a genuine unavailable-recovery, which clears the whole record)
+  has no `confirmed` baseline - if an external change lands before the
+  next confirming tick, there's no way to distinguish "our first write
+  silently dropped" from "someone changed it right after," using
+  context.id alone. Being lenient there (what shipped first) self-heals
+  a dropped first write but leaves that narrow window's *genuine*
+  external changes unprotected; being strict resurrects the exact
+  permanent-lockout bug this whole redesign exists to fix, just scoped
+  to first writes. Presented both trade-offs directly via
+  `AskUserQuestion` rather than picking one and rewriting the tests to
+  match, given how much rigor this project already puts specifically
+  into override-protection correctness.
+
+  **User's resolution, verbatim, and the one actually shipped**: *"if
+  it's the first right [sic - write] then we treat the last context.id as the
+  confirmed ID. yes it wasn't ours but the intent is the same. If our
+  first write fails then the context.id will stay as the 'confirmed'
+  one and subsequent writes know they can continue."* On an entity's
+  first-ever write (no prior record at all), `async_record` now records
+  the context.id that was live *before* that write - almost certainly
+  not this integration's own - as the `confirmed` baseline, with
+  `owner_id: null` (so it never itself blocks a different owner's
+  claim, matching the existing "a claim with no owner doesn't count
+  against anyone" precedent). This isn't claiming that pre-existing
+  state as this caller's write; it's reusing the same "the light hasn't
+  changed" retry signal every later dropped write already relies on -
+  if the first write drops, the light's context stays at exactly that
+  pre-write value, so the very next call recognises the match and
+  retries instead of reading "no record -> free" and losing the
+  attempt. All 3 originally-failing tests pass unmodified once this
+  landed - confirmed by retracing each by hand before rerunning, not
+  just observed after the fact.
+
+  **Mutation-verified**: reverting the first-write baseline back to
+  `confirmed = None` fails exactly those same 3 tests (129/132) and no
+  others - confirmed by actually applying the mutation and rerunning,
+  not assumed from the trace alone. A fourth, new test,
+  `test_a_dropped_first_write_self_heals_on_the_next_tick_with_no_interference`,
+  documents the complementary half of the story (a genuinely dropped
+  first write, no external interference, self-heals on retry) even
+  though it doesn't discriminate this specific mutation on its own -
+  the original lenient-when-`None` design also passed it, since a fully
+  lenient design was never wrong about the *self-healing* half, only
+  the *protection* half. Full suite: 132/132.
+
+  `docs/HELPERS.md`'s "Override protection" section was rewritten from
+  the old single-record 7-step description to the confirmed/pending
+  model, including the first-write baseline; `docs/BLUEPRINT.md`'s
+  "Override detection" section's opening paragraph was updated to match
+  and now links through to `HELPERS.md` for the full mechanism rather
+  than restating it. `write_tracking.py`'s own module docstring and
+  `async_record`'s docstring carry the full reasoning for both the
+  confirmed/pending promotion rule and the first-write baseline, not
+  just the two-line summary here.
+
 **Deployment / operational notes:**
 - pyscript is fully gone, both from this repo and the live host.
 - The dev git-sync automation (polling this repo for new commits and

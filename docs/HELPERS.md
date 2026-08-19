@@ -73,28 +73,52 @@ feed into that check:
   carry a stable identity distinguishing "the Living Room automation" from "the Kitchen automation" - two
   calls that otherwise look identical to Home Assistant.
 
-Both get recorded together against each entity `apply_lighting` actually writes: `{context_id, owner_id}`,
-overwritten on every write - there's no history kept, just "what was the last thing we wrote this light
-with." The check itself asks, in this order, for one specific light:
+Each entity keeps not one recorded write but two - `confirmed` (a write some *earlier* call actually observed
+landing) and `pending` (the most recent write attempted, not yet verified either way). This is what lets a
+single dropped write self-heal instead of permanently locking the light out: `apply_lighting` records the
+`context.id` it *issued*, not the one the physical bulb actually adopted - those two calls are asynchronous,
+so nothing here waits to confirm a command really landed before recording it. If it silently failed, a
+single-record design would compare the light's real, unchanged context against the one recorded, find a
+mismatch, and conclude - permanently - that the light was touched externally, since nothing that happens
+afterward can retroactively make the live context equal a value the device never adopted. (Confirmed live: a
+kitchen light dropped a colour-mode command at a phase boundary and sat stuck on the stale colour temperature
+for over an hour, excluded from every tick in between.)
+
+The fix doesn't need to know *why* a write failed, only to notice when one did and try again: on each call,
+if the light's live context matches `pending`, that previous attempt is now known to have landed and gets
+promoted (`confirmed <- pending`) before the new attempt overwrites `pending`. If live context instead still
+matches the *old* `confirmed`, that means `pending` never landed - `confirmed` is left exactly as it was and
+only `pending` is replaced. Either way the light is retried on the very next tick rather than locked out;
+`confirmed` is only ever replaced by an *observed* match, never by assumption, so it survives any number of
+consecutive dropped writes.
+
+A light's very first-ever write has no earlier `confirmed` to fall back on if it drops - so the context.id
+live *before* that first write (almost certainly not this integration's own) is recorded as the baseline
+instead, with no owner attached. That's not claiming the pre-existing state as this caller's write; it's
+using "the light hasn't changed" as the same retry signal every later dropped write relies on - if the first
+write drops, the light's context stays at exactly that pre-write value, and the next call recognises the
+match and retries cleanly rather than treating a brand-new attempt as having no history at all.
+
+The check itself asks, in this order, for one specific light:
 
 1. **Is the light currently off?** Free to manage - nothing to protect.
 2. **Was `force: true` passed?** Free to manage, unconditionally (the write is still recorded normally - see
    below).
 3. **Was `owner_id` omitted?** Free to manage, unconditionally (recorded with `owner_id: null`).
-4. **Is there any recorded write for this light at all?** If not - a brand new light, or nothing's ever
-   claimed it - free to manage.
-5. **Does the light's current `context.id` match what was recorded?** If not, something touched it since -
-   a person, a different automation, or a device reconnecting with a fresh context. Externally set; left
-   alone.
-6. **Context matches (nothing's touched it since) - but was that write made under a *different* `owner_id`
-   than the one asking now?** Externally set too, even though the light's own state hasn't changed. A
-   recorded `owner_id` of `null` doesn't count against anyone here - there was no claim to conflict with.
-7. **Otherwise** - same context, same owner: genuinely this caller's own last write, still standing. Managed
-   normally.
+4. **Is there no `confirmed` and no `pending` claim at all for this light?** A genuinely brand new entity,
+   never yet considered - free to manage.
+5. **Does the light's current `context.id` match `pending`?** Its owner claims it, unless that owner is a
+   *different* `owner_id` than the one asking now - in which case, externally set.
+6. **Otherwise, does it match `confirmed`?** Same check: that claim's owner decides it, a different
+   `owner_id` (including the synthetic first-write baseline's, which claims nobody) means the write is free
+   to proceed.
+7. **Neither matches, and a `confirmed` claim exists.** Something has touched this light since either
+   recorded write - externally set; left alone.
 
-Step 6 is the one that's easy to miss: two different callers writing the *same* light with *different*
-`owner_id`s never look "externally set" to *each other* by context alone, since each one's own write is
-always the most recent context from its own point of view - only comparing `owner_id` catches it.
+Steps 5 and 6 are both really the same question ("does a recorded owner conflict with the one asking now?"),
+just checked against two different claims instead of one - two different callers writing the *same* light
+with *different* `owner_id`s never look "externally set" to *each other* by context alone, since each one's
+own write is always the most recent context from its own point of view; only comparing `owner_id` catches it.
 Concretely: Kitchen's automation force-writes a light Living Room normally owns (`owner_id:
 "automation.kitchen_lights"`, `force: true`), and nothing else touches the light afterward. Living Room's
 next regular tick sees a perfectly valid, matching `context.id` - nothing's changed since Kitchen's write -

@@ -12,24 +12,32 @@ def make_lookup(
     states: dict,
     device_of: Optional[dict] = None,
     labels_of: Optional[dict] = None,
-    last_write_context_ids: Optional[dict] = None,
-    last_write_owner_ids: Optional[dict] = None,
+    confirmed_context_ids: Optional[dict] = None,
+    confirmed_owner_ids: Optional[dict] = None,
+    pending_context_ids: Optional[dict] = None,
+    pending_owner_ids: Optional[dict] = None,
 ) -> EntityLookup:
     """
     states:    {entity_id: {"state": "on"/"off"/"unavailable"/..., "attributes": {...}, "context_id": "..."}}
                "context_id" is optional and defaults to None.
     device_of: {entity_id: device_id}
     labels_of: {entity_id_or_device_id: [label, ...]}
-    last_write_context_ids: {entity_id: context_id} - what write_tracking.LastWriteTracker
-               would report as the context.id this integration itself last wrote that
-               entity with. Absent/empty means "no record" for every entity.
-    last_write_owner_ids: {entity_id: owner_id} - the owner_id that write was made
-               under, if any. Absent/empty means no owner_id was recorded (None).
+    confirmed_context_ids / confirmed_owner_ids: {entity_id: value} - what
+               write_tracking.LastWriteTracker would report as the
+               "confirmed" claim for that entity - a write some earlier
+               call actually observed landing. Absent means no confirmed
+               write yet for that entity.
+    pending_context_ids / pending_owner_ids: {entity_id: value} - the
+               "pending" claim - the most recent write attempted, not yet
+               verified either way. Absent means no attempt is currently
+               outstanding.
     """
     device_of = device_of or {}
     labels_of = labels_of or {}
-    last_write_context_ids = last_write_context_ids or {}
-    last_write_owner_ids = last_write_owner_ids or {}
+    confirmed_context_ids = confirmed_context_ids or {}
+    confirmed_owner_ids = confirmed_owner_ids or {}
+    pending_context_ids = pending_context_ids or {}
+    pending_owner_ids = pending_owner_ids or {}
 
     def is_state(entity_id, value):
         return states.get(entity_id, {}).get("state") == value
@@ -46,11 +54,17 @@ def make_lookup(
     def context_id(entity_id):
         return states.get(entity_id, {}).get("context_id")
 
-    def last_write_context_id(entity_id):
-        return last_write_context_ids.get(entity_id)
+    def confirmed_context_id(entity_id):
+        return confirmed_context_ids.get(entity_id)
 
-    def last_write_owner_id(entity_id):
-        return last_write_owner_ids.get(entity_id)
+    def confirmed_owner_id(entity_id):
+        return confirmed_owner_ids.get(entity_id)
+
+    def pending_context_id(entity_id):
+        return pending_context_ids.get(entity_id)
+
+    def pending_owner_id(entity_id):
+        return pending_owner_ids.get(entity_id)
 
     return EntityLookup(
         is_state=is_state,
@@ -58,8 +72,10 @@ def make_lookup(
         device_id=device_id,
         labels=labels,
         context_id=context_id,
-        last_write_context_id=last_write_context_id,
-        last_write_owner_id=last_write_owner_id,
+        confirmed_context_id=confirmed_context_id,
+        confirmed_owner_id=confirmed_owner_id,
+        pending_context_id=pending_context_id,
+        pending_owner_id=pending_owner_id,
     )
 
 
