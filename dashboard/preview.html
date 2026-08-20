@@ -43,6 +43,7 @@
 
     <script type="module">
       import '../custom_components/adaptive_lighting_helpers/www/adaptive-lighting-curve-card.js';
+      import '../custom_components/adaptive_lighting_helpers/www/adaptive-lighting-write-tracking-card.js';
 
       // Minimal <ha-card> stand-in - the real one is part of HA's
       // frontend, not something this repo ships or should depend on.
@@ -117,6 +118,96 @@
       spacer.style.height = '24px';
       document.getElementById('card-container').appendChild(spacer);
       document.getElementById('card-container').appendChild(noTitleCard);
+
+      // --- Write tracking card: synthetic data covering every status,
+      // plus a mocked callWS so the "Trace" button has something to
+      // resolve against without a real HA logbook.
+      const now = new Date();
+      const minutesAgo = (m) => new Date(now.getTime() - m * 60000).toISOString();
+
+      const writeTrackingStates = {
+        'sensor.adaptive_lighting_write_tracking': state(4, {
+          entities: {
+            'light.living_room_pendant_1': {
+              status: 'confirmed',
+              live_context_id: '01M0FGWR11K8K1KDE56JJRJ94C',
+              confirmed: {
+                context_id: '01M0FGWR11K8K1KDE56JJRJ94C',
+                owner_id: 'automation.living_room_lights_new',
+                recorded_at: minutesAgo(12),
+              },
+              pending: null,
+            },
+            'light.kitchen_pendant_1': {
+              status: 'pending',
+              live_context_id: '01M0FTMHAJTQH94ZKP6DRSN2MK',
+              confirmed: {
+                context_id: '01M0FTHVWMJ0DRSNB5RT92ZXVC',
+                owner_id: 'automation.kitchen_lights',
+                recorded_at: minutesAgo(6),
+              },
+              pending: {
+                context_id: '01M0FTMHAJTQH94ZKP6DRSN2MK',
+                owner_id: 'automation.kitchen_lights',
+                recorded_at: minutesAgo(1),
+              },
+            },
+            'light.study_pendant': {
+              status: 'mismatched',
+              live_context_id: '01M0EXTERNALCHANGE0000001',
+              confirmed: {
+                context_id: '01M0F1953BZB75V27GJNXH3ABW',
+                owner_id: 'automation.study_lights',
+                recorded_at: minutesAgo(90),
+              },
+              pending: null,
+            },
+            'light.ensuite_spots': {
+              status: 'unavailable',
+              live_context_id: null,
+              confirmed: {
+                context_id: '01M00S8AVPV6BDQEJ22A04R3NM',
+                owner_id: 'automation.ensuite_lights',
+                recorded_at: minutesAgo(240),
+              },
+              pending: null,
+            },
+          },
+        }),
+      };
+
+      const writeTrackingCard = document.createElement('adaptive-lighting-write-tracking-card');
+      writeTrackingCard.setConfig({});
+      writeTrackingCard.hass = {
+        states: writeTrackingStates,
+        // Mocked logbook resolution - the real one is a WebSocket round
+        // trip to HA core (see logbook/get_events in the card's own
+        // header comment); this just returns a plausible-looking entry
+        // after a short delay so the loading state is also visible.
+        callWS: (msg) =>
+          new Promise((resolve) => {
+            setTimeout(() => {
+              if (msg.type !== 'logbook/get_events') {
+                resolve([]);
+                return;
+              }
+              resolve([
+                {
+                  name: 'Kitchen Pendant 1',
+                  message: 'turned on',
+                  entity_id: 'light.kitchen_pendant_1',
+                  domain: 'light',
+                  when: Date.now() / 1000,
+                  context_id: msg.context_id,
+                },
+              ]);
+            }, 400);
+          }),
+      };
+      const wtSpacer = document.createElement('div');
+      wtSpacer.style.height = '24px';
+      document.getElementById('card-container').appendChild(wtSpacer);
+      document.getElementById('card-container').appendChild(writeTrackingCard);
     </script>
   </body>
 </html>

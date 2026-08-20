@@ -129,6 +129,38 @@ async def test_status_unavailable_when_the_entity_has_no_live_state(
     assert record["live_context_id"] is None
 
 
+async def test_pending_claim_carries_a_recorded_at_timestamp(
+    hass: HomeAssistant, write_tracker: LastWriteTracker, sensor_entity: _WriteTrackingSensor
+):
+    """recorded_at is what lets a dashboard card narrow a logbook lookup
+    to resolve a context.id into what actually happened, rather than
+    guessing a search window - see write_tracking.py's _ContextClaim."""
+    _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
+    await write_tracker.async_record(["light.a"], {"light.a": None}, "ctx-1", "automation.room")
+
+    record = sensor_entity.extra_state_attributes["entities"]["light.a"]
+    assert record["pending"]["recorded_at"] is not None
+    # A real, parseable ISO 8601 timestamp - not just any truthy value.
+    from homeassistant.util import dt as dt_util
+
+    assert dt_util.parse_datetime(record["pending"]["recorded_at"]) is not None
+
+
+async def test_synthetic_first_write_baseline_has_no_recorded_at(
+    hass: HomeAssistant, write_tracker: LastWriteTracker, sensor_entity: _WriteTrackingSensor
+):
+    """The synthetic confirmed baseline (see async_record's docstring)
+    is a context we merely observed, not one we know the start time of -
+    recorded_at stays None rather than claiming false precision."""
+    _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
+    pre_write_context = hass.states.get("light.a").context.id
+    await write_tracker.async_record(["light.a"], {"light.a": pre_write_context}, "ctx-1", "automation.room")
+
+    record = sensor_entity.extra_state_attributes["entities"]["light.a"]
+    assert record["confirmed"] is not None
+    assert record["confirmed"]["recorded_at"] is None
+
+
 async def test_updates_push_via_dispatcher_signal_without_waiting_for_a_poll(
     hass: HomeAssistant, write_tracker: LastWriteTracker, sensor_entity: _WriteTrackingSensor
 ):

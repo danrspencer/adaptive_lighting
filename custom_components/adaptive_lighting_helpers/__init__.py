@@ -280,22 +280,28 @@ async def _two_step_turn_on(
 
 CARD_URL_BASE = "/adaptive_lighting_helpers_static"
 CARD_JS_PATH = "adaptive-lighting-curve-card.js"
+WRITE_TRACKING_CARD_JS_PATH = "adaptive-lighting-write-tracking-card.js"
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Serve www/adaptive-lighting-curve-card.js and auto-load it on
+    """Serve www/adaptive-lighting-curve-card.js and
+    www/adaptive-lighting-write-tracking-card.js and auto-load both on
     every frontend page - runs once for the whole domain, regardless of
-    how many config entries/subentries exist, so the card ships and
-    updates with the integration itself (via HACS) rather than needing
+    how many config entries/subentries exist, so the cards ship and
+    update with the integration itself (via HACS) rather than needing
     a separate manual Lovelace resource registration step that can
-    silently drift out of sync with it (see CLAUDE.md for the live
-    incident this replaced). cache_headers=False deliberately - the
-    file has no versioned URL, so aggressive caching here would just
-    trade a stale-deployed-file bug for a stale-browser-cache one."""
+    silently drift out of sync with them (see CLAUDE.md for the live
+    incident this replaced). One static path already serves the whole
+    www/ directory, so a second card needs only a second
+    add_extra_js_url call, not a second StaticPathConfig.
+    cache_headers=False deliberately - neither file has a versioned URL,
+    so aggressive caching here would just trade a stale-deployed-file
+    bug for a stale-browser-cache one."""
     await hass.http.async_register_static_paths(
         [StaticPathConfig(CARD_URL_BASE, str(Path(__file__).parent / "www"), cache_headers=False)]
     )
     add_extra_js_url(hass, f"{CARD_URL_BASE}/{CARD_JS_PATH}")
+    add_extra_js_url(hass, f"{CARD_URL_BASE}/{WRITE_TRACKING_CARD_JS_PATH}")
     return True
 
 

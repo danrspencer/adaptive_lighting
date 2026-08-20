@@ -109,6 +109,7 @@ from typing import Optional, TypedDict
 from homeassistant.core import CALLBACK_TYPE, Event, EventStateChangedData, HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.storage import Store
+from homeassistant.util import dt as dt_util
 
 STORAGE_VERSION = 1
 STORAGE_KEY = "adaptive_lighting_helpers.last_write_context_ids"
@@ -122,6 +123,15 @@ SIGNAL_WRITE_TRACKING_UPDATED = "adaptive_lighting_helpers_write_tracking_update
 class _ContextClaim(TypedDict):
     context_id: str
     owner_id: Optional[str]
+    # ISO 8601, or None for the synthetic first-write baseline (see
+    # async_record's docstring) - we only ever observe that context
+    # after the fact, with no way to know how long it had already been
+    # live, so a timestamp there would claim more precision than we
+    # actually have. Lets the diagnostic sensor (and a dashboard card
+    # built on it) show "how long has this been pending/confirmed" and
+    # narrow a logbook lookup to resolve a context.id into what actually
+    # happened, without guessing a search window.
+    recorded_at: Optional[str]
 
 
 class _WriteRecord(TypedDict):
@@ -156,6 +166,13 @@ class LastWriteTracker:
             if not isinstance(value, dict):
                 continue
             if "confirmed" in value and "pending" in value:
+                # Older confirmed/pending records (pre-recorded_at) are
+                # missing the key entirely - .setdefault below back-fills
+                # None on load rather than needing every reader to
+                # handle a missing key as well as an explicit None.
+                for claim in (value.get("confirmed"), value.get("pending")):
+                    if claim is not None:
+                        claim.setdefault("recorded_at", None)
                 data[entity_id] = value  # already this shape
             elif "context_id" in value:
                 # The single-record format this integration shipped with
@@ -167,7 +184,11 @@ class LastWriteTracker:
                 # the house, the same class of incident the restart-blip
                 # fix above exists to prevent.
                 data[entity_id] = {
-                    "confirmed": {"context_id": value["context_id"], "owner_id": value.get("owner_id")},
+                    "confirmed": {
+                        "context_id": value["context_id"],
+                        "owner_id": value.get("owner_id"),
+                        "recorded_at": None,
+                    },
                     "pending": None,
                 }
             # Anything else (the even older bare-string format, or
@@ -260,10 +281,14 @@ class LastWriteTracker:
                     confirmed = old.get("confirmed")
             else:
                 baseline_context = live_context_before_write.get(entity_id)
-                confirmed = {"context_id": baseline_context, "owner_id": None} if baseline_context is not None else None
+                confirmed = (
+                    {"context_id": baseline_context, "owner_id": None, "recorded_at": None}
+                    if baseline_context is not None
+                    else None
+                )
             self._data[entity_id] = {
                 "confirmed": confirmed,
-                "pending": {"context_id": context_id, "owner_id": owner_id},
+                "pending": {"context_id": context_id, "owner_id": owner_id, "recorded_at": dt_util.utcnow().isoformat()},
             }
         await self._store.async_save(self._data)
         async_dispatcher_send(self._hass, SIGNAL_WRITE_TRACKING_UPDATED)
