@@ -166,7 +166,9 @@ instances configured), and deliberately has no device of its own - the write-tra
 naturally owned by any one room's device, and giving it one would mean it shows up in the device-rename/
 area-picker dialog the next time the integration is added, which this project avoids elsewhere for the same
 reason (see CLAUDE.md's "Auto-seeded Default sensor" entry). It updates immediately on every write or
-clear-on-unavailable event, not on a poll.
+clear-on-unavailable event, and also polls every 15s - a light's live state can change independently of
+`write_tracking.py` ever being touched (a restart, most obviously), and only polling keeps `status` correct in
+that case too.
 
 ## `adaptive_lighting_helpers.compute_lighting_groups`
 

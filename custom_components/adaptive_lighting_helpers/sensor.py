@@ -155,16 +155,29 @@ class _WriteTrackingSensor(SensorEntity):
     options/subentry flows - so an entity with no device at all can never
     trigger it, regardless of when or how it's created.
 
-    Push-updated via SIGNAL_WRITE_TRACKING_UPDATED rather than polled -
-    write_tracking.py fires it on every mutation (a real write recorded,
-    or a record cleared on a genuine unavailable transition), so this
-    stays live within the same tick rather than lagging behind."""
+    Push-updated via SIGNAL_WRITE_TRACKING_UPDATED for instant feedback
+    right when write_tracking.py actually mutates something (a real
+    write recorded, or a record cleared on a genuine unavailable
+    transition) - but that alone isn't enough to keep `status`/
+    `live_context_id` correct, since those are computed by comparing
+    against each light's *live* state, which can change independently
+    of write_tracking.py ever being touched (a restart, an entity
+    reconnecting, anything not funnelled through apply_lighting). Caught
+    live: right after a restart, every tracked light briefly reports
+    unavailable while its own integration reconnects - the sensor's
+    first push (at entity add) captured that transient moment and then,
+    with nothing calling apply_lighting again for a while, never
+    refreshed, leaving the whole dashboard reading "unavailable" long
+    after every light had genuinely settled back to a real state. Also
+    polls (default should_poll=True, HA's own DEFAULT_SCAN_INTERVAL,
+    currently 15s) as a correctness net for exactly that case - the push
+    signal is still what makes a real write feel instant, the poll is
+    what keeps everything else honest."""
 
     _attr_has_entity_name = True
     _attr_name = "Adaptive Lighting Write Tracking"
     _attr_icon = "mdi:text-search"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
-    _attr_should_poll = False
     _attr_native_unit_of_measurement = "entities"
     # The per-entity breakdown can run to several dozen lights - no
     # value in the recorder's history for a live diagnostic snapshot,
