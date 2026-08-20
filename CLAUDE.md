@@ -1999,6 +1999,83 @@ designs were explored:
   "Inspecting write-tracking state" section and `CONTRIBUTING.md`'s
   file listing updated to match.
 
+- **A plain HA restart, on its own, could permanently exclude every
+  already-tracked ON light from adaptive control - found and fixed the
+  same day the write-tracking sensor made it observable, 2026-08-20.**
+  Not found by symptom report this time - found by *looking*, directly,
+  the moment the new sensor gave enough visibility to notice it: right
+  after a routine restart (deploying the write-tracking dashboard card),
+  the sensor showed all 57 tracked lights as `status: "mismatched"`.
+  Confirmed via a direct `compute_lighting_groups` probe (the same
+  diagnostic technique used throughout this session) that
+  `light.kitchen_1` - genuinely on, never dropped off the network - was
+  really excluded, not just cosmetically mislabelled: `combined: []`
+  with a real owner_id.
+
+  Root cause: a HA restart recreates every entity's state object from
+  scratch, so the very first state report after restart always carries
+  a brand-new context.id - even when the reported value hasn't changed
+  and the underlying device never actually went offline. That's
+  indistinguishable from a genuine external change to
+  `externally_set()`'s comparison. The existing clear-on-unavailable
+  listener (see its own dated entry above) doesn't cover this: it only
+  fires on an *observed* unavailable transition, and a light that stays
+  continuously "on" through a restart never produces one - by the time
+  the listener is attached again post-restart, the light has already
+  reported its new context with nothing here ever seeing the "before"
+  state to compare against. Since an externally-set light is never
+  written, nothing ever gets the chance to refresh its stale record
+  either - the exact permanent-lockout shape the confirmed/pending
+  redesign (earlier the same day) exists to prevent, just triggered by
+  *any* restart instead of a dropped write, and probably live on every
+  restart this entire session has been performing.
+
+  **Presented to the user directly via `AskUserQuestion` before fixing**,
+  given how central this exact class of override-protection judgment
+  call has been all session - proposed snapshotting each tracked
+  entity's live context as its new `confirmed` baseline at startup
+  (`LastWriteTracker.async_resync_to_live_state`, called once right
+  after `async_load`), reusing the same synthetic-baseline mechanism
+  `async_record` already uses for a first-ever write, with the same
+  accepted trade-off: a manual override standing in the exact instant of
+  a restart is forgotten, same as it already is when a light briefly
+  goes unavailable. **User's call: proceed** - matches this session's
+  standing precedent (self-heal over lockout when genuinely ambiguous).
+
+  `pending` is deliberately left untouched by the resync - a
+  pre-restart `pending` claim can never match a fresh post-restart
+  context either way, so there's nothing to fix there; it just sits
+  inert until the next real write overwrites it. An entity still
+  genuinely unavailable at resync time (a real drop the restart itself
+  doesn't fix) is left alone entirely - nothing live to snapshot yet,
+  and the clear-on-unavailable listener already handles it correctly
+  once it does report back in.
+
+  Three tests added to `test_services.py`, mutation-verified (disabling
+  the resync fails exactly
+  `test_a_restart_resyncs_confirmed_to_live_context_so_an_on_light_stays_manageable`
+  and no others): the main fix, proven end-to-end via `build_groups`
+  built directly against the resynced tracker (going through the
+  *service* here would prove the wrong tracker's state, since the
+  service still reads whichever tracker got registered when the test's
+  own `setup_integration` fixture set up its entry, before the test's
+  write even happened); that a genuinely-still-unavailable light is left
+  untouched (using a bare, unconnected `LastWriteTracker` rather than
+  `setup_integration`'s own, whose live clear-on-unavailable listener
+  would otherwise interfere and mean the test was only proving *that*
+  mechanism works, not this one); and that `pending` survives the
+  resync unchanged. One test-writing gotcha caught along the way: two
+  consecutive `hass.states.async_set` calls with identical values are
+  collapsed into a single "state_reported" event by HA, and the
+  *second* call's explicit `context=` is silently discarded - already
+  documented in this file's own `test_force_bypasses_protection_and_reclaims_ownership`,
+  re-learned the hard way while writing the first draft of this fix's
+  own test. Full suite: 144/144.
+
+  `docs/HELPERS.md`'s "Override protection" section extended with a new
+  paragraph on this specific gap, alongside the existing device-recovery
+  one it's easy to conflate with but is mechanically distinct from.
+
 **Deployment / operational notes:**
 - pyscript is fully gone, both from this repo and the live host.
 - The dev git-sync automation (polling this repo for new commits and

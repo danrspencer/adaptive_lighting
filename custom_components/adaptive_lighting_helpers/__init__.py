@@ -313,6 +313,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # last-write provenance survives a HA restart.
     write_tracker = LastWriteTracker(hass)
     await write_tracker.async_load()
+    # A HA restart alone gives every entity a fresh context.id, which
+    # otherwise looks identical to a genuine external change - see
+    # async_resync_to_live_state's own docstring, and the dated CLAUDE.md
+    # entry for the live incident (light.kitchen_1, genuinely on, stuck
+    # excluded purely from a restart) that prompted this.
+    await write_tracker.async_resync_to_live_state(hass)
     entry.async_on_unload(write_tracker.async_start_listening(hass))
 
     # Raises a fixable repair when a bulb that's known to need two-step

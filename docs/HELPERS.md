@@ -147,6 +147,18 @@ caller-side handling needed for this specific case - the blueprint's own `recove
 this happens *promptly* (the moment a light actually recovers, rather than waiting for whatever next calls
 `apply_lighting` for that room) - see [docs/BLUEPRINT.md](BLUEPRINT.md#override-detection).
 
+A plain Home Assistant restart needs its own handling, separate from the above: it gives *every* entity a
+fresh context the moment HA comes back up, even a light that never actually went unavailable and whose
+reported value hasn't changed at all - the clear-on-unavailable listener above only ever fires on an
+*observed* transition, and by the time it's listening again after a restart, an entity that stayed
+continuously "on" through the whole thing has already reported its post-restart state under a context this
+integration never saw change. Left alone, every already-tracked light would look externally set the moment
+HA restarts, and - since an externally-set light is never written - stay that way until something else
+happened to touch it. This integration closes that gap too: on startup, it snapshots each tracked entity's
+current live context as its new baseline (the same "no real claim, but nothing's changed" logic a first-ever
+write already uses), so a plain, non-forced call manages it normally on the very next tick instead of treating
+the restart itself as an override.
+
 ### Inspecting write-tracking state
 
 `sensor.adaptive_lighting_write_tracking` makes the mechanism above inspectable directly, rather than only

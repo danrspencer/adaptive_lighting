@@ -197,6 +197,62 @@ class LastWriteTracker:
             # doesn't recognise.
         self._data = data
 
+    async def async_resync_to_live_state(self, hass: HomeAssistant) -> None:
+        """Called once at integration startup, right after async_load().
+
+        A HA restart recreates every entity's state object from scratch,
+        so the very first state report after restart always carries a
+        fresh context.id - even when the reported value hasn't actually
+        changed and the underlying device never went offline at all.
+        That's indistinguishable from a genuine external change to
+        externally_set()'s comparison, and since an externally-set light
+        is never written, every already-tracked light left alone here
+        would look permanently overridden the moment HA comes back up -
+        the same lockout the confirmed/pending redesign exists to
+        prevent (see the module docstring), just triggered by *any*
+        restart instead of a dropped write. Confirmed live: a plain
+        restart left `light.kitchen_1` - genuinely on, never dropped
+        off the network - excluded from every tick.
+
+        The existing clear-on-unavailable listener doesn't cover this:
+        it only fires on an *observed* unavailable transition, and by
+        the time it's listening (after this same startup sequence),
+        an entity that never actually went unavailable during the
+        restart has already reported its post-restart state under a
+        context this integration never saw change.
+
+        Snapshots each tracked entity's current live context as its new
+        `confirmed` baseline - owner_id=None and recorded_at=None,
+        exactly the synthetic first-write baseline async_record already
+        uses for the analogous "no real claim yet, but the light hasn't
+        changed" situation (see its own docstring). If nothing touches
+        the light between restart and the next real write attempt, its
+        context stays exactly this value, so that attempt sees a match
+        and resumes control normally instead of treating the restart
+        itself as an override. `pending` is left untouched - a
+        pre-restart pending claim can never match a fresh post-restart
+        context either way, so it's simply inert until overwritten by
+        the next real write.
+
+        A light with no live state at all right now (removed, or
+        genuinely still unavailable through the restart) is left
+        untouched - nothing to snapshot yet, and the clear-on-unavailable
+        listener already handles it correctly once it does report back
+        in (a genuine on/off -> unavailable -> on/off transition,
+        observed live once the listener is attached)."""
+        changed = False
+        for entity_id, record in self._data.items():
+            state = hass.states.get(entity_id)
+            if state is None or state.state in ("unavailable", "unknown"):
+                continue
+            self._data[entity_id] = {
+                "confirmed": {"context_id": state.context.id, "owner_id": None, "recorded_at": None},
+                "pending": record.get("pending"),
+            }
+            changed = True
+        if changed:
+            await self._store.async_save(self._data)
+
     def confirmed_context_id(self, entity_id: str) -> str | None:
         record = self._data.get(entity_id)
         claim = record.get("confirmed") if record else None

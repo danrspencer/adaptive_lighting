@@ -23,7 +23,9 @@ from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import Context, HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
 
-from custom_components.adaptive_lighting_helpers import async_setup_entry
+from custom_components.adaptive_lighting_helpers import _build_lookup, async_setup_entry
+from custom_components.adaptive_lighting_helpers.grouping import build_groups
+from custom_components.adaptive_lighting_helpers.write_tracking import LastWriteTracker
 
 DOMAIN = "adaptive_lighting_helpers"
 
@@ -438,6 +440,158 @@ async def test_write_tracking_record_is_cleared_when_light_goes_unavailable(setu
         blocking=True,
     )
     assert len(turn_on_calls) == 2
+
+
+async def test_a_restart_resyncs_confirmed_to_live_context_so_an_on_light_stays_manageable(
+    setup_integration: HomeAssistant,
+):
+    """The bug caught live the day this shipped: a plain HA restart
+    recreates every entity's state object from scratch, so the first
+    state report after restart always carries a fresh context.id - even
+    for a light that never actually dropped off the network and whose
+    reported value hasn't changed at all. Confirmed on the real
+    instance: light.kitchen_1, genuinely on, excluded from every tick
+    purely because of a restart. async_resync_to_live_state (called once
+    at startup, right after async_load) is what fixes this - simulated
+    here via a second LastWriteTracker loading the same persisted Store
+    data, the same "restart" a real process go-around would produce."""
+    hass = setup_integration
+    turn_on_calls = async_mock_service(hass, "light", "turn_on")
+    _set_sensor(hass, brightness=180, color_temp=3200)
+
+    _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
+    await hass.services.async_call(
+        DOMAIN,
+        "apply_lighting",
+        {
+            "entities": ["light.a"],
+            "sensor_entity_id": "sensor.test_adaptive",
+            "transition": 2,
+            "owner_id": "automation.room",
+        },
+        blocking=True,
+    )
+    assert len(turn_on_calls) == 1
+
+    # Simulate the restart in one step: light.a is still "off" (the
+    # mocked light.turn_on above never actually touched hass.states), so
+    # this transition to "on" is itself a genuine state change and gets
+    # a real fresh context - exactly a real restart's first post-restart
+    # state report for a light that never actually went unavailable, so
+    # test_write_tracking_record_is_cleared_when_light_goes_unavailable's
+    # listener-based fix above never gets a chance to fire. (An
+    # identical-value re-set here would be silently treated as a
+    # no-op "state_reported" and its context discarded - HA only
+    # replaces context on a genuine change, confirmed elsewhere in this
+    # file - so this has to be the light's *first* transition to "on",
+    # not a second same-value re-set.)
+    restart_context = Context()
+    _set_light(
+        hass,
+        "light.a",
+        "on",
+        supported_color_modes=["color_temp"],
+        brightness=180,
+        color_temp_kelvin=3200,
+        context=restart_context,
+    )
+
+    resynced_tracker = LastWriteTracker(hass)
+    await resynced_tracker.async_load()
+    await resynced_tracker.async_resync_to_live_state(hass)
+
+    assert resynced_tracker.confirmed_context_id("light.a") == restart_context.id
+    assert resynced_tracker.confirmed_owner_id("light.a") is None
+
+    # The real, end-to-end proof: a plain, non-forced check from the
+    # same owner still manages the light afterward, rather than finding
+    # it permanently excluded. Built directly against resynced_tracker
+    # (the same _build_lookup/build_groups path __init__.py's
+    # compute_lighting_groups service itself uses) rather than through
+    # hass.services.async_call - the *service* still reads whichever
+    # tracker got registered when setup_integration's own entry was set
+    # up (before this test's write even happened), not this test's
+    # separately-constructed resynced_tracker, so going through the
+    # service here would just prove the wrong tracker's state.
+    lookup = _build_lookup(hass, resynced_tracker)
+    groups = build_groups(
+        entities=["light.a"],
+        brightness_multipliers={"light.a": 1},
+        sensor_brightness=200,
+        sensor_color_temp_kelvin=3200,
+        lookup=lookup,
+        owner_id="automation.room",
+    )
+    assert groups[0].combined == ["light.a"]
+
+
+async def test_resync_leaves_a_genuinely_unavailable_light_untouched(hass: HomeAssistant):
+    """A light still unavailable at resync time (a real drop the restart
+    itself doesn't fix) has nothing live to snapshot - left alone for
+    the clear-on-unavailable listener to handle once it does report back
+    in, not given a bogus confirmed claim.
+
+    Deliberately doesn't use the setup_integration fixture: its own
+    write_tracker already has async_start_listening() live, which would
+    itself clear this record the moment light.a below goes unavailable -
+    exactly correct real behaviour, but it would mean this test was only
+    proving the *listener* works (already covered by
+    test_write_tracking_record_is_cleared_when_light_goes_unavailable
+    above), not resync_to_live_state's own "nothing to snapshot" branch
+    in isolation. A bare, unconnected LastWriteTracker keeps the two
+    mechanisms properly separated."""
+    tracker = LastWriteTracker(hass)
+    await tracker.async_load()
+    await tracker.async_record(["light.a"], {"light.a": None}, "ctx-1", "automation.room")
+
+    _set_light(hass, "light.a", "unavailable", supported_color_modes=["color_temp"])
+
+    tracker_after_load = LastWriteTracker(hass)
+    await tracker_after_load.async_load()
+    await tracker_after_load.async_resync_to_live_state(hass)
+
+    # Untouched - still exactly the pending claim just recorded, not
+    # None (which would mean it was wrongly cleared) and not a bogus
+    # confirmed claim manufactured from the "unavailable" state.
+    assert tracker_after_load.confirmed_context_id("light.a") is None
+    assert tracker_after_load.pending_context_id("light.a") == "ctx-1"
+
+
+async def test_resync_preserves_the_pending_claim(setup_integration: HomeAssistant):
+    """Only `confirmed` is replaced - a stale pre-restart `pending`
+    claim can never match a fresh post-restart context anyway, so
+    there's nothing to fix there; it's simply inert until the next real
+    write overwrites it."""
+    hass = setup_integration
+    async_mock_service(hass, "light", "turn_on")
+    _set_sensor(hass, brightness=180, color_temp=3200)
+
+    _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
+    await hass.services.async_call(
+        DOMAIN,
+        "apply_lighting",
+        {
+            "entities": ["light.a"],
+            "sensor_entity_id": "sensor.test_adaptive",
+            "transition": 2,
+            "owner_id": "automation.room",
+        },
+        blocking=True,
+    )
+    tracker_before = LastWriteTracker(hass)
+    await tracker_before.async_load()
+    original_pending_context = tracker_before.pending_context_id("light.a")
+    assert original_pending_context is not None
+
+    _set_light(
+        hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=180, color_temp_kelvin=3200
+    )
+
+    resynced_tracker = LastWriteTracker(hass)
+    await resynced_tracker.async_load()
+    await resynced_tracker.async_resync_to_live_state(hass)
+
+    assert resynced_tracker.pending_context_id("light.a") == original_pending_context
 
 
 async def test_recovered_light_is_freed_while_an_unrelated_override_stays_protected(
