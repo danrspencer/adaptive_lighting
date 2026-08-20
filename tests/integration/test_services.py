@@ -525,6 +525,78 @@ async def test_a_restart_resyncs_confirmed_to_live_context_so_an_on_light_stays_
     assert groups[0].combined == ["light.a"]
 
 
+async def test_the_listener_resyncs_a_light_still_unavailable_when_startup_resync_ran(
+    setup_integration: HomeAssistant,
+):
+    """The gap found live the same day the fix above shipped:
+    light.kitchen_2 stayed excluded through several real ticks after a
+    restart that the bulk startup pass alone did fix light.kitchen_1
+    against - both recovered from the same restart, just close enough
+    together in time that only one had already reported back when
+    async_resync_to_live_state ran.
+
+    Deliberately does NOT reach "unavailable" via a live off->unavailable
+    transition (light.a is set unavailable as its very first-ever state
+    in this test's hass instance, old_state=None) - going through a real
+    on/off->unavailable transition first would trip the *existing*
+    clear-on-drop branch, which already frees a light via "no record ->
+    free" on its own and would pass this test regardless of whether the
+    new recovery branch does anything at all. Setting "unavailable" as
+    the first-ever state instead matches what light.kitchen_2 actually
+    looked like from this listener's own point of view: its drop
+    happened before the new process's listener was ever attached, so
+    from here it's as if the light simply arrived already down - a
+    pre-existing record with no observed drop, exactly the case that
+    needs the *recovery* direction specifically to be fixed."""
+    hass = setup_integration
+    real_tracker = next(v for v in hass.data[DOMAIN].values() if isinstance(v, LastWriteTracker))
+    _set_sensor(hass, brightness=180, color_temp=3200)
+
+    # A pre-existing record, as if written before this process (and its
+    # listener) ever existed - two real writes, so `confirmed` holds an
+    # actual claim (not None). A record with confirmed=None is already
+    # unconditionally lenient regardless of context (see
+    # externally_set()'s own "unconfirmed first attempt" fallback), so
+    # seeding only one write here would pass this test even with the
+    # recovery fix disabled entirely - proving nothing.
+    await real_tracker.async_record(["light.a"], {"light.a": "pre-existing-context"}, "ctx-1", "automation.room")
+    await real_tracker.async_record(["light.a"], {"light.a": "ctx-1"}, "ctx-2", "automation.room")
+
+    _set_light(hass, "light.a", "unavailable", supported_color_modes=["color_temp"])
+    await hass.async_block_till_done()
+
+    # It recovers - a fresh context nothing here ever issued, exactly
+    # what a real device's own post-restart state report looks like.
+    recovery_context = Context()
+    _set_light(
+        hass,
+        "light.a",
+        "on",
+        supported_color_modes=["color_temp"],
+        brightness=180,
+        color_temp_kelvin=3200,
+        context=recovery_context,
+    )
+    await hass.async_block_till_done()
+
+    # A plain, non-forced call from the same owner manages it
+    # immediately - not permanently excluded, and not needing a second
+    # restart or a force to recover.
+    result = await hass.services.async_call(
+        DOMAIN,
+        "compute_lighting_groups",
+        {
+            "entities": ["light.a"],
+            "sensor_brightness": 200,
+            "sensor_color_temp_kelvin": 3200,
+            "owner_id": "automation.room",
+        },
+        blocking=True,
+        return_response=True,
+    )
+    assert result["groups"][0]["combined"] == ["light.a"]
+
+
 async def test_resync_leaves_a_genuinely_unavailable_light_untouched(hass: HomeAssistant):
     """A light still unavailable at resync time (a real drop the restart
     itself doesn't fix) has nothing live to snapshot - left alone for

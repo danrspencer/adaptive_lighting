@@ -34,13 +34,24 @@ without an explicit context, which a reconnecting device's own state
 report always is, gets `Context(id=ulid_at_time(...))`, unconditionally),
 indistinguishable from a genuine external change. Left as-is, a
 recovered light would look externally-set forever, since nothing else
-here ever un-marks it. async_start_listening() closes this by clearing
-an entity's own record the moment it's *observed* going from a real
-on/off state to unavailable/unknown - by the time it reconnects,
-there's no record left to compare against, so it's "free to manage"
-again (the same fallback already used for a brand new entity), through
-completely ordinary means - no forced write, no special-casing, just
-the next regular call finding no claim to conflict with.
+here ever un-marks it. async_start_listening() closes this by watching
+both directions of the unavailable/unknown boundary: it clears an
+entity's own record the moment it's *observed* going from a real on/off
+state to unavailable/unknown - by the time it reconnects, there's no
+record left to compare against, so it's "free to manage" again (the
+same fallback already used for a brand new entity) - and, symmetrically,
+it snapshots the just-observed context as a fresh baseline the moment
+an entity is seen coming back the other way, unavailable/unknown (or no
+prior state at all) to real. That second direction also covers a plain
+HA restart on its own, not just a genuine network drop -
+async_resync_to_live_state performs the identical snapshot once at
+startup for whatever's already reporting a real state by then, and the
+listener's recovery handling picks up whatever was still mid-reconnect
+at that exact moment instead of staying stuck (see async_resync_to_live_state's
+own docstring for the live incident this specific case closes). Either
+way, resuming control happens through completely ordinary means - no
+forced write, no special-casing, just the next regular call finding a
+claim that matches.
 
 The transition must start from a real on/off state, not just end at
 unavailable/unknown - almost every entity passes through unavailable/
@@ -214,44 +225,57 @@ class LastWriteTracker:
         restart left `light.kitchen_1` - genuinely on, never dropped
         off the network - excluded from every tick.
 
-        The existing clear-on-unavailable listener doesn't cover this:
-        it only fires on an *observed* unavailable transition, and by
-        the time it's listening (after this same startup sequence),
-        an entity that never actually went unavailable during the
-        restart has already reported its post-restart state under a
-        context this integration never saw change.
+        A light still unavailable/unknown at this exact moment isn't
+        skipped forever - async_start_listening()'s listener performs
+        the identical snapshot the moment that light *does* next report
+        a real state, closing what would otherwise be a startup-ordering
+        race: a restart puts nearly every entity through
+        unavailable/unknown before it reports back on, and this
+        one-shot pass runs early enough that many entities are still
+        mid-reconnect when it does. Confirmed live: light.kitchen_2,
+        genuinely on, stayed excluded through several real ticks after a
+        restart that this pass alone did fix light.kitchen_1 against -
+        both recovered from the same restart, just close enough
+        together in time that only one of them had already reported
+        back when this ran.
 
         Snapshots each tracked entity's current live context as its new
-        `confirmed` baseline - owner_id=None and recorded_at=None,
-        exactly the synthetic first-write baseline async_record already
-        uses for the analogous "no real claim yet, but the light hasn't
-        changed" situation (see its own docstring). If nothing touches
-        the light between restart and the next real write attempt, its
-        context stays exactly this value, so that attempt sees a match
-        and resumes control normally instead of treating the restart
-        itself as an override. `pending` is left untouched - a
-        pre-restart pending claim can never match a fresh post-restart
-        context either way, so it's simply inert until overwritten by
-        the next real write.
-
-        A light with no live state at all right now (removed, or
-        genuinely still unavailable through the restart) is left
-        untouched - nothing to snapshot yet, and the clear-on-unavailable
-        listener already handles it correctly once it does report back
-        in (a genuine on/off -> unavailable -> on/off transition,
-        observed live once the listener is attached)."""
+        `confirmed` baseline (see _snapshot_confirmed) - owner_id=None
+        and recorded_at=None, exactly the synthetic first-write baseline
+        async_record already uses for the analogous "no real claim yet,
+        but the light hasn't changed" situation (see its own docstring).
+        If nothing touches the light between restart and the next real
+        write attempt, its context stays exactly this value, so that
+        attempt sees a match and resumes control normally instead of
+        treating the restart itself as an override."""
         changed = False
-        for entity_id, record in self._data.items():
+        for entity_id in list(self._data):
             state = hass.states.get(entity_id)
             if state is None or state.state in ("unavailable", "unknown"):
                 continue
-            self._data[entity_id] = {
-                "confirmed": {"context_id": state.context.id, "owner_id": None, "recorded_at": None},
-                "pending": record.get("pending"),
-            }
+            self._snapshot_confirmed(entity_id, state.context.id)
             changed = True
         if changed:
             await self._store.async_save(self._data)
+            async_dispatcher_send(self._hass, SIGNAL_WRITE_TRACKING_UPDATED)
+
+    def _snapshot_confirmed(self, entity_id: str, context_id: str) -> None:
+        """Replace `confirmed` with a fresh baseline built from a live
+        context.id just observed for this entity - owner_id=None and
+        recorded_at=None, since this is merely *observed*, not a write
+        this integration actually made (the same convention
+        async_record's synthetic first-write baseline uses - see its own
+        docstring). `pending` is left untouched: a claim from before
+        this observation can never match this fresh context either way,
+        so it's simply inert until the next real write overwrites it.
+        Shared by async_resync_to_live_state's startup pass and
+        async_start_listening's live recovery handling below - the same
+        operation, triggered two different ways."""
+        record = self._data.get(entity_id)
+        self._data[entity_id] = {
+            "confirmed": {"context_id": context_id, "owner_id": None, "recorded_at": None},
+            "pending": record.get("pending") if record else None,
+        }
 
     def confirmed_context_id(self, entity_id: str) -> str | None:
         record = self._data.get(entity_id)
@@ -350,46 +374,78 @@ class LastWriteTracker:
         async_dispatcher_send(self._hass, SIGNAL_WRITE_TRACKING_UPDATED)
 
     def async_start_listening(self, hass: HomeAssistant) -> CALLBACK_TYPE:
-        """See the module docstring's "device regaining power" section -
-        clears an entity's record the instant it's seen going
-        unavailable/unknown, so its eventual reconnect (a write we have
-        no way to intercept, since it isn't a light.turn_on/turn_off
-        call at all) finds no claim to conflict with.
+        """Watches both directions of the unavailable/unknown boundary
+        for every tracked entity, via a single hass-wide "state_changed"
+        listener (not a per-entity subscription that would need to be
+        kept in sync with self._data as apply_lighting calls add new
+        entities over time - the filter below is a cheap dict lookup,
+        and HA integrations commonly use this same broad-listen-then-
+        filter pattern rather than manage dynamic per-entity
+        subscriptions for something this cheap to check):
 
-        A single hass-wide "state_changed" listener, not a per-entity
-        subscription that would need to be kept in sync with self._data
-        as apply_lighting calls add new entities over time - the filter
-        below is a cheap dict lookup, and HA integrations commonly use
-        this same broad-listen-then-filter pattern rather than manage
-        dynamic per-entity subscriptions for something this cheap to
-        check."""
+        - **Drop** (a real on/off state -> unavailable/unknown): clears
+          the entity's record entirely - see the module docstring's
+          "device regaining power" section. Its eventual reconnect (a
+          write we have no way to intercept, since it isn't a
+          light.turn_on/turn_off call at all) then finds no claim to
+          conflict with.
+        - **Recovery** (unavailable/unknown, or no prior state at all ->
+          a real state): snapshots the just-observed context as the new
+          `confirmed` baseline via _snapshot_confirmed - the same
+          operation async_resync_to_live_state performs once at startup,
+          triggered here instead by the live event that startup pass
+          can miss if this entity was still mid-reconnect at that exact
+          moment (see that method's own docstring for the live incident
+          - light.kitchen_2 - this closes).
+
+        Both directions require the *other* endpoint to be a genuine
+        on/off state, not just checking the destination - almost every
+        entity passes through unavailable/unknown as a routine part of
+        every HA restart (old_state is None - a fresh process's state
+        machine has no history yet - or already unavailable/unknown
+        itself), and treating a drop-shaped transition as a real drop
+        when it's actually just routine restart noise wiped override
+        protection for practically every managed light in the house on
+        every single restart, not just ones that had actually dropped
+        off the network - a live incident: a light dimmed by hand hours
+        after a restart got silently overwritten on the next tick,
+        because its record had been cleared during that restart and
+        never rewritten since (nothing had needed a real write to it in
+        between)."""
 
         @callback
         def _on_state_changed(event: Event[EventStateChangedData]) -> None:
             entity_id = event.data["entity_id"]
             if entity_id not in self._data:
                 return
-            # Only a genuine drop - a light that WAS on/off actually
-            # going dark - should clear anything. Almost every entity
-            # passes through unavailable/unknown as a routine part of
-            # every HA restart (old_state is None - a fresh process's
-            # state machine has no history yet - or already
-            # unavailable/unknown itself), and treating that the same as
-            # a real drop wiped override protection for practically
-            # every managed light in the house on every restart, not
-            # just ones that had actually dropped off the network - a
-            # live incident: a light dimmed by hand hours after a
-            # restart got silently overwritten on the next tick, because
-            # its record had been cleared during that restart and never
-            # rewritten since (nothing had needed a real write to it in
-            # between).
             old_state = event.data["old_state"]
-            if old_state is None or old_state.state in ("unavailable", "unknown"):
-                return
             new_state = event.data["new_state"]
-            if new_state is None or new_state.state not in ("unavailable", "unknown"):
+            old_available = old_state is not None and old_state.state not in ("unavailable", "unknown")
+            new_available = new_state is not None and new_state.state not in ("unavailable", "unknown")
+            # Drop requires new_state to explicitly report "unavailable"/
+            # "unknown" as a string - not just new_state being absent
+            # entirely (entity removed from the state machine, e.g. a
+            # fresh process's own state machine having no entry for it
+            # yet). That distinction matters: treating "gone" the same
+            # as "unavailable" here would clear the record the instant
+            # an entity's old in-memory state vanishes as a routine part
+            # of every restart, before its own reconnect event ever
+            # fires - reopening the exact "wiped on every restart, not
+            # just real drops" incident this listener exists to prevent
+            # (see the module docstring). Recovery has no equivalent
+            # asymmetry: old_state being absent entirely is exactly the
+            # "no prior state, now reporting real" case it's meant to
+            # catch too (a fresh process's first-ever report for this
+            # entity, functionally identical to recovering from a drop).
+            new_explicitly_unavailable = new_state is not None and new_state.state in ("unavailable", "unknown")
+
+            if old_available and new_explicitly_unavailable:
+                del self._data[entity_id]
+            elif not old_available and new_available:
+                self._snapshot_confirmed(entity_id, new_state.context.id)
+            else:
                 return
-            del self._data[entity_id]
+
             hass.async_create_task(self._store.async_save(self._data))
             async_dispatcher_send(hass, SIGNAL_WRITE_TRACKING_UPDATED)
 
