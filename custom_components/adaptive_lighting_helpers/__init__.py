@@ -36,7 +36,18 @@ those modules expose.
 from __future__ import annotations
 
 import asyncio
-import time
+# Aliased - this package also has its own time.py (the HA `time` platform
+# module, forwarded via SCHEDULE_PLATFORMS below). Importing a submodule
+# unconditionally rebinds it as an attribute of the parent package, which
+# is this module's own global namespace - a bare `import time` here gets
+# silently clobbered the moment anything imports adaptive_lighting_helpers.time
+# (any entry with an "at"-less compute_curve call, e.g. every real
+# install with at least one schedule instance, plus now every entry
+# regardless of instances - see async_forward_entry_setups below), and
+# every later time.time() call in this module then raises AttributeError
+# against the wrong module. Caught live via a test that unconditionally
+# forwards SCHEDULE_PLATFORMS for the first time on a zero-instance entry.
+import time as time_module
 from pathlib import Path
 from typing import Any
 
@@ -336,7 +347,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         Returns: {"phase", "brightness", "kelvin", "rgb_color"} for the
         given instant (or now) - see services.yaml for field docs.
         """
-        at = call.data.get("at", time.time())
+        at = call.data.get("at", time_module.time())
         morning, day, evening, night = (
             call.data["morning"],
             call.data["day"],
@@ -555,6 +566,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # is registered, and duplicating it here would double-reload anyway.
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
 
+    # Entry-scoped (not per-instance), so the write-tracking diagnostic
+    # sensor (sensor.py's _WriteTrackingSensor) can look it up regardless
+    # of how many schedule instances - possibly zero - exist.
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = write_tracker
+
     instances = schedule_instances(entry)
     if instances:
         for instance in instances:
@@ -586,8 +602,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # global copy of a refresh the entity already owns.
         entry.async_on_unload(async_track_state_change_event(hass, ["sun.sun"], _refresh_all))
 
-        await hass.config_entries.async_forward_entry_setups(entry, SCHEDULE_PLATFORMS)
+    # Unconditional, not gated on instances - the write-tracking sensor
+    # (sensor.py) is entry-scoped and should exist even with zero
+    # schedule instances configured. Harmless when instances is empty:
+    # each platform's own async_setup_entry loop over schedule_instances()
+    # just adds nothing for the per-instance entities.
+    await hass.config_entries.async_forward_entry_setups(entry, SCHEDULE_PLATFORMS)
 
+    if instances:
         # The first refresh above ran before the time.*/number.* entities
         # existed (or while a reload had left them "unavailable"), so it
         # computed from defaults - see coordinator._time_ts(). Now that
@@ -611,10 +633,10 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.services.async_remove(DOMAIN, "apply_lighting")
 
     instances = schedule_instances(entry)
-    if instances:
-        unloaded = await hass.config_entries.async_unload_platforms(entry, SCHEDULE_PLATFORMS)
-        for instance in instances:
-            hass.data.get(DOMAIN, {}).pop(instance.subentry_id, None)
-        return unloaded
+    unloaded = await hass.config_entries.async_unload_platforms(entry, SCHEDULE_PLATFORMS)
+    hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
+    for instance in instances:
+        hass.data.get(DOMAIN, {}).pop(instance.subentry_id, None)
+    return unloaded
 
     return True

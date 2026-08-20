@@ -49,15 +49,26 @@ from typing import Any
 
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.const import EntityCategory
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import ScheduleCoordinator, ScheduleInstance, schedule_instances
+from .write_tracking import SIGNAL_WRITE_TRACKING_UPDATED, LastWriteTracker
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
+    # Entry-scoped, not tied to any one schedule instance - added
+    # unconditionally (even with zero schedule sensors configured) via
+    # its own async_add_entities call with no config_subentry_id, so it
+    # gets no device at all (see _WriteTrackingSensor's own docstring
+    # for why that matters).
+    write_tracker: LastWriteTracker = hass.data[DOMAIN][entry.entry_id]
+    async_add_entities([_WriteTrackingSensor(hass, entry, write_tracker)])
+
     for instance in schedule_instances(entry):
         coordinator: ScheduleCoordinator = hass.data[DOMAIN][instance.subentry_id]
         entities = [_AdaptiveLightingSensor(coordinator, instance)]
@@ -120,3 +131,94 @@ class _AdaptiveLightingSensor(_ScheduleSensorBase):
             # above for why this is excluded from the recorder.
             "points": data.get("points"),
         }
+
+
+class _WriteTrackingSensor(SensorEntity):
+    """Diagnostic view into write_tracking.py's confirmed/pending
+    override-protection claims - otherwise a black box only inspectable
+    indirectly by probing compute_lighting_groups, which tells you
+    *whether* a light is currently excluded, never *why*.
+
+    Deliberately has no device_info. This data is global to the whole
+    config entry (one LastWriteTracker shared across every apply_lighting
+    call, from every room automation - see write_tracking.py's module
+    docstring), not scoped to any one schedule instance, so there's no
+    single device it naturally belongs on. Giving it a new device of its
+    own would risk reintroducing the "Add Integration creates a device"
+    popup this integration's main entry deliberately avoids (see
+    CLAUDE.md's "Auto-seeded Default sensor" entry) - confirmed against
+    home-assistant/frontend's step-flow-create-entry.ts that the
+    device-rename/area-picker dialog is gated purely on whether *any*
+    device exists for the config entry at render time (a live registry
+    read against `device.primary_config_entry`, not something scoped to
+    just the flow that's completing), for every flow type including
+    options/subentry flows - so an entity with no device at all can never
+    trigger it, regardless of when or how it's created.
+
+    Push-updated via SIGNAL_WRITE_TRACKING_UPDATED rather than polled -
+    write_tracking.py fires it on every mutation (a real write recorded,
+    or a record cleared on a genuine unavailable transition), so this
+    stays live within the same tick rather than lagging behind."""
+
+    _attr_has_entity_name = True
+    _attr_name = "Adaptive Lighting Write Tracking"
+    _attr_icon = "mdi:text-search"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_should_poll = False
+    _attr_native_unit_of_measurement = "entities"
+    # The per-entity breakdown can run to several dozen lights - no
+    # value in the recorder's history for a live diagnostic snapshot,
+    # and it risks the same 16KB attribute-size warning `points` hit on
+    # the schedule sensor above.
+    _unrecorded_attributes = frozenset({"entities"})
+
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry, write_tracker: LastWriteTracker) -> None:
+        self.hass = hass
+        self._write_tracker = write_tracker
+        self._attr_unique_id = f"{entry.entry_id}_write_tracking"
+        self.entity_id = "sensor.adaptive_lighting_write_tracking"
+
+    async def async_added_to_hass(self) -> None:
+        self.async_on_remove(async_dispatcher_connect(self.hass, SIGNAL_WRITE_TRACKING_UPDATED, self._handle_update))
+
+    @callback
+    def _handle_update(self) -> None:
+        self.async_write_ha_state()
+
+    @property
+    def native_value(self) -> int:
+        return len(self._write_tracker.snapshot())
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        entities: dict[str, Any] = {}
+        for entity_id, record in self._write_tracker.snapshot().items():
+            state = self.hass.states.get(entity_id)
+            live_context_id = state.context.id if state is not None else None
+            confirmed = record.get("confirmed")
+            pending = record.get("pending")
+            if state is None or state.state in ("unavailable", "unknown"):
+                status = "unavailable"
+            elif pending is not None and pending["context_id"] == live_context_id:
+                # Our most recent attempt landed - not yet reconfirmed by
+                # a later tick, but not stale either.
+                status = "pending"
+            elif confirmed is not None and confirmed["context_id"] == live_context_id:
+                # Settled: matches the last write some earlier call
+                # actually observed landing.
+                status = "confirmed"
+            else:
+                # Live context matches neither claim - something else
+                # has touched this light since. Whether that counts as
+                # "externally set" for a given caller also depends on
+                # owner_id (see grouping.py's externally_set()), which
+                # this view can't show without knowing which owner_id is
+                # asking - shown here as the raw signal instead.
+                status = "mismatched"
+            entities[entity_id] = {
+                "status": status,
+                "live_context_id": live_context_id,
+                "confirmed": confirmed,
+                "pending": pending,
+            }
+        return {"entities": entities}

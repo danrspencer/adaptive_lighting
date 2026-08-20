@@ -1746,6 +1746,112 @@ designs were explored:
   confirmed/pending promotion rule and the first-write baseline, not
   just the two-line summary here.
 
+- **`sensor.adaptive_lighting_write_tracking` added, 2026-08-20 - the
+  confirmed/pending mechanism above stopped being a black box.** User's
+  own framing, right after the redesign shipped: "can we do something
+  like add a sensor to the integration which surfaces the owner_id
+  tracking so that a user can see whats going on? I don't like it being
+  a black box." Exposes `write_tracking.py`'s raw `confirmed`/`pending`
+  claims per light, plus a computed `status` (`confirmed`/`pending`/
+  `mismatched`/`unavailable`) so a user doesn't have to mentally re-run
+  `externally_set()`'s own comparison logic themselves.
+
+  **Verified against home-assistant/frontend source before deciding
+  where this entity lives, not guessed - directly informed by the
+  "Auto-seeded Default sensor" incident earlier in this file.** That
+  incident's fix was "Add Integration creates zero devices" specifically
+  to avoid HA's device-rename/area-picker dialog firing unwanted. Before
+  adding a NEW device for this sensor, fetched
+  `step-flow-create-entry.ts` directly and confirmed the dialog's own
+  logic: it renders whenever *any* device exists for the config entry
+  at render time (a live registry read against
+  `device.primary_config_entry`, not something scoped to just the
+  entities the flow itself returned) - true for every flow type
+  (config, subentry, options), and with zero devices it renders nothing
+  but a plain confirmation instead. Conclusion: **the sensor gets no
+  `device_info` at all** - an entity attached to no device can never
+  appear in `this.devices`, so it can't trigger that dialog regardless
+  of when or how it's created, without needing to gate it behind an
+  explicit "Add X" step the way schedule instances are.
+
+  **A real, previously-latent production bug surfaced as a direct
+  result of wiring this up, unrelated to the sensor's own logic.**
+  Making this entity entry-scoped (existing even with zero "Add Sensor"
+  schedule instances configured) required removing the `if instances:`
+  guard around `hass.config_entries.async_forward_entry_setups(entry,
+  SCHEDULE_PLATFORMS)` in `__init__.py` - previously, `sensor`/`select`/
+  `number`/`time`/`switch` were only ever forwarded when at least one
+  schedule instance existed. The very first test exercising this path
+  crashed with `AttributeError: module
+  'custom_components.adaptive_lighting_helpers.time' has no attribute
+  'time'` - `__init__.py` had `import time` (stdlib) at module scope,
+  and this package also ships its own `time.py` (the HA `time` platform
+  module, part of `SCHEDULE_PLATFORMS`). Importing a submodule
+  unconditionally rebinds it as an attribute of its parent package -
+  which *is* `__init__.py`'s own global namespace - so the moment
+  anything imports `adaptive_lighting_helpers.time`, the name `time` in
+  `__init__.py` silently flips from the stdlib module to this
+  submodule, permanently, for the rest of the process. `compute_curve`'s
+  `call.data.get("at", time.time())` (the only usage) would have raised
+  this exact error in **any real production install with at least one
+  schedule instance configured** the moment `compute_curve` was called
+  without an explicit `at` - the normal case - which is every real
+  install, since `async_forward_entry_setups` already ran unconditionally
+  there whenever `instances` was non-empty, well before this change. It
+  was never caught before because no existing test configures a real
+  schedule subentry (grepped for `subentry_type`/`ConfigSubentry` across
+  `tests/` - zero matches), so this forwarding path had literally never
+  been exercised by pytest, only confirmed live for the entities that
+  path creates (never for `compute_curve`'s own "at" defaulting in the
+  same process). Fixed by aliasing the import (`import time as
+  time_module`), which cannot collide with any submodule name.
+
+  **Two `MockConfigEntry`-based integration test files needed a
+  `mock_state(hass, ConfigEntryState.LOADED)` call added** (in
+  `tests/integration/test_services.py`'s `_setup_entry` and
+  `tests/integration/test_two_step_repair.py`'s `_setup`) -
+  `async_forward_entry_setups` now always runs, and it requires the
+  entry to already be in `LOADED` state, normally something
+  `hass.config_entries.async_setup()` does around calling into a
+  component - both files deliberately call `async_setup_entry` directly
+  instead (see `test_services.py`'s own docstring: avoids resolving the
+  `http`/`frontend` manifest dependencies, needed only for the dashboard
+  card, which would pull in the separate, large `home-assistant-frontend`
+  package these tests never touch). `mock_state()` is a real, sanctioned
+  pytest-homeassistant-custom-component helper for exactly this "can't
+  get here via normal config entry methods" situation.
+
+  **The new sensor's own tests deliberately don't go through
+  `async_setup_entry`/full platform forwarding at all**
+  (`tests/integration/test_write_tracking_sensor.py`) - `frontend`
+  being a genuinely unresolvable manifest dependency in this test venv
+  (no `home-assistant-frontend` package installed, deliberately, same
+  reasoning as above) means that path can't be exercised here without
+  reintroducing the exact "large, untouched dependency" `test_services.py`
+  already avoids. Instead the entity is constructed directly (`hass`/
+  `entity_id` set by hand) and its `native_value`/`extra_state_attributes`
+  properties read as plain Python - this tests the actual thing that
+  matters (status classification, live push-updates via
+  `SIGNAL_WRITE_TRACKING_UPDATED`) without needing HA's platform
+  machinery at all, matching how `tests/test_grouping.py` already
+  exercises `EntityLookup` through plain fakes rather than real
+  entities. The two claims that specifically depend on that machinery -
+  auto-registration with zero schedule instances, and genuinely having
+  no device in the real registry - were confirmed live against the real
+  instance instead, not left untested (see below).
+
+  Mutation-verified: swapping the `pending`/`confirmed` branch order in
+  the status classification fails exactly
+  `test_status_pending_when_live_context_matches_pending_only`.
+  Full suite: 138/138.
+
+  **Confirmed live end-to-end** after HACS update + restart:
+  `sensor.adaptive_lighting_write_tracking` exists with `device_id:
+  null` in the entity registry (no device, as designed), its state
+  reflects the real count of tracked lights, and its `entities`
+  attribute shows real `confirmed`/`pending` claims with the expected
+  `status` for lights under active override protection.
+
 **Deployment / operational notes:**
 - pyscript is fully gone, both from this repo and the live host.
 - The dev git-sync automation (polling this repo for new commits and
