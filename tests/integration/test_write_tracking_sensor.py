@@ -129,14 +129,15 @@ async def test_status_unavailable_when_the_entity_has_no_live_state(
     assert record["live_context_id"] is None
 
 
-async def test_updates_push_via_dispatcher_signal_not_poll(
+async def test_updates_push_via_dispatcher_signal_without_waiting_for_a_poll(
     hass: HomeAssistant, write_tracker: LastWriteTracker, sensor_entity: _WriteTrackingSensor
 ):
     """No sleep, no time advance - async_record must fire
     SIGNAL_WRITE_TRACKING_UPDATED synchronously, which
-    async_added_to_hass wires straight to async_write_ha_state()."""
-    assert sensor_entity._attr_should_poll is False
-
+    async_added_to_hass wires straight to async_write_ha_state(), so a
+    real write is reflected instantly rather than waiting for the next
+    poll (also enabled - see the entity's own docstring for why both are
+    needed)."""
     await sensor_entity.async_added_to_hass()
     _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
 
@@ -146,3 +147,40 @@ async def test_updates_push_via_dispatcher_signal_not_poll(
     state = hass.states.get("sensor.adaptive_lighting_write_tracking")
     assert state is not None
     assert state.state == "1"
+
+
+async def test_a_poll_refreshes_status_even_when_write_tracking_itself_has_not_changed(
+    hass: HomeAssistant, write_tracker: LastWriteTracker, sensor_entity: _WriteTrackingSensor
+):
+    """The bug caught live right after this sensor's first deploy: every
+    tracked light showed "unavailable" long after a restart, because the
+    push signal only fires on a write_tracking.py mutation - a light's
+    *live* state can change with no write ever happening (exactly what a
+    restart does, briefly, to every reconnecting entity), and nothing
+    refreshed the state machine's cached copy once that live state
+    genuinely changed. Polling is the fix - this reproduces it by
+    changing live state with no write_tracker activity at all, then
+    forcing a poll cycle exactly as HA's own scheduler would."""
+    # async_update_ha_state(force_refresh=True) below bypasses
+    # should_poll entirely by design, so it alone can't prove polling is
+    # actually enabled - check the flag directly too.
+    assert sensor_entity.should_poll is True
+
+    await sensor_entity.async_added_to_hass()
+    _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
+    # Pushes once, capturing the light as still "off" at this instant -
+    # write_tracker has no way to know the write is about to land.
+    await write_tracker.async_record(["light.a"], {"light.a": None}, "ctx-1", "automation.room")
+    await hass.async_block_till_done()
+
+    # Reflect the write landing - a live-state-only change, no
+    # write_tracker activity, so no push fires. The state machine's
+    # cached copy is now stale, still showing the pre-write snapshot.
+    _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], context=Context(id="ctx-1"))
+    stale = hass.states.get("sensor.adaptive_lighting_write_tracking").attributes["entities"]["light.a"]
+    assert stale["status"] != "pending", "test premise broken: expected the pre-poll snapshot to be stale"
+
+    await sensor_entity.async_update_ha_state(force_refresh=True)
+
+    fresh = hass.states.get("sensor.adaptive_lighting_write_tracking").attributes["entities"]["light.a"]
+    assert fresh["status"] == "pending"

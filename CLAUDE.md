@@ -1852,6 +1852,49 @@ designs were explored:
   attribute shows real `confirmed`/`pending` claims with the expected
   `status` for lights under active override protection.
 
+- **`sensor.adaptive_lighting_write_tracking` shipped push-only, and
+  went stale within minutes of its own first deploy - found and fixed
+  the same day, 2026-08-20.** Live-checking the sensor right after
+  deploying it (the very validation the entry above describes) showed
+  every one of 58 tracked lights reading `status: "unavailable"` -
+  including `light.living_room_pendant_1`/`_2`, confirmed separately
+  via a direct `ha_get_state` to actually be `"off"`, not unavailable at
+  all. Root cause: the sensor was wired to update only on
+  `SIGNAL_WRITE_TRACKING_UPDATED` (fired from `write_tracking.py`'s
+  `async_record`/clear-on-unavailable listener), but `status` is
+  computed by comparing `confirmed`/`pending` against each light's
+  *live* state - which can change with nothing ever calling
+  `apply_lighting` in between. A restart is exactly that case: most
+  entities briefly report `unavailable` while their own integration
+  reconnects, entirely independent of write-tracking. The sensor's one
+  and only push, fired when `async_add_entities` first registered it
+  moments after restart, froze that transient window into the state
+  machine - and with no light needing a real write since (nothing had
+  drifted from target), nothing ever pushed again to correct it.
+
+  Fixed by also polling (`should_poll` defaults to `True` when left
+  unset, HA's own `DEFAULT_SCAN_INTERVAL` of 15s) alongside the
+  existing push - push still makes a real write feel instant, polling
+  is what keeps everything else honest. `docs/HELPERS.md` corrected to
+  match (previously claimed "not on a poll").
+
+  Two things worth keeping in mind for anything built on this same
+  push-only pattern again: (1) a sensor whose `state`/attributes only
+  read data *this integration itself* wrote can safely be push-only,
+  but the moment it also compares against something *external* (here,
+  live entity state, set by physical devices/other automations), a
+  push tied only to *this integration's* own write events cannot stay
+  correct - the external half needs its own refresh path. (2) a test
+  that reads an entity's properties directly (`sensor_entity.native_value`,
+  as this feature's own initial tests did) can never catch this class
+  of bug, since properties are always freshly computed on access - only
+  a test reading the *state machine's* cached copy
+  (`hass.states.get(...).attributes`) exercises the actual staleness
+  the real symptom lived in.
+  `test_a_poll_refreshes_status_even_when_write_tracking_itself_has_not_changed`
+  added, doing exactly that; mutation-verified (reverting to
+  `should_poll = False` fails it, and only it). Full suite: 139/139.
+
 **Deployment / operational notes:**
 - pyscript is fully gone, both from this repo and the live host.
 - The dev git-sync automation (polling this repo for new commits and
