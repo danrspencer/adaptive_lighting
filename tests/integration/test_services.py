@@ -169,7 +169,17 @@ async def test_override_protection_survives_a_real_write_tracking_round_trip(set
     write_tracking.py Store and __init__.py's context propagation, not
     a fake. A light manually changed (a different context.id) after our
     own write must be left alone on the next non-forced call with the
-    same owner_id."""
+    same owner_id.
+
+    This is also the direct regression test for the first-write
+    baseline in write_tracking.py's async_record(): only one
+    apply_lighting call ever happens here before the external change,
+    so `confirmed` is never promoted from a prior `pending` - it can
+    only be the synthetic pre-write-context baseline recorded on that
+    first call. Reverting that baseline back to `confirmed = None`
+    makes this fail (the external change would be waved through as
+    "no record yet -> free" instead of correctly recognised as
+    external)."""
     hass = setup_integration
     turn_on_calls = async_mock_service(hass, "light", "turn_on")
     _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
@@ -229,6 +239,60 @@ async def test_override_protection_survives_a_real_write_tracking_round_trip(set
     # Still just the one call from before - the second, non-forced call
     # correctly left the externally-changed light alone.
     assert len(turn_on_calls) == 1
+
+
+async def test_a_dropped_first_write_self_heals_on_the_next_tick_with_no_interference(
+    setup_integration: HomeAssistant,
+):
+    """The other half of the first-write story alongside the round-trip
+    test above: a light whose very first write from us never actually
+    lands (the physical bulb silently drops it - state stays completely
+    unchanged, unlike the round-trip test's genuine external change)
+    must still be retried on the next tick, not locked out. This is the
+    production bug the whole confirmed/pending redesign exists to fix
+    (a kitchen light that dropped a colour-mode command and sat stuck
+    for over an hour - see write_tracking.py's own module docstring)."""
+    hass = setup_integration
+    turn_on_calls = async_mock_service(hass, "light", "turn_on")
+    # Already on, at a brightness/colour that will need correcting -
+    # off->on writes bypass the override check entirely (see
+    # externally_set()'s own is_state guard), so this has to start "on"
+    # to actually exercise it.
+    _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=90, color_temp_kelvin=3200)
+    _set_sensor(hass, brightness=180, color_temp=3200)
+
+    await hass.services.async_call(
+        DOMAIN,
+        "apply_lighting",
+        {
+            "entities": ["light.a"],
+            "sensor_entity_id": "sensor.test_adaptive",
+            "transition": 2,
+            "owner_id": "automation.test_room",
+        },
+        blocking=True,
+    )
+    assert len(turn_on_calls) == 1
+
+    # The write drops: state is deliberately left untouched, simulating
+    # the physical bulb never adopting the command.
+
+    await hass.services.async_call(
+        DOMAIN,
+        "apply_lighting",
+        {
+            "entities": ["light.a"],
+            "sensor_entity_id": "sensor.test_adaptive",
+            "transition": 2,
+            "owner_id": "automation.test_room",
+        },
+        blocking=True,
+    )
+
+    # Retried, not locked out - the unchanged live context matched the
+    # first-write baseline, so the second call still recognised light.a
+    # as free to manage.
+    assert len(turn_on_calls) == 2
 
 
 async def test_force_bypasses_protection_and_reclaims_ownership(setup_integration: HomeAssistant):

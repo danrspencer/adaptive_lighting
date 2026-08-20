@@ -41,8 +41,14 @@ class EntityLookup:
     device_id: Callable[[str], Optional[str]]
     labels: Callable[[str], list]
     context_id: Callable[[str], Optional[str]]
-    last_write_context_id: Callable[[str], Optional[str]]
-    last_write_owner_id: Callable[[str], Optional[str]]
+    # Two independent claims per entity, not one - see write_tracking.py's
+    # module docstring for why. "confirmed" is a write some earlier call
+    # actually observed landing; "pending" is the most recent attempt,
+    # not yet verified either way.
+    confirmed_context_id: Callable[[str], Optional[str]]
+    confirmed_owner_id: Callable[[str], Optional[str]]
+    pending_context_id: Callable[[str], Optional[str]]
+    pending_owner_id: Callable[[str], Optional[str]]
 
     def reachable(self, entity_id: str) -> bool:
         """False for anything HA already knows it can't reach - no point commanding it."""
@@ -80,22 +86,44 @@ class EntityLookup:
         optional: pass None (the default - "I don't care who touched
         this last") to skip the check altogether too, same as force,
         but - unlike force - without claiming anything for later calls
-        to recognise. Passing a value (and force left False) asks two
-        independent questions, in order:
+        to recognise.
 
-        1. Has *anything* touched this entity since the last recorded
-           write (regardless of who made it)? Checked via context.id -
-           this must stay the primary signal, since context.id changes
-           on every write from any source, whereas an unchanged owner_id
-           alone wouldn't catch a human editing the light between two
-           ticks of the *same* automation.
-        2. If not, was that last recorded write made under *this same*
-           owner_id? A write recorded under a different owner_id (a
-           different apply_lighting caller) counts as external too,
-           even though nothing about the light's own context has
-           changed since. A write recorded with *no* owner_id at all
-           (the caller omitted it, rather than passing force) doesn't
-           count against anyone - there was no claim to conflict with.
+        Two independent claims are checked, not one - see
+        write_tracking.py's module docstring for the full reasoning.
+        `confirmed` is a write some earlier call actually observed
+        landing; `pending` is the most recent attempt, not yet verified
+        either way (apply_lighting records the context it *issues*, not
+        one it's confirmed the device adopted - the two are asynchronous,
+        so a dropped command still gets optimistically recorded). Passing
+        an owner_id (and force left False) asks, in order:
+
+        1. Does the entity's current context.id match `pending`? If so,
+           the most recent write landed - not externally set, subject to
+           the owner check below.
+        2. If not, does it match `confirmed` instead? If so, `pending`
+           never landed (the device dropped it, or hasn't caught up yet)
+           but the light is still ours as of the last write that
+           *did* land - not externally set, same owner check.
+        3. If neither matches, and there's no `confirmed` at all yet -
+           only ever one unconfirmed attempt has been made, and it
+           doesn't match either - there isn't enough evidence yet to
+           call this external. Stay lenient (not externally set) rather
+           than lock the light out over a single write whose fate is
+           still unknown; this is the one gap the two-claim design
+           doesn't close (see write_tracking.py's module docstring) -
+           a light's very first tracked write, if it happens to be the
+           one that gets dropped, is indistinguishable from a genuinely
+           external change until a `confirmed` baseline exists to check
+           against.
+        4. Otherwise (a `confirmed` claim exists and neither it nor
+           `pending` matches): genuinely externally set.
+
+        The owner check, wherever a context matches: a claim's owner_id
+        of None doesn't count against anyone (no claim was ever made);
+        otherwise it must equal this caller's own owner_id, or the
+        matching write belongs to a *different* apply_lighting caller
+        (e.g. a different room's automation) and counts as external too,
+        even though nothing about the light's own context has changed.
 
         No remembered write at all (a brand new entity, or the very
         first tick before anything's been recorded) counts as free to
@@ -104,31 +132,38 @@ class EntityLookup:
         old check. Checked fresh against live state every call, so
         there's nothing to expire: once a light is turned off, this
         naturally stops being true on its own (the is_state check above
-        fails first). A device recovering from unavailable is the
-        opposite case - its own reconnect state report is itself a
-        fresh-context write, so it *becomes* externally-set rather than
-        stops being it, and stays that way indefinitely at this layer
-        alone (nothing here ever un-marks it) unless something calls
-        back in with force=True. The blueprint's own `recovered` trigger
-        is what actually does that, force-resyncing just that entity
-        (while still passing its own owner_id, so normal ticks
-        afterward recognise it) - see docs/BLUEPRINT.md's "Override
-        detection" section."""
+        fails first). A device recovering from unavailable is a
+        different case, handled entirely by write_tracking.py clearing
+        the whole record (both claims) the moment the entity is observed
+        going unavailable - by the time it reconnects there's nothing
+        left here to compare against at all, so it falls into "no
+        remembered write," not into the lenient-pending case above."""
         if not self.is_state(entity_id, "on"):
             return False
         if force:
             return False
         if owner_id is None:
             return False
-        last_write_context = self.last_write_context_id(entity_id)
-        if last_write_context is None:
+
+        confirmed_context = self.confirmed_context_id(entity_id)
+        pending_context = self.pending_context_id(entity_id)
+        if confirmed_context is None and pending_context is None:
             return False
-        if self.context_id(entity_id) != last_write_context:
-            return True
-        last_owner = self.last_write_owner_id(entity_id)
-        if last_owner is None:
+
+        current_context = self.context_id(entity_id)
+
+        if pending_context is not None and current_context == pending_context:
+            claim_owner = self.pending_owner_id(entity_id)
+            return claim_owner is not None and claim_owner != owner_id
+
+        if confirmed_context is not None and current_context == confirmed_context:
+            claim_owner = self.confirmed_owner_id(entity_id)
+            return claim_owner is not None and claim_owner != owner_id
+
+        if confirmed_context is None:
             return False
-        return last_owner != owner_id
+
+        return True
 
     def supports_rgb(self, entity_id: str) -> bool:
         """True if the entity's supported_color_modes includes any mode
