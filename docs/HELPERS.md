@@ -149,15 +149,18 @@ this happens *promptly* (the moment a light actually recovers, rather than waiti
 
 A plain Home Assistant restart needs its own handling, separate from the above: it gives *every* entity a
 fresh context the moment HA comes back up, even a light that never actually went unavailable and whose
-reported value hasn't changed at all - the clear-on-unavailable listener above only ever fires on an
-*observed* transition, and by the time it's listening again after a restart, an entity that stayed
-continuously "on" through the whole thing has already reported its post-restart state under a context this
-integration never saw change. Left alone, every already-tracked light would look externally set the moment
-HA restarts, and - since an externally-set light is never written - stay that way until something else
-happened to touch it. This integration closes that gap too: on startup, it snapshots each tracked entity's
-current live context as its new baseline (the same "no real claim, but nothing's changed" logic a first-ever
-write already uses), so a plain, non-forced call manages it normally on the very next tick instead of treating
-the restart itself as an override.
+reported value hasn't changed at all - a genuine drop is only one of the two ways a light's context can change
+without this integration seeing it happen. Left alone, every already-tracked light would look externally set
+the moment HA restarts, and - since an externally-set light is never written - stay that way until something
+else happened to touch it. This integration closes the gap two ways together, since either alone misses some
+lights: on startup, it snapshots the current live context of every tracked entity that's *already* reporting a
+real state as its new baseline (the same "no real claim, but nothing's changed" logic a first-ever write
+already uses); and, since a real restart puts nearly every entity through `unavailable`/`unknown` first, and
+this one-shot pass runs early enough that some are still mid-reconnect when it does, the clear-on-unavailable
+listener above also watches the *opposite* direction - the moment any tracked entity is seen coming back from
+unavailable/unknown to a real state, it gets the identical snapshot treatment, live, rather than staying
+stuck until whatever caught it at startup happens again. Either way, a plain, non-forced call manages the
+light normally on the very next tick instead of treating the restart itself as an override.
 
 ### Inspecting write-tracking state
 

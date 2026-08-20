@@ -2076,6 +2076,110 @@ designs were explored:
   paragraph on this specific gap, alongside the existing device-recovery
   one it's easy to conflate with but is mechanically distinct from.
 
+- **The restart-resync fix above shipped incomplete - found live within
+  minutes of its own deploy, fixed the same day, 2026-08-20.** The
+  restart that deployed it was also the first real test of it, per the
+  user's own explicit instruction to verify thoroughly rather than
+  declare success from a first glance. Most lights looked fine
+  afterward, but `light.kitchen_2` - genuinely on, same room, same
+  automation, same regular tick as several siblings that *had*
+  recovered - stayed excluded through multiple ticks. Confirmed
+  directly, twice, with fresh `compute_lighting_groups` probes (the
+  first read turned out to be comparing against a stale sensor
+  snapshot from a few minutes earlier, caught by re-fetching before
+  concluding anything - several other lights that looked stuck in that
+  stale read had already self-healed via a real tick by the time they
+  were re-checked).
+
+  Root cause: `async_resync_to_live_state` runs once, early in startup,
+  and correctly skips anything still `unavailable`/`unknown` at that
+  exact moment (so it doesn't manufacture a claim from a state that
+  isn't really there yet). But a real restart puts *nearly every*
+  entity through `unavailable`/`unknown` first - confirmed via
+  `ha_get_history` that `light.kitchen_1` and `light.kitchen_2` both
+  went `on -> unavailable -> unknown -> on` within the same few seconds
+  of each other during the same restart. Whether a given light lands in
+  "already reporting by the time resync ran" (fixed) or "still
+  reconnecting" (stuck) is a race with no relationship to which lights
+  matter - `kitchen_1`'s own apparent fix turned out to be unrelated to
+  resync at all once traced through history: it happened to cycle off
+  and back on two minutes later for an unrelated reason, which
+  "turning off ends protection" (a much older, unrelated mechanism)
+  freed on its own.
+
+  Reported to the user in full before touching any code, per their
+  explicit ask - what was found, why, and the proposed fix - rather
+  than silently patching further. **User's reply: "alright, implement
+  it."**
+
+  Fix: `async_start_listening`'s existing clear-on-unavailable listener
+  now watches *both* directions of the unavailable/unknown boundary,
+  not just the drop. Recovery (unavailable/unknown, or no prior state
+  at all, to a real state) gets the identical snapshot
+  `async_resync_to_live_state` performs at startup - factored into a
+  shared `_snapshot_confirmed` helper - closing the timing race
+  entirely rather than depending on startup ordering. The two
+  directions are **not symmetric**, and getting this wrong broke a
+  previously-passing test immediately: drop only fires when the new
+  state explicitly *reports* `unavailable`/`unknown` as a string - not
+  merely when `new_state` is absent (an entity fully removed from the
+  state machine, e.g. `hass.states.async_remove`, or a fresh process's
+  own state machine having no entry for it yet). A first draft treated
+  "absent" and "unavailable" as equivalent for the drop direction too,
+  which immediately broke
+  `test_a_restart_style_unavailable_blip_does_not_clear_an_existing_record`
+  - reopening the exact "wiped on every restart" incident that test
+  guards, since an entity's in-memory state always vanishes before it
+  re-registers on every restart. Recovery has no equivalent asymmetry:
+  "no prior state at all" is exactly the case it's meant to catch too
+  (a fresh process's first-ever report for an entity, functionally
+  identical to recovering from a drop from this listener's point of
+  view).
+
+  **A real, unrelated bug caught in passing while refactoring this
+  method**: `async_resync_to_live_state` never actually fired
+  `SIGNAL_WRITE_TRACKING_UPDATED` after a successful pass - present
+  since the method's first draft, never caught because no existing test
+  asserted on the signal firing specifically. Fixed in the same change,
+  since it was touched anyway.
+
+  **The first version of the new test didn't actually test the new
+  code at all - caught by running the mutation check, not by reading
+  the test back.** Two consecutive test-design mistakes, both worth
+  keeping in mind for anything touching this listener again:
+  1. The first draft reached "unavailable" via a live off->unavailable
+     transition. That transition trips the *existing*, already-correct
+     drop branch, which clears the record and makes the light "free to
+     manage" via the pre-existing "no record -> free" fallback -
+     entirely independent of whatever the new recovery branch does.
+     Disabling the new branch left the test passing regardless. Fixed
+     by setting "unavailable" as the entity's *first-ever* state in the
+     test's own hass instance (`old_state=None`) instead - not a
+     transition the listener's drop branch could ever have fired on,
+     matching what light.kitchen_2 actually looked like from a fresh
+     process's point of view: its real drop happened in the *previous*
+     process, before this one's listener ever existed to observe it.
+  2. Even after that fix, the seeded record used a single
+     `async_record` call with `live_context_before_write=None`, which
+     produces `confirmed=None` (the synthetic-baseline path explicitly
+     declines to fabricate one without a real prior context - see
+     `async_record`'s own docstring). A record with `confirmed=None` is
+     *always* lenient regardless of what recovers, by
+     `externally_set()`'s own final fallback - so this also passed with
+     the new branch disabled. Fixed by seeding two real writes instead,
+     so `confirmed` promotes to an actual claim before the
+     unavailable/recovery sequence begins.
+
+  Both mistakes were caught the same way: applying the mutation (delete
+  the new branch) and confirming the test still passed when it should
+  have failed - not just reading the test and assuming it was testing
+  what its name said. The final version mutation-fails correctly, and
+  only that test.
+
+  `docs/HELPERS.md`'s restart paragraph rewritten to describe both
+  directions together, rather than presenting the startup pass as if it
+  were the whole story. Full suite: 145/145.
+
 **Deployment / operational notes:**
 - pyscript is fully gone, both from this repo and the live host.
 - The dev git-sync automation (polling this repo for new commits and
