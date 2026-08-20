@@ -170,6 +170,16 @@ clear-on-unavailable event, and also polls every 15s - a light's live state can 
 `write_tracking.py` ever being touched (a restart, most obviously), and only polling keeps `status` correct in
 that case too.
 
+Each claim also carries `recorded_at` (ISO 8601, or `null` for the synthetic first-write baseline - see
+`async_record`'s docstring) - when write_tracking.py actually stamped that claim. It's what lets the
+**Adaptive Lighting Write Tracking** dashboard card (`custom:adaptive-lighting-write-tracking-card`, ships with
+the integration the same way the curve card does - see
+[dashboard/write-tracking-card.yaml](../dashboard/write-tracking-card.yaml) for the snippet to paste in) trace a
+claim's raw `context.id` back to what actually happened: clicking "Trace" on a claim queries HA's own logbook
+(`logbook/get_events`, filtered by `context_id`) over a narrow window around `recorded_at`, rather than this
+integration trying to re-derive "what caused this" itself. A claim with no `recorded_at` can't be traced this
+way - there's no time window to search.
+
 ## `adaptive_lighting_helpers.compute_lighting_groups`
 
 The pure-planner version of `apply_lighting`: given a set of light entities, a target brightness/colour-temperature,

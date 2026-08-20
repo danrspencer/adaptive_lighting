@@ -1895,6 +1895,110 @@ designs were explored:
   added, doing exactly that; mutation-verified (reverting to
   `should_poll = False` fails it, and only it). Full suite: 139/139.
 
+- **`adaptive-lighting-write-tracking-card` added, 2026-08-20 - a UI
+  for the sensor above, with trace-back to what actually happened.**
+  User's own follow-on ask, right after seeing the sensor's raw
+  attribute dump: *"can we also have a UI element that tracks this? it
+  should probably have each bulb we're tracking, then the actual action
+  in the confirmed slot (so trace the context id back) and same for
+  pending/unconfirmed."*
+
+  **"Trace the context id back" has a real, low-effort answer: HA's own
+  logbook, not anything this integration needs to reimplement.**
+  Confirmed against HA core source before building anything -
+  `logbook/get_events`, a public WebSocket command
+  (`homeassistant/components/logbook/websocket_api.py`), accepts a
+  `context_id` filter directly and returns resolved, human-readable
+  entries (who, what, when) - HA already walks a context back through
+  whatever chain produced it (an automation run, a service call, the
+  resulting state change) for its own Logbook UI; a card can call the
+  exact same command client-side with zero new backend logic. The one
+  gap: that command requires a `start_time` (no way to search "any
+  time"), and nothing recorded *when* each claim was made - so a card
+  querying it would have to guess a search window or scan unbounded
+  history.
+
+  **Fixed by adding `recorded_at` (ISO 8601) to `_ContextClaim` in
+  write_tracking.py** - stamped at `async_record` time for a real write;
+  left `None` for the synthetic first-write baseline (see that entry
+  above), since that context was only ever *observed*, not recorded,
+  and a timestamp there would claim precision that doesn't exist. This
+  is useful independent of the card too - the sensor's raw attribute
+  dump now answers "how long has this been pending" at a glance. Old
+  persisted claims (pre-`recorded_at`) migrate with `recorded_at: None`
+  on load, same "don't reopen a protection gap on upgrade" precedent
+  `async_load`'s other migration branch already established.
+
+  **Card placement decided via `AskUserQuestion` before building**: a
+  new standalone card (what shipped) vs. folding into the existing
+  curve card as a second tab. User picked standalone - the curve card
+  is schedule-scoped (one per named sensor instance); write-tracking is
+  global across every light in the house, an awkward fit for a
+  per-room card.
+
+  **Design**: one row per tracked light (entity, live status badge,
+  confirmed claim, pending claim), sorted "most interesting first"
+  (mismatched, pending, unavailable, confirmed) rather than
+  alphabetically, plus a text filter (by entity_id or owner_id - useful
+  given a real house showed 58 tracked lights in one flat list).
+  Clicking a light opens its more-info dialog (a standard
+  `hass-more-info` custom event, same mechanism any Lovelace card
+  uses). Tracing is **lazy, not eager** - resolving every claim's
+  context.id on every render would mean dozens of logbook queries per
+  card update for information nobody's looking at yet; a "Trace" button
+  per claim fires exactly one WebSocket call, only when clicked,
+  narrowed to ±a few seconds around that claim's own `recorded_at`.
+
+  **Two real bugs caught before shipping, both found through direct
+  interactive testing of the rendered card, not just reading the code
+  back:**
+  1. The filter input lost focus and cursor position on every
+     keystroke - each keystroke triggers a full re-render (the same
+     wholesale `innerHTML` replacement pattern the curve card already
+     uses), which necessarily creates a brand-new `<input>` element each
+     time. The first draft tried to restore focus by comparing the *old*
+     element reference *after* the DOM had already been replaced -
+     always false, since that reference was already stale. Fixed by
+     capturing focus/caret state from the *previous* input at the very
+     start of `_render()`, before the replacement happens, then
+     re-applying it to the *new* input afterward.
+  2. `document.querySelector`-based verification of the trace flow
+     initially appeared to hang forever on "Tracing…" - traced to the
+     same class of stale-reference bug in the *test*, not the card: a
+     `<tr>` reference captured before the trace resolved becomes
+     detached from the live DOM the moment the async resolution's own
+     `_render()` call replaces `innerHTML` again: re-reading
+     `.textContent` off a detached node just returns what it was at
+     detach time, not live content. Re-querying the row fresh after the
+     wait showed the trace had in fact resolved correctly
+     (`"Kitchen Pendant 1 turned on"`) - not a card bug, but the same
+     underlying lesson as bug 1: this card's live-rebuild rendering
+     model means *any* reference into its shadow DOM is only valid
+     until the next `_render()` call, whether held by the card's own
+     code or by something inspecting it from outside.
+
+  **Verified functionally through direct DOM/event interaction in a
+  real browser** (`dashboard/preview.html`, extended with synthetic
+  data covering all four statuses and a mocked `callWS`), not just a
+  visual screenshot - the session's screenshot capture was stuck
+  returning stale frames throughout this session (confirmed via
+  `window.scrollY` changing correctly while the returned image never
+  updated - a tool-level issue, not a rendering one). Confirmed instead
+  via direct shadow-DOM inspection and simulated events: correct
+  row count and status-priority sort order, correct owner-name/relative-
+  time display, the full async trace flow (loading -> resolved text),
+  the filter narrowing rows while the input kept focus and caret
+  position, all four status badges computing the right background
+  colour, and a light-cell click dispatching `hass-more-info` with the
+  right `entityId`.
+
+  `dashboard/write-tracking-card.yaml` added (the copy-paste snippet,
+  matching `house-settings-card.yaml`'s pattern) - simpler than the
+  curve card's, since the sensor it reads is a single entry-scoped
+  entity with no per-room name to substitute. `docs/HELPERS.md`'s
+  "Inspecting write-tracking state" section and `CONTRIBUTING.md`'s
+  file listing updated to match.
+
 **Deployment / operational notes:**
 - pyscript is fully gone, both from this repo and the live host.
 - The dev git-sync automation (polling this repo for new commits and

@@ -34,10 +34,13 @@ custom_components/adaptive_lighting_helpers/
                    this directly from the integration's own folder
                    (since HA 2026.3.0), no external submission needed
     www/adaptive-lighting-curve-card.js
-                   the dashboard card, served and auto-loaded by the
-                   integration itself (see __init__.py's async_setup) -
-                   ships and updates with the integration, no manual
-                   Lovelace resource registration needed
+                   the day-phase/curve dashboard card
+    www/adaptive-lighting-write-tracking-card.js
+                   the write-tracking diagnostic dashboard card - see
+                   write_tracking.py above
+    Both are served and auto-loaded by the integration itself (see
+    __init__.py's async_setup) - they ship and update with the
+    integration, no manual Lovelace resource registration needed
     curve.py, grouping.py, and scenes.py are pure Python, no Home
     Assistant dependency - testable directly, and usable from anywhere
     that wants the math without the HA service/sensor wrapper around
@@ -73,8 +76,13 @@ dashboard/
                                  fuller section: curve card, phase
                                  override, and every schedule/curve
                                  config entity, laid out as tiles
-    preview.html                renders the real card against synthetic
-                                 data, no Home Assistant instance needed
+    write-tracking-card.yaml   write-tracking diagnostic card config to
+                                 add to a view - no per-room config,
+                                 unlike the curve card, since the
+                                 sensor it reads is entry-scoped
+    preview.html                renders both real cards against
+                                 synthetic data, no Home Assistant
+                                 instance needed
     generate_preview_data.py    generates that synthetic data
     render_preview_svg.py       renders the README's screenshot as a
                                  standalone SVG
@@ -93,7 +101,7 @@ checks, and transition routing are implemented in the integration and unit teste
 implementation notes, including the (fairly involved) history of getting a custom integration to load correctly
 at all.
 
-## Previewing the dashboard card
+## Previewing the dashboard cards
 
 ```bash
 python3 dashboard/generate_preview_data.py
@@ -101,7 +109,9 @@ python3 -m http.server 8934
 # open http://localhost:8934/dashboard/preview.html
 ```
 
-Renders the actual card component against generated data, without a Home Assistant instance.
+Renders both real card components against generated/synthetic data, without a Home Assistant instance. The
+write-tracking card's "Trace" button is exercised against a mocked `callWS` in `preview.html` itself, not a real
+logbook - there's no recorder/logbook data to query without a live instance.
 
 ## Testing
 
