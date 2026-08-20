@@ -147,6 +147,27 @@ caller-side handling needed for this specific case - the blueprint's own `recove
 this happens *promptly* (the moment a light actually recovers, rather than waiting for whatever next calls
 `apply_lighting` for that room) - see [docs/BLUEPRINT.md](BLUEPRINT.md#override-detection).
 
+### Inspecting write-tracking state
+
+`sensor.adaptive_lighting_write_tracking` makes the mechanism above inspectable directly, rather than only
+indirectly through `compute_lighting_groups`'s `combined`/`needing_off` output (which tells you *whether* a
+light is currently excluded, never *why*). Its state is the number of lights currently tracked; its `entities`
+attribute holds, per light, the raw `confirmed`/`pending` claims plus a computed `status`:
+
+- `confirmed` — the light's live `context.id` matches the `confirmed` claim. Settled.
+- `pending` — matches `pending` only, not yet independently reconfirmed by a later tick.
+- `mismatched` — matches neither. Something has touched this light since either recorded write - whether
+  that means "externally set" for a given caller also depends on `owner_id` (see the numbered check above),
+  which this sensor can't evaluate without knowing which `owner_id` would be asking.
+- `unavailable` — the entity currently has no live state to compare against.
+
+This entity is entry-scoped, not tied to any one schedule instance (it exists even with zero "Add Sensor"
+instances configured), and deliberately has no device of its own - the write-tracking data it shows isn't
+naturally owned by any one room's device, and giving it one would mean it shows up in the device-rename/
+area-picker dialog the next time the integration is added, which this project avoids elsewhere for the same
+reason (see CLAUDE.md's "Auto-seeded Default sensor" entry). It updates immediately on every write or
+clear-on-unavailable event, not on a poll.
+
 ## `adaptive_lighting_helpers.compute_lighting_groups`
 
 The pure-planner version of `apply_lighting`: given a set of light entities, a target brightness/colour-temperature,

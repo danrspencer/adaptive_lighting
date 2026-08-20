@@ -19,6 +19,7 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry, async_
 
 from homeassistant.util import dt as dt_util
 
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
@@ -76,8 +77,14 @@ async def _flush_debounce(hass: HomeAssistant) -> None:
 
 
 async def _setup(hass: HomeAssistant, **options) -> MockConfigEntry:
+    """mock_state(LOADED) needed because async_setup_entry now always
+    calls async_forward_entry_setups (for the write-tracking diagnostic
+    sensor, entry-scoped regardless of schedule instances - see
+    sensor.py's _WriteTrackingSensor) - see test_services.py's
+    _setup_entry for the full explanation."""
     entry = MockConfigEntry(domain=DOMAIN, data={}, options=options)
     entry.add_to_hass(hass)
+    entry.mock_state(hass, ConfigEntryState.LOADED)
     assert await async_setup_entry(hass, entry)
     await hass.async_block_till_done()
     return entry

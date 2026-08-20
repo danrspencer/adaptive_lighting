@@ -19,6 +19,7 @@ from __future__ import annotations
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry, async_mock_service
 
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import Context, HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
 
@@ -34,9 +35,18 @@ async def _setup_entry(hass: HomeAssistant) -> MockConfigEntry:
     dashboard card's add_extra_js_url - see __init__.py's async_setup)
     and pull in the separate, large home-assistant-frontend package for
     something these tests never touch. The services themselves don't
-    depend on async_setup() having run at all."""
+    depend on async_setup() having run at all.
+
+    mock_state(LOADED) is needed because async_setup_entry now always
+    calls async_forward_entry_setups (for the write-tracking diagnostic
+    sensor - see sensor.py's _WriteTrackingSensor - which exists
+    regardless of how many schedule instances are configured), and that
+    call requires the entry to already be LOADED - normally something
+    hass.config_entries.async_setup() itself does around calling into
+    the component, which this helper deliberately bypasses."""
     entry = MockConfigEntry(domain=DOMAIN, data={})
     entry.add_to_hass(hass)
+    entry.mock_state(hass, ConfigEntryState.LOADED)
     assert await async_setup_entry(hass, entry)
     await hass.async_block_till_done()
     return entry

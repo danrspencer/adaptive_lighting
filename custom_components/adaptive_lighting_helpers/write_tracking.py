@@ -107,10 +107,16 @@ from __future__ import annotations
 from typing import Optional, TypedDict
 
 from homeassistant.core import CALLBACK_TYPE, Event, EventStateChangedData, HomeAssistant, callback
+from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.storage import Store
 
 STORAGE_VERSION = 1
 STORAGE_KEY = "adaptive_lighting_helpers.last_write_context_ids"
+
+# Fired (with no payload - listeners re-read via snapshot()) whenever
+# self._data changes, so the diagnostic sensor in sensor.py can refresh
+# itself immediately instead of polling - see snapshot()'s own docstring.
+SIGNAL_WRITE_TRACKING_UPDATED = "adaptive_lighting_helpers_write_tracking_updated"
 
 
 class _ContextClaim(TypedDict):
@@ -130,8 +136,18 @@ class LastWriteTracker:
     for why exactly two, not one and not a growing history."""
 
     def __init__(self, hass: HomeAssistant) -> None:
+        self._hass = hass
         self._store: Store[dict[str, _WriteRecord]] = Store(hass, STORAGE_VERSION, STORAGE_KEY)
         self._data: dict[str, _WriteRecord] = {}
+
+    def snapshot(self) -> dict[str, _WriteRecord]:
+        """A shallow copy of every entity currently tracked, for the
+        diagnostic sensor (sensor.py's _WriteTrackingSensor) - this is
+        otherwise a black box only inspectable indirectly through
+        compute_lighting_groups's combined/needing_off output, which
+        tells you *whether* a light is excluded, never *why*. Read-only:
+        callers must not mutate the returned claims."""
+        return dict(self._data)
 
     async def async_load(self) -> None:
         raw = await self._store.async_load() or {}
@@ -250,6 +266,7 @@ class LastWriteTracker:
                 "pending": {"context_id": context_id, "owner_id": owner_id},
             }
         await self._store.async_save(self._data)
+        async_dispatcher_send(self._hass, SIGNAL_WRITE_TRACKING_UPDATED)
 
     def async_start_listening(self, hass: HomeAssistant) -> CALLBACK_TYPE:
         """See the module docstring's "device regaining power" section -
@@ -293,5 +310,6 @@ class LastWriteTracker:
                 return
             del self._data[entity_id]
             hass.async_create_task(self._store.async_save(self._data))
+            async_dispatcher_send(hass, SIGNAL_WRITE_TRACKING_UPDATED)
 
         return hass.bus.async_listen("state_changed", _on_state_changed)
