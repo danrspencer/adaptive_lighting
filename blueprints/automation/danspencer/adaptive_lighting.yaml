@@ -183,8 +183,9 @@ blueprint:
           name: Update Jitter (Optional)
           description: >
             Spreads scheduled updates over a random delay, in seconds,
-            so multiple rooms sharing a sensor don't all send commands
-            at the same instant. Set to 0 to disable.
+            so multiple rooms using the same Adaptive Lighting Sensor
+            don't all send commands at the same instant. Set to 0 to
+            disable.
           default: 15
           selector:
             number:
