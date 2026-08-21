@@ -2207,11 +2207,17 @@ designs were explored:
   already has `options: {for: {seconds: !input no_motion_wait}}}`).
   User's own diagnosis, which is exactly what shipped: "the sensor is
   correct, the lights should only go off once the sensor has registered
-  as empty for the given interval though." A room whose occupancy
-  sensor is genuinely noisy (reports briefly clear, then occupied
-  again, repeatedly - not the same as genuinely empty) could have a
-  `reconcile` tick land on one of those brief gaps and turn the light
-  off immediately, bypassing Wait time (`no_motion_wait`) entirely.
+  as empty for the given interval though." The dining room's occupancy
+  sensor is a plain PIR motion sensor, not a presence sensor (see the
+  "device_class: occupancy doesn't mean..." note above) - it reports
+  clear the moment motion pauses and flips straight back to detected on
+  the next movement, repeatedly, all day, confirmed via its own history
+  during this investigation. That's not a faulty sensor, it's how PIR
+  detection normally behaves with someone present but not constantly
+  moving - which is exactly why `no_motion_wait` exists at all. A
+  `reconcile` tick landing on one of those brief clear windows could
+  turn the light off immediately, bypassing Wait time entirely instead
+  of respecting the debounce Wait time is there to provide.
 
   Two designs tried before landing on what shipped:
   1. **Native `occupancy.is_not_detected` + `for:`** - the more
@@ -2388,6 +2394,33 @@ present (`vol.Required(CONF_TARGET): cv.TARGET_FIELDS`) though every
 field inside it is individually optional, so an empty `target: {}` is
 valid config - it just never matches anything. This is why
 `room_target` defaults to `{}`, not `null`.
+
+**`device_class: occupancy` doesn't mean the underlying sensor can
+actually tell whether someone is still in the room - most of the
+sensors carrying that device_class in this house are plain PIR motion
+sensors, not true presence sensors, and that distinction matters for
+understanding this blueprint's whole occupancy-timing design, not just
+one incident.** A PIR sensor only detects *movement* - it reports clear
+the moment motion stops being detected, including while someone is
+sitting still right in front of it, then flips back to detected the
+instant they move again. Rapid on/off flapping (see the dining room's
+own history in the 2026-08-21 `reconcile` debounce entry below) isn't a
+faulty or noisy sensor - it's the normal, expected behaviour of a PIR
+sensor in a room where someone is present but not constantly moving.
+`no_motion_wait` (Wait time) exists specifically to compensate for
+this: it's not a cosmetic delay before turning lights off, it's the
+mechanism that turns "motion stopped being reported a moment ago" into
+a reasonable proxy for "the room is actually empty now." Only a
+handful of sensors in this house are genuine presence sensors - real
+Aqara FP2-style mmWave radar units, which can detect a still, silent
+person by their breathing/micro-movement and correctly stay
+"occupied" the whole time someone is in the room without needing to
+move. Those don't need `no_motion_wait` to compensate for anything (a
+real presence sensor going clear already means empty), but the
+blueprint has no way to tell the two sensor types apart - both just
+show up as `device_class: occupancy` - so Wait time is sized for the
+PIR case everywhere, room by room, rather than assuming presence-grade
+sensing by default.
 
 Nightlight-style overrides (forcing a room "occupied" regardless of
 real motion, previously the user's own template-sensor workaround)
