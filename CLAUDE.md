@@ -2404,6 +2404,269 @@ designs were explored:
   rate were still ~10%. Not re-flagged as a separate task on that
   basis, but worth revisiting if full-suite flakiness resurfaces.
 
+- **Every room automation was firing twice a minute during any ramping
+  phase, and a light near the tolerance boundary could get double-written
+  across those two near-simultaneous ticks - found live, 2026-08-21,
+  user report: "apparently my adaptive lighting automations are all
+  firing twice a minute."** Confirmed directly via
+  `automation.dining_room_lighting`'s traces: 5 stored traces spanning
+  2.5 minutes, alternating `adaptive` (a `platform: state` trigger on
+  the room's sensor, no `to:`/`from:` filter - fires on *any* change
+  including attribute-only ticks) and `adaptive_tick` (`platform:
+  time_pattern, minutes: /1`, added 2026-08-19 specifically for the
+  *opposite* case - Morning/Night's flat curve, where `adaptive` goes
+  silent entirely), roughly 2 seconds apart, every minute. Root cause:
+  the coordinator polls every 60s (`coordinator.py:75`), and during any
+  phase where the curve is actively ramping (Day, and the evening/night
+  transition - i.e. everything except the flat stretches `adaptive_tick`
+  was built for), every poll produces genuinely different attribute
+  values, so `adaptive` now fires almost every poll too - both triggers
+  end up covering the same underlying event. `grouping.py`'s tolerance
+  check (brightness ±2, color_temp ±10K) suppresses most of the
+  resulting redundant runs from producing a real `light.turn_on`, but
+  not all: confirmed live via `sensor.adaptive_lighting_write_tracking`
+  that `light.dining_room_1` got two separate real writes 57 seconds
+  apart, right at a tolerance-boundary moment - a light sitting close
+  to the edge, with the target still drifting, can flip in and out of
+  "needs update" across both ticks in the same minute.
+
+  User's explicit direction, given three initial options, chose a
+  combined fourth: stop `adaptive` from firing on attribute-only
+  changes (only a genuine phase transition), keep the periodic tick but
+  make its interval configurable, and add jitter so many rooms don't
+  all hit Home Assistant/Zigbee in the same wall-clock second.
+
+  **Design correction, mid-session, user-caught.** A first draft (via a
+  Plan subagent) proposed gating `adaptive` with a new `condition:`
+  entry and a `scene_recheck_due`-style template variable comparing
+  `trigger.from_state.state != trigger.to_state.state`. The user asked
+  instead: "can't we just add the sensor as a real trigger... HA
+  normally only triggers on state change not attribute change?" -
+  verified directly against the pinned HA core source
+  (`homeassistant/components/homeassistant/triggers/state.py`,
+  `async_attach_trigger`): `match_all` is `True` only when *none* of
+  `from`/`not_from`/`to`/`not_to` are present in the trigger config;
+  with any of those keys set, the listener explicitly rejects an event
+  where `old_value == new_value` - i.e. it requires an actual value
+  change once filtered. The `adaptive` trigger had none of those keys,
+  which is *why* it fired on every attribute tick. Adding a `to:`
+  filter listing the sensor's four real phase values is enough on its
+  own - no new `condition:` entry, no new template variable - and is
+  strictly better than the condition-based draft: HA rejects the
+  spurious runs at the event-listener level, before even reaching this
+  automation's `condition:`/`action:`, rather than paying for a full
+  condition evaluation on every rejected tick. `from:` stays
+  unrestricted, so a transition into a real phase from `unknown`/
+  `unavailable` (a restart, or the sensor's first-ever value) still
+  correctly fires - `old_value` is `None` there, which never equals a
+  real phase name.
+
+  **Jitter scope was also corrected mid-session, user-caught.** First
+  scoped to `adaptive_tick` only. User pushed back: "if all the
+  automations have to fire at the same time... I'm not totally sure
+  we're gaining much" - correctly identifying that the *bigger*
+  simultaneous-cascade risk is a genuine phase transition (`adaptive`),
+  not the periodic tick. Once `adaptive` is gated to real transitions,
+  every room sharing one Adaptive Lighting Sensor instance (confirmed
+  live - dining room/kitchen/entrance hall all point at
+  `sensor.ground_floor_adaptive_lighting`) fires at literally the same
+  instant, ~4 times a day - `adaptive_tick`'s own cascade risk is
+  smaller by comparison, since most of its ticks are already no-ops via
+  the tolerance check. Jitter now covers `trigger.id in ['adaptive',
+  'adaptive_tick']`. `extra`/`recovered` are deliberately left out -
+  both are inherently per-room events, not something that fires
+  simultaneously across multiple rooms the way a shared sensor's phase
+  transition or a synchronized `time_pattern` boundary does.
+
+  **What shipped**: `adaptive`'s trigger gained `to: [Morning, Day,
+  Evening, Night]` (a native filter, not a coupling to the phase
+  names' meaning - they're already hardcoded in several other inputs
+  in this blueprint, e.g. `rgb_phases`' selector options).
+  `adaptive_tick`'s `minutes:` is now `!input adaptive_tick_interval`
+  (new input, default `"/1"` - preserves today's cadence exactly, now
+  that this tick is the sole driver of ordinary tracking rather than
+  just the flat-curve fallback). A new `adaptive_tick_jitter` input
+  (default `15` seconds, user's explicit choice - non-zero by default
+  so the thundering-herd problem is actually addressed out of the box,
+  not just for rooms where someone discovers the input) feeds a `delay:`
+  step, first in `action:`, rendering `range(0, N+1) | random` when
+  `trigger.id` is `adaptive`/`adaptive_tick` and `0` otherwise - a `0`
+  delay short-circuits synchronously in HA core's own
+  `_async_step_delay` (`if not delay: return`), so non-jittered
+  triggers pay no real overhead. `mode: restart` (already set on this
+  automation) means a genuine trigger arriving mid-jitter correctly
+  preempts the delayed run - confirmed against `helpers/script.py`: a
+  new run's `Script._async_run` calls `async_stop()` on any in-flight
+  run before starting, resolving `_async_step_delay`'s awaited stop
+  future, so the delayed run's next loop iteration sees `self._stop.done()`
+  and aborts before ever reaching `action:`'s `choose:` block.
+  `scene_recheck_due`'s own `trigger.id == 'adaptive'` branch is now
+  provably unreachable-when-false (any run reaching it already has
+  `from_state.state != to_state.state` by construction, enforced at the
+  trigger level) - left as-is with a comment noting why, rather than
+  simplified in the same change; treat that as a separate, lower-risk
+  cleanup.
+
+  **`reconcile_interval`'s existing description got the same syntax fix
+  while this area was already being touched.** The user's first idea
+  was linking `time_pattern` syntax to crontab.guru; verified live
+  against HA's own docs (`home-assistant.io/docs/automation/trigger/#time-pattern-trigger`)
+  that `time_pattern` is deliberately simpler than standard cron -
+  separate `hours:`/`minutes:`/`seconds:` keys, each only a fixed
+  number, `*`, or a `/N` step, no day-of-month/month/weekday fields, no
+  comma lists or ranges - and HA's own docs never call it cron.
+  crontab.guru expects a single 5-field cron string; pointing users
+  there risks them typing that whole string into a field that only
+  accepts the bare `/5` fragment, which fails `TimePattern.__call__`'s
+  validation (`homeassistant/components/homeassistant/triggers/time_pattern.py`,
+  read directly, not guessed). Both `reconcile_interval` and the new
+  `adaptive_tick_interval` link to HA's own docs page instead.
+
+  **Test impact was much bigger than the initial scan suggested - found
+  while planning, not while implementing.** The autouse `_sensor`
+  fixture in `test_blueprint.py` primes `sensor.test_adaptive = "Day"`
+  for *every* test before the test body runs - so a test's own
+  `hass.states.async_set("sensor.test_adaptive", "Day", {...different
+  attrs...})` has a real prior "Day" `from_state`, not `None`: a
+  genuine same-phase, attribute-only write, exactly the case now
+  filtered out. 11 existing tests relied on this as their sole trigger
+  mechanism and needed a `async_fire_time_changed` advance added
+  (firing via `adaptive_tick` instead) to keep passing - two of them
+  (`test_periodic_adaptive_tick_updates_an_already_on_light`,
+  `test_adaptive_tick_uses_the_adaptive_transition_duration`) had
+  always tested the `adaptive` attribute-fire behavior just removed,
+  not a real periodic tick, despite their names.
+
+  **`_setup_room_automation`'s own baseline `input_` dict needed
+  `"adaptive_tick_jitter": 0` added, not optional.** The blueprint's own
+  jitter default is `15`; without this, every test firing `adaptive`/
+  `adaptive_tick` and checking `apply_lighting_calls` synchronously
+  would need up to a real 15s wait or flake outright - confirmed by
+  actually hitting exactly this hang before adding the fix.
+
+  **The jitter test went through four real designs, not one, each
+  caught by actually running it - repeatedly, not just once - rather
+  than assumed correct after a single green run.** Three of the four
+  rounds only surfaced after this same PR picked up a file-wide
+  `frozen_time` fixture (`freeze_time(..., real_asyncio=True)`,
+  autouse) that landed from a different session mid-flight (see its own
+  dated entry directly above this one) - each fix looked complete in
+  isolation (a single passing run, sometimes several) until run enough
+  times, or as part of the full suite, to expose the next layer.
+
+  1. **First draft**, before the fixture existed: `hass.async_block_till_done()`
+     does not "process what's ready and return" - it genuinely blocks
+     until every task HA is tracking finishes, however long that takes,
+     so it can't observe "not yet, still delayed" state. Fixed with a
+     short bounded real sleep (`asyncio.sleep(0.05)`) to let the
+     automation's task reach the delay step, then a longer real sleep
+     past the delay to observe the resumed call - passed cleanly in
+     isolation, at the time.
+  2. **The file-wide `frozen_time` fixture landed, and the exact same
+     test hung indefinitely** - not slow, genuinely stuck, confirmed via
+     `pytest-timeout` catching it mid-`select()` inside a nonzero
+     `asyncio.sleep()`. Root-caused with a minimal standalone repro (a
+     bare `async def test(...): await asyncio.sleep(0.05)` under the
+     identical fixture) before touching the real test at all - a
+     genuine, general incompatibility in this harness: any
+     nonzero-timeout `asyncio.sleep()` called directly in a *test's
+     own* coroutine (as opposed to an HA-tracked background task) hangs
+     forever under `real_asyncio=True` in this specific combination of
+     pytest-homeassistant-custom-component's own event loop and
+     freezegun - `await asyncio.sleep(0)` (zero-length) does not hang
+     under the same repro, consistent with asyncio routing a zero sleep
+     through `call_soon` rather than `call_later` + a `select()` wakeup.
+  3. **Fixed by force-firing the delay's real timer instead of waiting
+     it out** - `_async_futures_with_timeout` in HA core's
+     `helpers/script.py` confirms the delay's timeout is an ordinary
+     `hass.loop.call_later(...)`-registered `asyncio.TimerHandle`,
+     exactly what `async_fire_time_changed` already force-fires for
+     every `time_pattern` trigger in this file, confirmed to be a
+     *generic* mechanism (scans every scheduled `TimerHandle` on the
+     loop, not ones belonging to a specific trigger). Passed repeatedly
+     for the `adaptive` (state-trigger) case. For `adaptive_tick`,
+     it *looked* fine too at first, then flaked under a 15-run repeat
+     loop with a genuine spurious second `mode: restart` visible in the
+     trace log: once the mock clock has been pushed past one minute
+     boundary to fire the tick, a later `async_fire_time_changed` call
+     can *also* match the freshly-rescheduled next boundary (its real
+     future_seconds, bounded by ~60s of real loop time, can be smaller
+     than the mock offset already claimed) - re-triggering the
+     automation and cancelling the in-flight delayed run before it ever
+     reached `apply_lighting`.
+  4. **Final design: dropped the "and it eventually resolves" half
+     entirely, kept only "does it delay at all."** Swapping `adaptive_tick`'s
+     own resolution to a plain `await hass.async_block_till_done()`
+     (reasoning it would simply wait out the real ~1s, same as before
+     the fixture existed) *also* turned out unreliable under this exact
+     combination - intermittent early returns with the call never
+     landed, confirmed by re-running that version of the test 15 times
+     in a row and seeing it fail from run 5 onward, not a one-off.
+     Concluded that "the delayed call eventually lands" is HA core's own
+     `delay:` mechanism, already reliable in production (confirmed
+     live) and not something specific to this blueprint's own logic -
+     what actually needs proving here is *which* triggers get delayed
+     at all, which a `asyncio.sleep(0)`-then-check "not immediate"
+     assertion already establishes cleanly, with zero real waiting and
+     zero flakiness across 20 repeated runs. The now-permanently-pending
+     delayed runs (never resolved) needed an explicit cleanup step
+     before the test ends, or teardown fails on a lingering task (a
+     genuinely in-flight delay, not just an armed-but-not-due
+     `time_pattern` timer, which this file's own teardown fixture
+     already tolerates separately) - a final manual `automation.trigger`
+     call's own `mode: restart` cancels both pending delayed runs for
+     free, the same mechanism the whole feature depends on in
+     production.
+
+  Also confirmed HA's `random` template filter is its own
+  `_random_every_time` (`homeassistant/helpers/template/extensions/functional.py`,
+  wrapping the exact same `random.choice` as Jinja's own default filter,
+  just re-implemented `@pass_context` to avoid template-compile-time
+  caching) - `monkeypatch.setattr("random.choice", lambda seq: seq[-1])`
+  makes the jitter delay deterministic for the test regardless of which
+  implementation is actually in play. Stability re-confirmed after the
+  final design: 20/20 for this test alone, 10/10 full-suite runs.
+
+  **A time_pattern-interval test went through two rounds of fixes, not
+  one - the first for a boundary-math bug, the second for a real bug in
+  its own use of `freeze_time`, only exposed once the file-wide
+  `frozen_time` fixture above landed mid-flight.** First draft froze
+  time to `.replace(minute=0, second=0, microsecond=0)` and ticked
+  forward in 1-minute steps - failed under mutation-testing scrutiny (a
+  call was present at a point that shouldn't have matched a `/2`
+  pattern) because whether "1 minute after now" lands on an odd/even
+  minute boundary depends on the real wall-clock minute at test-run
+  time, the same class of flakiness lesson already documented elsewhere
+  in this file for `reconcile`'s own tests. Fixed by reusing the *exact*
+  proven `next_boundary`/`move_to()` pattern `TestSelfHealing`'s
+  reconcile tests already established - freeze at the real starting
+  instant (not an artificial reset), compute the next matching boundary
+  from that same reference point, and always move forward in frozen
+  time relative to it.
+
+  That fix opened its own `with freeze_time(dt_util.utcnow()) as frozen:`
+  block - correct in isolation, but became a *nested* freeze the moment
+  the file gained its own autouse `frozen_time` fixture (`real_asyncio=True`)
+  from a different session mid-flight. Confirmed live by actually
+  running the merged file, not assumed from reading the diff: the
+  combination hung (the fixture's own docstring, written by that other
+  session after root-causing the identical mechanism for a different
+  test, warns explicitly against exactly this). Fixed by taking the
+  shared `frozen_time` fixture as a parameter and calling `.move_to()`
+  on it directly, matching every other timing test in this file - no
+  nested freeze at all.
+
+  All three mutation checks confirmed correct and isolated: removing
+  the `to:` filter fails exactly `test_attribute_only_same_phase_update_does_not_call_apply_lighting`
+  (plus expected collateral in `test_adaptive_tick_interval_actually_changes_cadence`,
+  since removing the filter lets `adaptive` fire during that test's own
+  same-phase write too - not a discrimination failure, a genuine
+  side-effect of that specific mutation); narrowing jitter's scope back
+  to `adaptive_tick`-only fails exactly `test_jitter_delays_adaptive_and_adaptive_tick_but_nothing_else`;
+  reverting `adaptive_tick`'s `minutes:` to a hardcoded `/1` fails
+  exactly `test_adaptive_tick_interval_actually_changes_cadence`. Full
+  suite: 151/151.
+
 **Deployment / operational notes:**
 - pyscript is fully gone, both from this repo and the live host.
 - The dev git-sync automation (polling this repo for new commits and

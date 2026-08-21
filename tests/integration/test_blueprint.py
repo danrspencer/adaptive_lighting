@@ -34,6 +34,7 @@ room state.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta
 
 import pytest
@@ -61,6 +62,11 @@ async def _setup_room_automation(
     input_ = {
         "adaptive_sensor": "sensor.test_adaptive",
         "room_target": room_target,
+        # Deterministic by default - the blueprint's own default (15s)
+        # would make every test relying on a synchronous check after
+        # adaptive/adaptive_tick fires flaky/slow. Jitter-specific tests
+        # override this explicitly via extra_inputs.
+        "adaptive_tick_jitter": 0,
         **extra_inputs,
     }
     assert await async_setup_component(
@@ -185,7 +191,11 @@ class TestAdaptiveScheduleAndTransitions:
         await hass.async_block_till_done()
         await _setup_room_automation(hass, room_target={"entity_id": "light.a"})
 
+        # Same-phase attribute-only write - adaptive_tick, not adaptive
+        # (whose own `to:` filter no longer fires here), is what picks
+        # this up.
         hass.states.async_set("sensor.test_adaptive", "Day", {"brightness": 210, "color_temp": 4000})
+        async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=1))
         await hass.async_block_till_done()
 
         calls = apply_lighting_calls
@@ -241,6 +251,7 @@ class TestAdaptiveScheduleAndTransitions:
         )
 
         hass.states.async_set("sensor.test_adaptive", "Day", {"brightness": 210, "color_temp": 4000})
+        async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=1))
         await hass.async_block_till_done()
 
         calls = apply_lighting_calls
@@ -262,6 +273,182 @@ class TestAdaptiveScheduleAndTransitions:
 
         calls = apply_lighting_calls
         assert calls[-1].data["transition"] == 2
+
+    async def test_attribute_only_same_phase_update_does_not_call_apply_lighting(
+        self, hass, apply_lighting_calls
+    ):
+        """The `adaptive` trigger's own `to:` filter absorbs this at the
+        HA core event-listener level - it never even reaches this
+        automation's condition:/action:. Ordinary attribute-level
+        tracking during a ramp still happens, just via adaptive_tick on
+        its own schedule (see test_periodic_adaptive_tick_updates_an_already_on_light
+        above), not via this trigger."""
+        _light(hass, "light.a", "on", brightness=190, color_temp_kelvin=4000)
+        await hass.async_block_till_done()
+        await _setup_room_automation(hass, room_target={"entity_id": "light.a"})
+        apply_lighting_calls.clear()
+
+        # Same phase ("Day", set by the autouse _sensor fixture before
+        # this test even started), only brightness ticked.
+        hass.states.async_set("sensor.test_adaptive", "Day", {"brightness": 220, "color_temp": 4000})
+        await hass.async_block_till_done()
+
+        assert apply_lighting_calls == []
+
+    async def test_genuine_phase_transition_calls_apply_lighting(self, hass, apply_lighting_calls):
+        _light(hass, "light.a", "on", brightness=190, color_temp_kelvin=4000)
+        await hass.async_block_till_done()
+        # jitter=0 explicit - isolating "does it fire on a transition"
+        # from the jitter-delay test below.
+        await _setup_room_automation(hass, room_target={"entity_id": "light.a"}, adaptive_tick_jitter=0)
+        apply_lighting_calls.clear()
+
+        hass.states.async_set("sensor.test_adaptive", "Evening", {"brightness": 150, "color_temp": 3000})
+        await hass.async_block_till_done()
+
+        calls = apply_lighting_calls
+        assert calls and calls[-1].data["entities"] == ["light.a"]
+
+    async def test_first_ever_sensor_value_counts_as_a_real_transition(self, hass, apply_lighting_calls):
+        """Not covered by any other test in this class - they all
+        inherit a prior "Day" state from the autouse _sensor fixture,
+        which only ever primes sensor.test_adaptive. A brand-new sensor
+        entity id genuinely has no prior state (from_state is None),
+        which must still count as a real transition - HA's own state
+        trigger with a `to:` filter treats None as never equal to any
+        listed value, so this fires without needing special-casing in
+        the blueprint itself."""
+        _light(hass, "light.a", "on")
+        await hass.async_block_till_done()
+        await _setup_room_automation(
+            hass,
+            room_target={"entity_id": "light.a"},
+            adaptive_sensor="sensor.brand_new_adaptive",
+            adaptive_tick_jitter=0,
+        )
+
+        hass.states.async_set("sensor.brand_new_adaptive", "Day", {"brightness": 210, "color_temp": 4000})
+        await hass.async_block_till_done()
+
+        calls = apply_lighting_calls
+        assert calls and calls[-1].data["entities"] == ["light.a"]
+
+    async def test_jitter_delays_adaptive_and_adaptive_tick_but_nothing_else(
+        self, hass, apply_lighting_calls, monkeypatch
+    ):
+        """Jitter renders `range(0, N+1) | random` (HA's own `random`
+        filter, homeassistant/helpers/template/extensions/functional.py's
+        `_random_every_time`, which - like Jinja's own - calls stdlib
+        random.choice) - forcing random.choice to always pick the
+        sequence's last item makes the delay deterministic (here,
+        exactly 1s) instead of genuinely random, rather than actually
+        waiting it out.
+
+        Deliberately does not try to also prove the delayed call
+        eventually lands - that's HA core's own `delay:` mechanism,
+        already reliable in production (confirmed live), not something
+        specific to this blueprint. What's specific here is *which*
+        triggers get delayed at all, which "not immediate" already
+        establishes. Proving "and later resolves" needs genuinely
+        waiting out real elapsed time or force-firing the delay's own
+        timer, and both turned out to be unreliable in this exact test
+        harness once the file gained its file-wide `frozen_time` fixture
+        (`real_asyncio=True`) from a different session mid-flight:
+        - A real, nonzero `await asyncio.sleep(...)` in the test's own
+          coroutine (not an HA-tracked task) hung indefinitely -
+          confirmed with a minimal repro outside this test.
+        - `hass.async_block_till_done()` (which normally blocks on every
+          task HA is tracking until it genuinely finishes) intermittently
+          returned early, with the delayed call never having landed -
+          confirmed by running this test's own earlier draft repeatedly,
+          not a one-off.
+        - Force-firing the delay's own real timer with a second
+          `async_fire_time_changed` call (the mechanism every
+          `time_pattern` trigger in this file is normally force-fired
+          with) works for `adaptive`, but not `adaptive_tick`: once the
+          mock clock has been pushed past one minute boundary to fire
+          the tick, a later `async_fire_time_changed` call can *also*
+          match the freshly-rescheduled next boundary, causing a second,
+          spurious `mode: restart` - confirmed live via the trace log
+          showing an unwanted second "Restarting", not just reasoned
+          about.
+        `await asyncio.sleep(0)` (zero-length) does not hang under the
+        same repro - likely routed via `call_soon`, not `call_later` +
+        `select()` - so it's used below only to let the automation's
+        task start and reach its own delay step, never to wait out real
+        elapsed time."""
+        monkeypatch.setattr("random.choice", lambda seq: seq[-1])
+        _light(hass, "light.a", "on", brightness=190, color_temp_kelvin=4000)
+        await hass.async_block_till_done()
+        await _setup_room_automation(hass, room_target={"entity_id": "light.a"}, adaptive_tick_jitter=1)
+        apply_lighting_calls.clear()
+
+        # Not jittered - a manual run completes synchronously (a 0s
+        # delay short-circuits with no real wait at all - HA core's
+        # own _async_step_delay returns immediately for `if not delay`).
+        await hass.services.async_call("automation", "trigger", {"entity_id": "automation.room"}, blocking=True)
+        assert apply_lighting_calls
+        apply_lighting_calls.clear()
+
+        # Jittered - a genuine phase transition doesn't land immediately.
+        hass.states.async_set("sensor.test_adaptive", "Evening", {"brightness": 150, "color_temp": 3000})
+        await asyncio.sleep(0)
+        assert apply_lighting_calls == []
+
+        # Jittered - adaptive_tick doesn't either.
+        async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=1))
+        await asyncio.sleep(0)
+        assert apply_lighting_calls == []
+
+        # Cleanup: a manual run's own mode: restart cancels the still-
+        # pending delayed run above before the test ends - otherwise
+        # teardown fails on a lingering task (a real in-flight delay
+        # left running past the end of the test, not just a scheduled-
+        # but-not-yet-due time_pattern timer, which is separately
+        # expected and tolerated by this file's own teardown fixture).
+        await hass.services.async_call("automation", "trigger", {"entity_id": "automation.room"}, blocking=True)
+
+    async def test_adaptive_tick_interval_actually_changes_cadence(
+        self, hass, apply_lighting_calls, frozen_time
+    ):
+        """Uses the shared file-wide `frozen_time` fixture directly
+        (`.move_to()`), rather than opening its own nested freeze_time -
+        the same next_boundary computation TestSelfHealing's reconcile
+        tests use, adapted for a /2 interval. See frozen_time's own
+        docstring for why nesting a second freeze here would be a real
+        bug, not just unnecessary: without matching `real_asyncio=True`,
+        a nested freeze can desync the event loop's own timer clock from
+        the frozen wall-clock, hanging any real `asyncio.sleep()` (or,
+        as originally written here, silently corrupting the outer
+        fixture's own timer bookkeeping for every `time_pattern` trigger
+        already registered)."""
+        _light(hass, "light.a", "on", brightness=190, color_temp_kelvin=4000)
+        await hass.async_block_till_done()
+        await _setup_room_automation(
+            hass, room_target={"entity_id": "light.a"}, adaptive_tick_interval="/2"
+        )
+        apply_lighting_calls.clear()
+
+        # Same-phase attribute tick, only adaptive_tick can pick it up.
+        hass.states.async_set("sensor.test_adaptive", "Day", {"brightness": 220, "color_temp": 4000})
+        await hass.async_block_till_done()
+
+        now = dt_util.utcnow()
+        # Always 1-2 minutes ahead of "now" - never 0 - so 10s
+        # before it is always still safely ahead of "now" too.
+        next_boundary = now.replace(second=0, microsecond=0) + timedelta(
+            minutes=2 - (now.minute % 2), seconds=0
+        )
+
+        frozen_time.move_to(next_boundary - timedelta(seconds=10))
+        async_fire_time_changed(hass, dt_util.utcnow())
+        await hass.async_block_till_done()
+        assert apply_lighting_calls == [], "the /2 interval shouldn't fire off its own boundary"
+
+        frozen_time.move_to(next_boundary + timedelta(seconds=1))
+        async_fire_time_changed(hass, dt_util.utcnow())
+        await hass.async_block_till_done()
+        assert apply_lighting_calls
 
 
 class TestRoomTargetResolution:
@@ -377,6 +564,7 @@ class TestOccupancyDrivenOnOff:
         await _setup_room_automation(hass, room_target={"entity_id": "light.a"})
 
         hass.states.async_set("sensor.test_adaptive", "Day", {"brightness": 210, "color_temp": 4000})
+        async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=1))
         await hass.async_block_till_done()
 
         calls = apply_lighting_calls
@@ -402,6 +590,7 @@ class TestOccupancyDrivenOnOff:
         await _setup_room_automation(hass, room_target={"entity_id": ["light.a", "binary_sensor.occ"]})
 
         hass.states.async_set("sensor.test_adaptive", "Day", {"brightness": 210, "color_temp": 4000})
+        async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=1))
         await hass.async_block_till_done()
 
         calls = apply_lighting_calls
@@ -415,8 +604,12 @@ class TestOccupancyDrivenOnOff:
         await _setup_room_automation(hass, room_target={"entity_id": "light.a"})
 
         hass.states.async_set("sensor.test_adaptive", "Day", {"brightness": 210, "color_temp": 4000})
+        async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=1))
         await hass.async_block_till_done()
 
+        # A real tick did fire (adaptive_tick) - this isn't passing
+        # vacuously on zero calls.
+        assert apply_lighting_calls
         for call in apply_lighting_calls:
             assert "light.a" not in call.data["entities"]
 
@@ -452,6 +645,7 @@ class TestAllowTurnOn:
         )
 
         hass.states.async_set("sensor.test_adaptive", "Day", {"brightness": 210, "color_temp": 4000})
+        async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=1))
         await hass.async_block_till_done()
 
         calls = apply_lighting_calls
@@ -472,6 +666,7 @@ class TestOverrideDetection:
         await _setup_room_automation(hass, room_target={"entity_id": "light.a"})
 
         hass.states.async_set("sensor.test_adaptive", "Day", {"brightness": 210, "color_temp": 4000})
+        async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=1))
         await hass.async_block_till_done()
 
         calls = apply_lighting_calls
@@ -683,6 +878,7 @@ class TestSceneHandoff:
         )
 
         hass.states.async_set("sensor.test_adaptive", "Day", {"brightness": 210, "color_temp": 4000})
+        async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=1))
         await hass.async_block_till_done()
 
         assert scene_turn_on_calls == []
@@ -720,6 +916,7 @@ class TestBrightnessScaling:
         )
 
         hass.states.async_set("sensor.test_adaptive", "Day", {"brightness": 210, "color_temp": 4000})
+        async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=1))
         await hass.async_block_till_done()
 
         calls = apply_lighting_calls
@@ -740,6 +937,7 @@ class TestBrightnessScaling:
         )
 
         hass.states.async_set("sensor.test_adaptive", "Day", {"brightness": 210, "color_temp": 4000})
+        async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=1))
         await hass.async_block_till_done()
 
         calls = apply_lighting_calls
@@ -834,6 +1032,7 @@ class TestRgbColour:
         await _setup_room_automation(hass, room_target={"entity_id": "light.a"}, rgb_phases=["Day"])
 
         hass.states.async_set("sensor.test_adaptive", "Day", {"brightness": 210, "color_temp": 4000})
+        async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=1))
         await hass.async_block_till_done()
 
         calls = apply_lighting_calls
@@ -846,6 +1045,7 @@ class TestRgbColour:
         await _setup_room_automation(hass, room_target={"entity_id": "light.a"})
 
         hass.states.async_set("sensor.test_adaptive", "Day", {"brightness": 210, "color_temp": 4000})
+        async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=1))
         await hass.async_block_till_done()
 
         calls = apply_lighting_calls
