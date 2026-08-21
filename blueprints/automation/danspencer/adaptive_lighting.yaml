@@ -395,6 +395,12 @@ variables:
   scene_template: !input scene_template
   adaptive_transition: !input adaptive_transition
   motion_on_transition: !input motion_on_transition
+  # Exposed as a variable (not just used inline via !input, the way
+  # motion_off_transition still is) specifically so the reconcile
+  # condition below can reference it inside a Jinja template - see that
+  # condition's own comment for why it's a template rather than
+  # occupancy.is_not_detected's native `for:` option.
+  no_motion_wait: !input no_motion_wait
   rgb_phases: !input rgb_phases
   prefer_rgb_color: "{{ states(adaptive_sensor) in rgb_phases }}"
   script_transition: >
@@ -721,10 +727,48 @@ action:
               # description.
               - condition: template
                 value_template: "{{ room_occupancy_entities | length > 0 }}"
-              - condition: not
-                conditions:
-                  - condition: occupancy.is_detected
-                    target: !input room_target
+              # Requires occupancy to have been continuously clear for
+              # the full Wait time, not just clear at this exact instant
+              # - unlike the motion_off trigger above (whose own for:
+              # clause already provides this), reconcile's trigger is a
+              # plain time_pattern with no relationship to occupancy
+              # timing at all, so nothing else here debounces it. A
+              # bare "not occupancy.is_detected" check previously let a
+              # momentary sensor blip - a room that's genuinely still in
+              # use, just reported briefly clear by a noisy sensor -
+              # turn lights off immediately, bypassing Wait time
+              # entirely.
+              #
+              # A plain template, not occupancy.is_not_detected's own
+              # `for:` option (which does exist and would be the more
+              # "native" fit - HA core's helpers/condition.py:
+              # EntityConditionBase supports it via the same duration
+              # mechanism trigger-level `for:` already uses). Deliberately
+              # not used: it needs the recorder to "prime" a duration
+              # that was already satisfied before the condition itself
+              # started watching (HA core's own _HistoryPrimingManager
+              # exists specifically for this), which is exactly the
+              # situation right after a restart - reconcile's own
+              # condition would start watching fresh with no in-memory
+              # history of its own, needing the recorder to correctly
+              # recognise a room that's already been clear a while. This
+              # template needs no such priming: `last_changed` is a
+              # plain property every state object already carries,
+              # answered instantly from memory regardless of restart
+              # timing or recorder availability - the "0 vs null
+              # multiplier" precedent already documents why relying on
+              # something available only sometimes is worth avoiding
+              # here.
+              - condition: template
+                value_template: >-
+                  {% set ns = namespace(all_clear=true) %}
+                  {% for e in room_occupancy_entities %}
+                    {% if not is_state(e, 'off') or
+                          (now() - states[e].last_changed).total_seconds() < (no_motion_wait | int) %}
+                      {% set ns.all_clear = false %}
+                    {% endif %}
+                  {% endfor %}
+                  {{ ns.all_clear }}
               - condition: template
                 value_template: "{{ entities_still_on | length > 0 }}"
             then:

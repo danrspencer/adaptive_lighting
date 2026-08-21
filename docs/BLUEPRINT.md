@@ -253,8 +253,13 @@ left alone rather than recommanded on every tick.
 
 ## Self-healing
 
-On a configurable interval, if the room is unoccupied but a light is still on, the off command is retried. This
-recovers from dropped commands (a missed Zigbee message, for example) without manual intervention.
+On a configurable interval, if the room's occupancy sensors have been continuously clear for the full Wait time
+but a light is still on, the off command is retried. This recovers from dropped commands (a missed Zigbee
+message, for example) without manual intervention.
+
+The Wait time check here is debounced against a momentary sensor blip, not just an instantaneous "is it clear
+right now" read — a noisy occupancy sensor that briefly reports clear before going occupied again won't trip an
+early turn-off just because a reconcile tick happens to land in that gap.
 
 Lights handed off via a `null` multiplier (see
 [Per-light brightness scaling](#per-light-brightness-scaling)) are excluded from this retry, and don't count as
