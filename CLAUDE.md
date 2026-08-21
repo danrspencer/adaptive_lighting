@@ -2290,69 +2290,113 @@ designs were explored:
 - **`TestRecoveredTrigger::test_a_plain_off_to_on_transition_does_not_fire_it`
   was genuinely flaky, at roughly 5% (1 failure in 20 runs) - found and
   fixed while shipping the reconcile-debounce PR directly above this
-  entry, 2026-08-21.** Root cause: `adaptive_tick`, the real
-  `time_pattern: minutes: /1` trigger added for the flat-curve fix
-  (2026-08-19, documented above), is a genuine, live trigger on every
-  test automation this file sets up - not mocked, not disabled. This
-  test's whole premise is `assert apply_lighting_calls == []` after a
-  plain off->on transition that nothing in the blueprint should react
+  entry, 2026-08-21. Went through two designs, and the first one shipped
+  broken - caught live in CI, not locally.** Root cause: `adaptive_tick`,
+  the real `time_pattern: minutes: /1` trigger added for the flat-curve
+  fix (2026-08-19, documented above), is a genuine, live trigger on
+  every test automation this file sets up - not mocked, not disabled.
+  This test's whole premise is `assert apply_lighting_calls == []` after
+  a plain off->on transition that nothing in the blueprint should react
   to - but nothing in the test controls wall-clock time, and
   `_setup_room_automation` genuinely schedules `adaptive_tick` against
   real UTC time the moment the automation is set up. If real time
-  happens to cross a minute boundary between that setup call and the
-  test's final assertion - a window of a few milliseconds of real test
-  execution, but genuinely possible depending on where in the current
-  minute the test happens to start - `adaptive_tick` fires for real,
-  calls `apply_lighting`, and the "nothing fired" assertion fails for a
-  reason that has nothing to do with what the test claims to be
-  checking. Confirmed via
-  `pytest_homeassistant_custom_component.common.async_fire_time_changed`'s
-  own source: it only fires the *event* a `time_pattern` trigger is
-  scheduled to react to, it doesn't touch real time at all - so a
-  `time_pattern` trigger set up against genuine wall-clock time stays
-  live and can fire on its own schedule throughout a test's execution,
-  entirely independent of whether the test itself ever calls
-  `async_fire_time_changed`.
+  crosses a minute boundary between that setup call and the test's
+  final assertion, `adaptive_tick` fires for real, calls
+  `apply_lighting`, and the "nothing fired" assertion fails for a reason
+  that has nothing to do with what the test claims to be checking.
 
-  This is exactly the same class of gap `TestSelfHealing`'s two tests
-  (documented immediately above) were already written to guard against
-  for themselves, via an explicit `with freeze_time(dt_util.utcnow())
-  as frozen:` block - but every *other* test in this file that sets up
-  a room automation was equally exposed to the same risk, just at low
-  enough odds (needing a real minute-boundary crossing during a single
-  test's brief execution window) that most runs never hit it. Fixed by
-  promoting the freeze to a file-wide `autouse=True` fixture
-  (`frozen_time`, freezing at `dt_util.utcnow()` and yielding the
-  `FrozenDateTimeFactory`) rather than leaving it opt-in per test -
-  every test in the file now runs under frozen wall-clock time by
-  default, so `adaptive_tick` (or any other real-time-scheduled
-  trigger) can never fire on its own; a test that explicitly needs
-  elapsed time to pass takes the same `frozen_time` fixture by name and
-  calls `.tick()`/`.move_to()` on it directly. `TestSelfHealing`'s two
-  tests were refactored to use this shared fixture instead of opening
-  their own nested `freeze_time` block - freezegun does support nested
-  freezes, but there's no reason to rely on that when the outer freeze
-  is already available fixture-wide.
+  **First attempt (shipped, then reverted the same day)**: a file-wide
+  `autouse=True` fixture doing a bare `with freeze_time(dt_util.utcnow())
+  as frozen: yield frozen`, on the theory that freezing wall-clock time
+  stops a real-time-scheduled trigger from firing on its own. Passed
+  every local check at the time - the exact repro loop that found the
+  flake, 60 consecutive runs, zero failures - and was pushed. **CI
+  failed on the very first run**, with two different tests each showing
+  an extra, unexplained `apply_lighting` call carrying `transition: 30`
+  (the blueprint's own default, not anything either failing test
+  configured) - including
+  `test_a_plain_off_to_on_transition_does_not_fire_it` itself, the exact
+  test this fix existed to protect. The fix hadn't just failed to help,
+  it had made the underlying real-firing problem *more* likely to
+  surface, not less.
 
-  Verified fixed by rerunning the original repro loop (the exact
-  command that found the flake) 60 times with zero failures (20 then a
-  further 40, both zero), and the full suite once more: 146/146.
+  Root-caused by direct experimentation, not guesswork: a scratch repro
+  automation with a single `time_pattern: minutes: /1` trigger, set up
+  inside `with freeze_time(dt_util.utcnow()): ... await
+  asyncio.sleep(0.5)`, **hung indefinitely** - `asyncio.sleep()` never
+  returned. A second repro (many iterations of state-writes +
+  `async_block_till_done()`, no explicit sleep, mirroring this file's
+  real usage pattern) logged asyncio's own internal slow-callback
+  warning, `Executing <Task ...> took 1785461732.472 seconds` - roughly
+  *56 years* of apparent elapsed time for a single callback. Both point
+  at the same mechanism: freezegun's plain `freeze_time()`, with no
+  further configuration, also mocks `time.monotonic()` - the clock
+  `asyncio`'s own event loop uses for all of its internal timer
+  bookkeeping (`loop.time()`, and every `TimerHandle.when()` a
+  `time_pattern` trigger schedules through it). A real, live event loop
+  does not tolerate having its own notion of elapsed time frozen or
+  desynced out from under it - pending timers can end up scheduled
+  against a `when` that, compared against the loop's now-inconsistent
+  clock, reads as either infinitely far in the future (the hang) or
+  already long overdue (the phantom `transition: 30` calls, and
+  presumably why the *specific* tests CI happened to hit varied
+  run to run - whichever test's `async_block_till_done()` happened to
+  be the next one to process the event loop's ready-timer queue after
+  things fell out of sync).
 
-  **A second, unrelated flake was found while re-verifying this fix and
-  is explicitly out of scope here** - occasional full-suite runs (not
-  single-test reruns) fail 2-4 different tests together (seen:
-  `test_area_id_room_target_resolves_both_lights_and_occupancy_sensors`,
-  `test_occupancy_detected_turns_on_off_lights_in_the_room`,
-  `test_motion_on_uses_the_motion_on_transition_duration`,
-  `test_manual_run_forces_the_tick_and_turns_on_off_lights`), with at
-  least one captured failure showing a blueprint input value from a
-  *different* test's automation setup leaking into another
-  (`motion_on_transition=2` configured, `transition=30` observed).
-  Confirmed present on the baseline commit *before* this fix too (same
-  failure shape, same ~1-in-10-15-full-suite-runs rate), so it's a
-  separate, pre-existing issue, not something this fix introduced or
-  needs to cover - flagged for its own dedicated investigation rather
-  than folded into this change.
+  **Second attempt (what actually shipped)**: freezegun has a
+  documented, purpose-built answer to exactly this - `real_asyncio=True`,
+  which freezes `datetime.now()`/`time.time()` (everything the
+  blueprint's own templates and `dt_util.utcnow()` calls actually read)
+  while leaving the event loop's own clock and timer scheduling on the
+  real, unmodified system clock. With the loop's timing restored to
+  real and predictable, a `time_pattern` trigger's real firing is back
+  to depending on genuine elapsed wall-clock seconds between
+  registration and the next matching boundary - which reopens the
+  *original*, narrower risk this fixture exists to close (a trigger
+  registered very close to its own boundary could still fire for real
+  within a test's brief execution window). Closed by freezing at a
+  fixed anchor a couple of seconds *past* the current minute
+  (`dt_util.utcnow().replace(second=2, microsecond=0)`) rather than at
+  `dt_util.utcnow()` verbatim, which could itself land arbitrarily close
+  to a boundary - guaranteeing at least ~58 real seconds before
+  `adaptive_tick` could next fire, comfortably longer than this file's
+  entire real run time (a few seconds, full suite included).
+
+  `TestSelfHealing`'s two pre-existing tests (documented immediately
+  above), which already used their own bare `freeze_time()` blocks
+  *without* `real_asyncio` before this session touched anything, were
+  refactored to take the shared `frozen_time` fixture and call
+  `.tick()`/`.move_to()` on it directly instead of opening their own
+  nested freeze - both to avoid relying on freezegun's freeze-nesting
+  support where it isn't needed, and because their own pre-existing bare
+  freeze was itself a plausible source of exactly this class of bug.
+
+  Verified thoroughly before pushing this time, specifically targeting
+  what CI had actually caught (not just the original single-test
+  repro): the single-test repro loop (30 runs, zero failures), a
+  20-run loop scoped to `TestSelfHealing` alone (the tests most likely
+  to interact badly with `real_asyncio` given their own explicit
+  `tick`/`move_to`/`async_fire_time_changed` usage - zero failures), and
+  **100 consecutive full-suite runs (60 then a further 40), zero
+  failures** - full-suite runs specifically, since that's the shape CI's
+  own failure took and single-test reruns alone hadn't caught it the
+  first time. Full suite: 146/146.
+
+  **The "second, unrelated flake" originally flagged as a separate,
+  pre-existing issue after the first (broken) attempt is almost
+  certainly the same bug, not a different one, and appears fixed as a
+  side effect of this same change - not confirmed with certainty, but
+  strong statistical evidence either way.** That flake (occasional
+  full-suite runs failing 2-4 unrelated tests together, at roughly
+  10-14% of full-suite runs on the pre-this-session baseline commit)
+  was reproduced on a baseline that still had `TestSelfHealing`'s own
+  bare, non-`real_asyncio` `freeze_time()` usage - the same mechanism
+  just root-caused above. 100 consecutive clean full-suite runs after
+  switching every `freeze_time()` usage in the file to `real_asyncio=True`
+  would be a roughly 1-in-40,000 outcome if the true underlying failure
+  rate were still ~10%. Not re-flagged as a separate task on that
+  basis, but worth revisiting if full-suite flakiness resurfaces.
 
 **Deployment / operational notes:**
 - pyscript is fully gone, both from this repo and the live host.

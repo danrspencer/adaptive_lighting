@@ -111,22 +111,57 @@ def _sensor(hass: HomeAssistant):
 def frozen_time():
     """Every test in this file sets up a real automation carrying a live
     adaptive_tick (time_pattern, every 1 minute - see
-    TestAdaptiveScheduleAndTransitions.test_a_flat_curve_still_gets_a_tick_from_the_time_pattern)
-    among its other real triggers. Without controlling wall-clock time,
-    any test whose setup-plus-assertion window happens to straddle a real
-    minute boundary can have that trigger fire for real mid-test - not a
-    hypothetical, reproduced locally at roughly 5% failure rate for
+    TestAdaptiveScheduleAndTransitions.test_a_flat_curve_still_gets_a_tick_from_the_time_pattern),
+    plus reconcile (time_pattern, every 5 minutes by default). Without
+    controlling wall-clock time, any test whose setup-plus-assertion
+    window happens to straddle a real minute boundary can have one of
+    these fire for real mid-test - reproduced locally at roughly 5%
+    failure rate for
     TestRecoveredTrigger.test_a_plain_off_to_on_transition_does_not_fire_it,
-    which asserts apply_lighting_calls == [] and has no way to distinguish
-    "nothing fired" from "the periodic tick happened to fire too". Freezing
-    time file-wide (not just in the handful of tests that explicitly
-    advance it) closes this off for every test, not only the one that
-    happened to get caught. A test that needs elapsed time to actually
-    pass takes this same fixture by name and calls `.tick()`/`.move_to()`
-    on it directly, rather than opening its own nested freeze_time (see
-    TestSelfHealing) - freezegun's nesting support is real, but there's no
-    reason to rely on it when the outer freeze is already right here."""
-    with freeze_time(dt_util.utcnow()) as frozen:
+    which asserts apply_lighting_calls == [] and has no way to
+    distinguish "nothing fired" from "the periodic tick happened to
+    fire too".
+
+    A first attempt just did `with freeze_time(dt_util.utcnow()):` file-
+    wide, no `real_asyncio`. That made things *worse*, not better -
+    confirmed live in CI (a real `adaptive_tick`-triggered call showed up
+    in two unrelated tests' assertions the very first run after shipping
+    it) and reproduced in isolation afterward: without
+    `real_asyncio=True`, freezegun also mocks the clock asyncio's own
+    event loop uses for scheduling (`time.monotonic`), and a real running
+    loop with real pending `TimerHandle`s (every `time_pattern` trigger
+    registers one) doesn't tolerate that - `asyncio.sleep()` under a bare
+    freeze in this harness hangs forever (loop time never advances to
+    reach the target), and a `pytest-homeassistant-custom-component` test
+    run this way logged asyncio's own "Executing <Task ...> took
+    1785461732.472 seconds" slow-callback warning - noise on the order of
+    56 *years*, from the loop's before/after clock reading falling out of
+    sync across the freeze boundary. `real_asyncio=True` is freezegun's
+    documented fix for exactly this: it freezes `datetime.now()`/
+    `time.time()` (which is all the blueprint's own templates and
+    `dt_util.utcnow()` calls need) while leaving the event loop's own
+    timer bookkeeping on the real clock, restored to ordinary,
+    predictable behaviour.
+
+    With the event loop back on real time, a `time_pattern` trigger's
+    real firing is back to depending on genuine elapsed wall-clock
+    seconds between registration and whatever matching boundary comes
+    next - which is exactly the original risk this fixture exists to
+    close off. Freezing at a fixed anchor a couple of seconds *past* the
+    current minute (rather than at `dt_util.utcnow()` verbatim, which
+    could itself land arbitrarily close to a boundary) makes that gap
+    deterministic and always large: at least ~58 real seconds until
+    `adaptive_tick` could next fire, comfortably longer than this whole
+    file's total real run time (a few seconds, single-digit at most) -
+    not just this one test's.
+
+    A test that needs elapsed time to actually pass takes this same
+    fixture by name and calls `.tick()`/`.move_to()` on it directly,
+    rather than opening its own nested freeze_time (see TestSelfHealing)
+    - freezegun's nesting support is real, but there's no reason to rely
+    on it when the outer freeze is already available fixture-wide."""
+    anchor = dt_util.utcnow().replace(second=2, microsecond=0)
+    with freeze_time(anchor, real_asyncio=True) as frozen:
         yield frozen
 
 
