@@ -1014,7 +1014,6 @@ class TestBrightnessScaling:
             hass,
             room_target={"entity_id": ["light.a", "light.handed_off", "binary_sensor.occ"]},
             brightness_multiplier_template="{{ {'light.handed_off': None} }}",
-            reconcile_interval="/5",
         )
 
         async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=6))
@@ -1075,7 +1074,7 @@ class TestSelfHealing:
     """docs/BLUEPRINT.md#self-healing"""
 
     async def test_reconcile_retries_turning_off_a_light_left_on_with_no_occupancy(
-        self, hass, light_turn_off_calls, frozen_time
+        self, hass, light_turn_off_calls, apply_lighting_calls, frozen_time
     ):
         """reconcile's own condition is a hand-written template
         comparing `now() - states[e].last_changed` against Wait time
@@ -1094,30 +1093,44 @@ class TestSelfHealing:
         _light(hass, "light.a", "on")
         await hass.async_block_till_done()
         await _setup_room_automation(
-            hass, room_target={"entity_id": ["light.a", "binary_sensor.occ"]}, reconcile_interval="/5"
+            hass, room_target={"entity_id": ["light.a", "binary_sensor.occ"]}, adaptive_tick_interval="/5"
         )
         _occupancy(hass, "binary_sensor.occ", "off")
         await hass.async_block_till_done()
+        apply_lighting_calls.clear()
 
         frozen_time.tick(timedelta(minutes=6))
         async_fire_time_changed(hass, dt_util.utcnow())
         await hass.async_block_till_done()
 
         assert light_turn_off_calls and "light.a" in light_turn_off_calls[-1].data["entity_id"]
+        # Self-heal now shares adaptive_tick's own trigger/interval - a
+        # tick where it fires must stay exclusive of apply_lighting in
+        # the same run, or the just-turned-off light would immediately
+        # get turned back on from the stale (pre-turn-off) entity list
+        # resolved_entities/adaptive_target_entities computed once, in
+        # variables:, before action: ran.
+        assert apply_lighting_calls == []
 
-    async def test_reconcile_does_nothing_while_occupied(self, hass, light_turn_off_calls):
+    async def test_reconcile_does_nothing_while_occupied(self, hass, light_turn_off_calls, apply_lighting_calls):
         _occupancy(hass, "binary_sensor.occ", "on")
         _light(hass, "light.a", "on")
         await hass.async_block_till_done()
 
         await _setup_room_automation(
-            hass, room_target={"entity_id": ["light.a", "binary_sensor.occ"]}, reconcile_interval="/5"
+            hass, room_target={"entity_id": ["light.a", "binary_sensor.occ"]}, adaptive_tick_interval="/5"
         )
+        apply_lighting_calls.clear()
 
         async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=6))
         await hass.async_block_till_done()
 
         assert light_turn_off_calls == []
+        # The self-heal branch's own conditions correctly don't match
+        # while occupied, so this adaptive_tick tick falls through to
+        # default: and reapplies lighting as normal, same as any other
+        # adaptive_tick - the merge didn't accidentally suppress that.
+        assert apply_lighting_calls
 
     async def test_reconcile_ignores_a_momentary_occupancy_blip_shorter_than_wait_time(
         self, hass, light_turn_off_calls, frozen_time
@@ -1136,7 +1149,7 @@ class TestSelfHealing:
         await _setup_room_automation(
             hass,
             room_target={"entity_id": ["light.a", "binary_sensor.occ"]},
-            reconcile_interval="/5",
+            adaptive_tick_interval="/5",
             no_motion_wait=120,
         )
 

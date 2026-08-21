@@ -2667,6 +2667,85 @@ designs were explored:
   exactly `test_adaptive_tick_interval_actually_changes_cadence`. Full
   suite: 151/151.
 
+- **`reconcile` (a second, independent periodic tick just for the
+  self-healing turn-off retry) merged into `adaptive_tick`, removing
+  `reconcile_interval` entirely - 2026-08-21, user's own direct
+  question right after the jitter fix shipped: "why do we have TWO
+  reconcile intervals?"** No good answer existed - `reconcile` predates
+  `adaptive_tick` by a long way (an early, narrow safety net for dropped
+  turn-off commands) and `adaptive_tick` was bolted on separately
+  (2026-08-19, for the unrelated flat-curve gap); nobody had revisited
+  whether they still needed separate cadences once both existed. The
+  self-heal check's own Wait-time debounce (shipped hours earlier the
+  same day) already makes checking-more-often harmless - it just
+  re-evaluates "has it been long enough," never fires early - so there
+  was no remaining reason to keep two independent `time_pattern`
+  triggers per room. The user's question also surfaced a real gap in
+  the jitter fix that shipped moments before it: `reconcile` was not
+  jittered at all, so every room sharing a schedule still fired its
+  self-heal check at the exact same 5-minute wall-clock boundary,
+  unjittered - the identical cascade risk `adaptive`/`adaptive_tick`
+  had just been fixed for, just missed because attention was on the
+  "twice a minute" symptom specifically.
+
+  **The merge is not a bare trigger-id swap - that would have broken
+  ordinary tick-driven reapplication entirely, caught while designing,
+  not after shipping it.** `choose:`'s branches are mutually exclusive
+  of `default:` - matching only on `trigger.id == 'adaptive_tick'` (the
+  reconcile branch's old condition, naively renamed) would have made
+  *every* `adaptive_tick` fire take that branch, meaning `default:`
+  (scene handling + `apply_lighting`) would never run for it again,
+  silently breaking the periodic tick's whole original purpose. Fixed
+  by moving the self-heal eligibility checks (an occupancy sensor
+  exists in Room, it's been continuously clear past Wait time, and
+  something's still on) from the branch's own inline `if:` up to the
+  `choose:` branch's `conditions:` list itself, alongside `trigger.id
+  == 'adaptive_tick'` - the same shape the `motion_off` branch right
+  above it already uses. Now: a tick where all of those hold takes the
+  self-heal branch exclusively (unchanged from today - see below for
+  why); a tick where they don't (occupied, nothing on, wait time not
+  yet up, or no occupancy sensor at all) falls through to `default:`
+  and reapplies lighting exactly as any other `adaptive_tick` does.
+
+  **Deliberately still exclusive, not "do both in the same run" - a
+  real, considered trade-off, not an oversight.** `entities_still_on`
+  and `adaptive_target_entities` are `variables:`, computed once before
+  `action:` runs at all; they don't reflect the self-heal branch's own
+  `light.turn_off` yet. Reapplying lighting in the *same* run off that
+  stale variable set would risk `apply_lighting` immediately turning
+  the light it was just told to turn off back on. Confirmed as a real,
+  not hypothetical, risk by deliberately building and running the
+  unsafe version: moving the self-heal turn-off into a plain,
+  non-exclusive `if:` at the top of `default:` (instead of its own
+  exclusive `choose:` branch) reproduces exactly this - a light
+  correctly turned off by self-heal gets an `apply_lighting` call for
+  it moments later, in the same trace, confirmed by actually running
+  this mutation and reading the resulting `ServiceCall`, not reasoned
+  about in the abstract. Staying exclusive means a self-heal tick waits
+  one more tick interval before resuming normal tracking - the same
+  one-tick lag `reconcile` already had today, not a new limitation.
+
+  `reconcile_interval` removed outright, not deprecated - confirmed via
+  the real (not mocked) blueprint substitution path
+  (`async_setup_component` in the integration test suite) that HA's
+  blueprint substitution silently ignores a `use_blueprint.input:` key
+  the blueprint no longer declares, rather than erroring the way a
+  *missing required* input does (lesson 16 in this file) - so any
+  live room automation with `reconcile_interval` explicitly set is
+  unaffected by this change, the key just becomes inert. Four existing
+  tests that passed `reconcile_interval="/5"` were updated to pass
+  `adaptive_tick_interval="/5"` instead, preserving their actual
+  timing intent rather than leaving a now-meaningless no-op kwarg.
+
+  Two tests strengthened with the assertion that actually matters here:
+  `test_reconcile_retries_turning_off_a_light_left_on_with_no_occupancy`
+  now also asserts `apply_lighting_calls == []` (mutation-verified
+  against the unsafe non-exclusive design described above - fails
+  correctly, and only that test); `test_reconcile_does_nothing_while_occupied`
+  now also asserts `apply_lighting_calls` is non-empty, confirming the
+  merge didn't accidentally suppress the ordinary tick path when
+  self-healing doesn't apply. Full suite: 151/151.
+
 **Deployment / operational notes:**
 - pyscript is fully gone, both from this repo and the live host.
 - The dev git-sync automation (polling this repo for new commits and

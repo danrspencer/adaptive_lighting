@@ -166,26 +166,18 @@ blueprint:
               min: 0
               max: 3600
               unit_of_measurement: seconds
-        reconcile_interval:
-          name: Reconcile Interval (Optional)
-          description: >
-            How often to retry turning off lights left on with no occupancy.
-            Home Assistant's own time_pattern syntax (not standard cron) -
-            a fixed number, '*' for any, or e.g. '/5' for every 5 minutes.
-            [Details](https://www.home-assistant.io/docs/automation/trigger/#time-pattern-trigger).
-          default: "/5"
-          selector:
-            text: {}
         adaptive_tick_interval:
           name: Adaptive Tick Interval (Optional)
           description: >
             How often to reapply adaptive lighting on a schedule,
-            regardless of whether the sensor's phase changed - now the
-            sole driver of ordinary brightness/colour-temperature
-            tracking, since a same-phase sensor update alone no longer
-            triggers a reapply on its own. Home Assistant's own
-            time_pattern syntax (not standard cron) - a fixed number,
-            '*' for any, or e.g. '/1' for every minute.
+            regardless of whether the sensor's phase changed - the sole
+            driver of ordinary brightness/colour-temperature tracking,
+            since a same-phase sensor update alone no longer triggers a
+            reapply on its own. Also drives self-healing: on a tick
+            where nothing needs retrying, it reapplies lighting as
+            normal instead. Home Assistant's own time_pattern syntax
+            (not standard cron) - a fixed number, '*' for any, or e.g.
+            '/1' for every minute.
             [Details](https://www.home-assistant.io/docs/automation/trigger/#time-pattern-trigger).
           default: "/1"
           selector:
@@ -194,13 +186,13 @@ blueprint:
           name: Adaptive Tick Jitter (Optional)
           description: >
             Maximum random delay, in seconds, applied to a genuine phase
-            change and the periodic Adaptive Tick above, so many rooms'
-            automations don't all send commands in the same wall-clock
-            second - most acute right at a phase boundary, when every
-            room sharing one Adaptive Lighting Sensor transitions at
-            literally the same instant. Never delays motion, manual
-            runs, Additional Triggers, or self-healing. Set to 0 to
-            disable.
+            change and the periodic Adaptive Tick above (including its
+            self-healing check), so many rooms' automations don't all
+            send commands in the same wall-clock second - most acute
+            right at a phase boundary, when every room sharing one
+            Adaptive Lighting Sensor transitions at literally the same
+            instant. Never delays motion, manual runs, or Additional
+            Triggers. Set to 0 to disable.
           default: 15
           selector:
             number:
@@ -296,6 +288,16 @@ trigger:
   # "the next tick will fix it" is always a true statement, whether or
   # not the curve is moving.
   #
+  # Also the self-healing safety net (see the `adaptive_tick` branch in
+  # action: below, which checks whether it's actually a self-heal tick
+  # or an ordinary one) - merged from what used to be a second,
+  # separate `reconcile` trigger on its own interval, once there turned
+  # out to be no real reason for two independent periodic ticks: the
+  # self-heal check already re-debounces itself against Wait time on
+  # every tick regardless of how often it's asked (see that branch's
+  # own comment), so sharing this tick's cadence only means dropped
+  # commands get retried at least as promptly as before, never less.
+  #
   # Deliberately a separate id rather than reusing `adaptive` -
   # scene_recheck_due reads trigger.from_state/to_state, which a
   # time_pattern trigger has no equivalent of, and attribute access on
@@ -326,10 +328,6 @@ trigger:
     options:
       for:
         seconds: !input no_motion_wait
-  # Periodic safety net - see the `reconcile` branch in action: below
-  - id: reconcile
-    platform: time_pattern
-    minutes: !input reconcile_interval
   - id: recovered
     platform: template
     value_template: >
@@ -757,13 +755,15 @@ action:
   # every such room fires at literally the same instant, but also
   # relevant to adaptive_tick's own synchronized time_pattern boundary.
   # Placed first so it applies uniformly regardless of which branch
-  # below eventually runs. Every other trigger renders 0 seconds, which
-  # HA's script engine short-circuits synchronously - no real overhead
-  # for motion/manual/reconcile/extra/recovered, none of which are
-  # jittered (extra/recovered are inherently per-room events, not
-  # something that fires simultaneously across multiple rooms the way
-  # a shared sensor's phase transition or a synchronized time_pattern
-  # boundary does, so there's no cascade for jitter to address there).
+  # below eventually runs, including the self-healing check (it shares
+  # this same adaptive_tick trigger - see that branch's own comment).
+  # Every other trigger renders 0 seconds, which HA's script engine
+  # short-circuits synchronously - no real overhead for motion/manual/
+  # extra/recovered, none of which are jittered (extra/recovered are
+  # inherently per-room events, not something that fires simultaneously
+  # across multiple rooms the way a shared sensor's phase transition or
+  # a synchronized time_pattern boundary does, so there's no cascade
+  # for jitter to address there).
   #
   # mode: restart (above) means a genuine trigger arriving mid-delay
   # correctly preempts a jittered run rather than queuing behind it -
@@ -811,71 +811,86 @@ action:
               entity_id: "{{ reachable_entities }}"
             data:
               transition: !input motion_off_transition
-      # Periodic tick: if we're unoccupied but something's still on
-      # (e.g. an earlier turn-off command didn't land), retry just that
+      # Self-healing: on an adaptive_tick tick, if we're unoccupied but
+      # something's still on (e.g. an earlier turn-off command didn't
+      # land), retry just that - sharing adaptive_tick's own trigger/
+      # interval rather than a separate `reconcile` one, once there
+      # turned out to be no real reason for two independent periodic
+      # ticks (see that trigger's own comment). These conditions -
+      # not just "trigger.id == adaptive_tick" alone - decide whether
+      # THIS tick is a self-heal one: when they don't all hold, this
+      # branch doesn't match and default: below runs instead, reapplying
+      # adaptive lighting exactly as any other adaptive_tick would.
+      #
+      # Deliberately exclusive of default: when they DO hold, rather
+      # than doing both in the same run: entities_still_on and
+      # adaptive_target_entities are computed once, in variables: above,
+      # before action: runs - they don't reflect this branch's own
+      # turn_off yet, so reapplying lighting in the same run risks
+      # apply_lighting immediately turning the just-turned-off light
+      # back on from stale state. The next adaptive_tick picks up
+      # normal brightness/colour tracking correctly, once state has
+      # caught up - the same one-tick lag this self-heal check already
+      # has today.
       - conditions:
           - condition: trigger
-            id: reconcile
+            id: adaptive_tick
+          # No occupancy sensor in Room means no independent "not
+          # occupied" signal at all (see the occupied variable's
+          # docstring) - so there's nothing to reconcile against and
+          # this never matches, matching Adaptive Tick Interval's own
+          # description.
+          - condition: template
+            value_template: "{{ room_occupancy_entities | length > 0 }}"
+          # Requires occupancy to have been continuously clear for the
+          # full Wait time, not just clear at this exact instant -
+          # unlike the motion_off trigger above (whose own for: clause
+          # already provides this), this self-heal check has no
+          # relationship to occupancy timing on its own, so nothing else
+          # here debounces it. A bare "not occupancy.is_detected" check
+          # previously let a momentary sensor blip - a room that's
+          # genuinely still in use, just reported briefly clear by a
+          # noisy sensor - turn lights off immediately, bypassing Wait
+          # time entirely.
+          #
+          # A plain template, not occupancy.is_not_detected's own
+          # `for:` option (which does exist and would be the more
+          # "native" fit - HA core's helpers/condition.py:
+          # EntityConditionBase supports it via the same duration
+          # mechanism trigger-level `for:` already uses). Deliberately
+          # not used: it needs the recorder to "prime" a duration
+          # that was already satisfied before the condition itself
+          # started watching (HA core's own _HistoryPrimingManager
+          # exists specifically for this), which is exactly the
+          # situation right after a restart - this condition would
+          # start watching fresh with no in-memory history of its own,
+          # needing the recorder to correctly recognise a room that's
+          # already been clear a while. This template needs no such
+          # priming: `last_changed` is a plain property every state
+          # object already carries, answered instantly from memory
+          # regardless of restart timing or recorder availability - the
+          # "0 vs null multiplier" precedent already documents why
+          # relying on something available only sometimes is worth
+          # avoiding here.
+          - condition: template
+            value_template: >-
+              {% set ns = namespace(all_clear=true) %}
+              {% for e in room_occupancy_entities %}
+                {% if not is_state(e, 'off') or
+                      (now() - states[e].last_changed).total_seconds() < (no_motion_wait | int) %}
+                  {% set ns.all_clear = false %}
+                {% endif %}
+              {% endfor %}
+              {{ ns.all_clear }}
+          - condition: template
+            value_template: "{{ entities_still_on | length > 0 }}"
         sequence:
-          - if:
-              # No occupancy sensor in Room means no independent "not
-              # occupied" signal at all (see the occupied variable's
-              # docstring) - so there's nothing to reconcile against and
-              # this never fires, matching Reconcile Interval's own
-              # description.
-              - condition: template
-                value_template: "{{ room_occupancy_entities | length > 0 }}"
-              # Requires occupancy to have been continuously clear for
-              # the full Wait time, not just clear at this exact instant
-              # - unlike the motion_off trigger above (whose own for:
-              # clause already provides this), reconcile's trigger is a
-              # plain time_pattern with no relationship to occupancy
-              # timing at all, so nothing else here debounces it. A
-              # bare "not occupancy.is_detected" check previously let a
-              # momentary sensor blip - a room that's genuinely still in
-              # use, just reported briefly clear by a noisy sensor -
-              # turn lights off immediately, bypassing Wait time
-              # entirely.
-              #
-              # A plain template, not occupancy.is_not_detected's own
-              # `for:` option (which does exist and would be the more
-              # "native" fit - HA core's helpers/condition.py:
-              # EntityConditionBase supports it via the same duration
-              # mechanism trigger-level `for:` already uses). Deliberately
-              # not used: it needs the recorder to "prime" a duration
-              # that was already satisfied before the condition itself
-              # started watching (HA core's own _HistoryPrimingManager
-              # exists specifically for this), which is exactly the
-              # situation right after a restart - reconcile's own
-              # condition would start watching fresh with no in-memory
-              # history of its own, needing the recorder to correctly
-              # recognise a room that's already been clear a while. This
-              # template needs no such priming: `last_changed` is a
-              # plain property every state object already carries,
-              # answered instantly from memory regardless of restart
-              # timing or recorder availability - the "0 vs null
-              # multiplier" precedent already documents why relying on
-              # something available only sometimes is worth avoiding
-              # here.
-              - condition: template
-                value_template: >-
-                  {% set ns = namespace(all_clear=true) %}
-                  {% for e in room_occupancy_entities %}
-                    {% if not is_state(e, 'off') or
-                          (now() - states[e].last_changed).total_seconds() < (no_motion_wait | int) %}
-                      {% set ns.all_clear = false %}
-                    {% endif %}
-                  {% endfor %}
-                  {{ ns.all_clear }}
-              - condition: template
-                value_template: "{{ entities_still_on | length > 0 }}"
-            then:
-              - alias: "Reconcile: retry turning off lights left on with no occupancy"
-                action: light.turn_off
-                target:
-                  entity_id: "{{ entities_still_on }}"
-                data:
-                  transition: !input motion_off_transition
+          - alias: "Self-heal: retry turning off lights left on with no occupancy"
+            action: light.turn_off
+            target:
+              entity_id: "{{ entities_still_on }}"
+            data:
+              transition: !input motion_off_transition
     default:
       - if:
           - condition: template
