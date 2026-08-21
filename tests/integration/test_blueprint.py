@@ -66,7 +66,7 @@ async def _setup_room_automation(
         # would make every test relying on a synchronous check after
         # adaptive/adaptive_tick fires flaky/slow. Jitter-specific tests
         # override this explicitly via extra_inputs.
-        "adaptive_tick_jitter": 0,
+        "update_jitter": 0,
         **extra_inputs,
     }
     assert await async_setup_component(
@@ -243,11 +243,11 @@ class TestAdaptiveScheduleAndTransitions:
 
         assert scene_turn_on_calls == []
 
-    async def test_adaptive_tick_uses_the_adaptive_transition_duration(self, hass, apply_lighting_calls):
+    async def test_adaptive_tick_uses_the_background_transition_duration(self, hass, apply_lighting_calls):
         _light(hass, "light.a", "on")
         await hass.async_block_till_done()
         await _setup_room_automation(
-            hass, room_target={"entity_id": "light.a"}, adaptive_transition=45, motion_on_transition=2
+            hass, room_target={"entity_id": "light.a"}, background_transition=45, motion_on_transition=2
         )
 
         hass.states.async_set("sensor.test_adaptive", "Day", {"brightness": 210, "color_temp": 4000})
@@ -264,7 +264,7 @@ class TestAdaptiveScheduleAndTransitions:
         await _setup_room_automation(
             hass,
             room_target={"entity_id": ["light.a", "binary_sensor.occ"]},
-            adaptive_transition=45,
+            background_transition=45,
             motion_on_transition=2,
         )
 
@@ -300,7 +300,7 @@ class TestAdaptiveScheduleAndTransitions:
         await hass.async_block_till_done()
         # jitter=0 explicit - isolating "does it fire on a transition"
         # from the jitter-delay test below.
-        await _setup_room_automation(hass, room_target={"entity_id": "light.a"}, adaptive_tick_jitter=0)
+        await _setup_room_automation(hass, room_target={"entity_id": "light.a"}, update_jitter=0)
         apply_lighting_calls.clear()
 
         hass.states.async_set("sensor.test_adaptive", "Evening", {"brightness": 150, "color_temp": 3000})
@@ -324,7 +324,7 @@ class TestAdaptiveScheduleAndTransitions:
             hass,
             room_target={"entity_id": "light.a"},
             adaptive_sensor="sensor.brand_new_adaptive",
-            adaptive_tick_jitter=0,
+            update_jitter=0,
         )
 
         hass.states.async_set("sensor.brand_new_adaptive", "Day", {"brightness": 210, "color_temp": 4000})
@@ -380,7 +380,7 @@ class TestAdaptiveScheduleAndTransitions:
         monkeypatch.setattr("random.choice", lambda seq: seq[-1])
         _light(hass, "light.a", "on", brightness=190, color_temp_kelvin=4000)
         await hass.async_block_till_done()
-        await _setup_room_automation(hass, room_target={"entity_id": "light.a"}, adaptive_tick_jitter=1)
+        await _setup_room_automation(hass, room_target={"entity_id": "light.a"}, update_jitter=1)
         apply_lighting_calls.clear()
 
         # Not jittered - a manual run completes synchronously (a 0s
@@ -408,7 +408,7 @@ class TestAdaptiveScheduleAndTransitions:
         # expected and tolerated by this file's own teardown fixture).
         await hass.services.async_call("automation", "trigger", {"entity_id": "automation.room"}, blocking=True)
 
-    async def test_adaptive_tick_interval_actually_changes_cadence(
+    async def test_update_interval_actually_changes_cadence(
         self, hass, apply_lighting_calls, frozen_time
     ):
         """Uses the shared file-wide `frozen_time` fixture directly
@@ -425,7 +425,7 @@ class TestAdaptiveScheduleAndTransitions:
         _light(hass, "light.a", "on", brightness=190, color_temp_kelvin=4000)
         await hass.async_block_till_done()
         await _setup_room_automation(
-            hass, room_target={"entity_id": "light.a"}, adaptive_tick_interval="/2"
+            hass, room_target={"entity_id": "light.a"}, update_interval="/2"
         )
         apply_lighting_calls.clear()
 
@@ -1093,7 +1093,7 @@ class TestSelfHealing:
         _light(hass, "light.a", "on")
         await hass.async_block_till_done()
         await _setup_room_automation(
-            hass, room_target={"entity_id": ["light.a", "binary_sensor.occ"]}, adaptive_tick_interval="/5"
+            hass, room_target={"entity_id": ["light.a", "binary_sensor.occ"]}, update_interval="/5"
         )
         _occupancy(hass, "binary_sensor.occ", "off")
         await hass.async_block_till_done()
@@ -1118,7 +1118,7 @@ class TestSelfHealing:
         await hass.async_block_till_done()
 
         await _setup_room_automation(
-            hass, room_target={"entity_id": ["light.a", "binary_sensor.occ"]}, adaptive_tick_interval="/5"
+            hass, room_target={"entity_id": ["light.a", "binary_sensor.occ"]}, update_interval="/5"
         )
         apply_lighting_calls.clear()
 
@@ -1149,7 +1149,7 @@ class TestSelfHealing:
         await _setup_room_automation(
             hass,
             room_target={"entity_id": ["light.a", "binary_sensor.occ"]},
-            adaptive_tick_interval="/5",
+            update_interval="/5",
             no_motion_wait=120,
         )
 

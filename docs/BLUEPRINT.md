@@ -22,17 +22,17 @@ have to hunt through every sensor in the house to find the right one) - a hand-w
 won't show up in that dropdown. It still works if you point at it via the automation's **Edit in YAML** view
 instead of the picker.
 
-That cadence comes from two triggers, not one, with two different jobs. Adaptive Tick — a plain time pattern,
-Adaptive Tick Interval below (default every minute) — is the one actually doing the routine work: it reapplies
-the schedule on a fixed interval regardless of whether anything changed, which is what makes "the next tick will
-correct it" true at every hour of the day, including Morning and Night's *flat* stretches (constant brightness
-and Kelvin for the whole phase, where nothing would otherwise trigger an update at all). The sensor's own state
-trigger only fires on an actual phase change (Morning→Day and so on) — not on the attribute-only ticks in
-between, which the periodic tick already covers — so a room isn't left waiting up to a full tick interval to
-notice it just entered a new phase. This same periodic tick also drives the [Self-healing](#self-healing) check
-below - there's no separate interval for that.
+That cadence comes from two triggers, not one, with two different jobs. A plain time pattern - Update Interval
+below (default every minute) - is the one actually doing the routine work: it reapplies the schedule on a fixed
+interval regardless of whether anything changed, which is what makes "the next tick will correct it" true at
+every hour of the day, including Morning and Night's *flat* stretches (constant brightness and Kelvin for the
+whole phase, where nothing would otherwise trigger an update at all). The sensor's own state trigger only fires
+on an actual phase change (Morning→Day and so on) — not on the attribute-only ticks in between, which the
+periodic tick already covers — so a room isn't left waiting up to a full tick interval to notice it just entered
+a new phase. This same periodic tick also drives the [Self-healing](#self-healing) check below - there's no
+separate interval for that.
 
-Both of these, plus a genuine phase change, are also where Adaptive Tick Jitter applies: a random delay (default
+Both of these, plus a genuine phase change, are also where Update Jitter applies: a random delay (default
 up to 15 seconds) so that many rooms sharing one Adaptive Lighting Sensor don't all send commands in the same
 wall-clock second — most noticeable right at a phase boundary, when every such room would otherwise fire at
 literally the same instant. Motion, manual runs, and Additional Triggers are never delayed - self-healing is,
@@ -251,7 +251,7 @@ drifting smoothly the rest of the time:
 
 | Duration | Used for |
 |---|---|
-| Adaptive Transition | The periodic adaptive tick, Additional Triggers, and a light recovering from a dropped connection (see [Override detection](#override-detection)) - none of these are a person waiting on a response in real time, so there's no reason to snap. Covers both the scene-activation step and the main adaptive-lighting dispatch |
+| Background Transition | The periodic Update tick, Additional Triggers, and a light recovering from a dropped connection (see [Override detection](#override-detection)) - none of these are a person waiting on a response in real time, so there's no reason to snap. Covers both the scene-activation step and the main adaptive-lighting dispatch |
 | Motion On Transition | Motion being detected, and running the automation manually - "something happened, respond promptly" triggers |
 | Motion Off Transition | Turning lights off - both the motion-cleared turn-off and the [self-healing](#self-healing) retry |
 
@@ -263,7 +263,7 @@ left alone rather than recommanded on every tick.
 
 ## Self-healing
 
-On every Adaptive Tick (the same periodic tick that drives ordinary brightness/colour tracking — see
+On every Update tick (the same periodic tick that drives ordinary brightness/colour tracking — see
 [Brightness & colour temperature schedule](#brightness--colour-temperature-schedule) — there's no separate
 interval for this), if the room's occupancy sensors have been continuously clear for the full Wait time but a
 light is still on, the off command is retried instead of the normal reapply. This recovers from dropped commands
@@ -294,14 +294,14 @@ Add an automation using the "Adaptive Lighting" blueprint per room, and set:
 | **Scene Handoff** section | | |
 | Scene Template | no | Template returning a scene entity_id to hand the room over to - wins over the phase pickers below when it returns one |
 | Morning / Day / Evening / Night Scene | no | Per-phase scene to hand the room over to - the fallback for phases Scene Template doesn't cover (see [Scene handoff](#scene-handoff)) |
-| **Brightness Scaling** section | | |
+| **Brightness & Exclusions** section | | |
 | Brightness Multiplier Template | no | Per-light brightness scaling - its own per-entity values win over the phase lists below |
 | Lights Off During Morning / Day / Evening / Night | no | Lights to turn off during that phase - fills in whatever Brightness Multiplier Template doesn't already cover (see [Per-light brightness scaling](#per-light-brightness-scaling)) |
 | **Timing** section | | |
 | Wait time | no | Seconds to keep lights on after motion stops (default 120) |
-| Adaptive Tick Interval | no | How often to reapply the schedule on a fixed interval - also the self-healing check interval, there's no separate one (default every minute, see [Brightness & colour temperature schedule](#brightness--colour-temperature-schedule)) |
-| Adaptive Tick Jitter | no | Max random delay (seconds) on a phase change or the periodic tick, so many rooms don't fire in the same instant (default 15s, 0 disables) |
-| Motion On / Motion Off / Adaptive Transition | no | Transition durations for each trigger type (see [Transition durations](#transition-durations)) |
+| Update Interval | no | How often to reapply the schedule on a fixed interval - also the self-healing check interval, there's no separate one (default every minute, see [Brightness & colour temperature schedule](#brightness--colour-temperature-schedule)) |
+| Update Jitter | no | Max random delay (seconds) on a phase change or the periodic tick, so many rooms don't fire in the same instant (default 15s, 0 disables) |
+| Motion On / Motion Off / Background Transition | no | Transition durations for each trigger type (see [Transition durations](#transition-durations)) |
 
 Note: if migrating from an older, pre-rewrite version of this blueprint, the inputs have changed
 (`scene_sensor`/`scene_name_prefix` → `scene_template`/`extra_triggers`) — every room automation using the old
