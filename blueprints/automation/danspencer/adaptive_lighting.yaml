@@ -108,8 +108,8 @@ blueprint:
           selector:
             entity:
               domain: scene
-    brightness_scaling:
-      name: Brightness Scaling
+    brightness_exclusions:
+      name: Brightness & Exclusions
       icon: mdi:brightness-percent
       collapsed: true
       input:
@@ -166,27 +166,27 @@ blueprint:
               min: 0
               max: 3600
               unit_of_measurement: seconds
-        adaptive_tick_interval:
-          name: Adaptive Tick Interval (Optional)
+        update_interval:
+          name: Update Interval (Optional)
           description: >
-            How often to reapply adaptive lighting on a schedule,
-            regardless of whether the sensor's phase changed - the sole
-            driver of ordinary brightness/colour-temperature tracking,
-            since a same-phase sensor update alone no longer triggers a
-            reapply on its own. Also drives self-healing: on a tick
-            where nothing needs retrying, it reapplies lighting as
-            normal instead. Home Assistant's own time_pattern syntax
-            (not standard cron) - a fixed number, '*' for any, or e.g.
-            '/1' for every minute.
+            How often to reapply lighting on a schedule, regardless of
+            whether the sensor's phase changed - the sole driver of
+            ordinary brightness/colour-temperature tracking, since a
+            same-phase sensor update alone no longer triggers a reapply
+            on its own. Also drives self-healing: on a tick where
+            nothing needs retrying, it reapplies lighting as normal
+            instead. Home Assistant's own time_pattern syntax (not
+            standard cron) - a fixed number, '*' for any, or e.g. '/1'
+            for every minute.
             [Details](https://www.home-assistant.io/docs/automation/trigger/#time-pattern-trigger).
           default: "/1"
           selector:
             text: {}
-        adaptive_tick_jitter:
-          name: Adaptive Tick Jitter (Optional)
+        update_jitter:
+          name: Update Jitter (Optional)
           description: >
             Maximum random delay, in seconds, applied to a genuine phase
-            change and the periodic Adaptive Tick above (including its
+            change and the periodic Update Interval above (including its
             self-healing check), so many rooms' automations don't all
             send commands in the same wall-clock second - most acute
             right at a phase boundary, when every room sharing one
@@ -217,9 +217,9 @@ blueprint:
               min: 0
               max: 60
               unit_of_measurement: seconds
-        adaptive_transition:
-          name: Adaptive Transition
-          description: Transition duration when adaptive lighting, the scene template, or an Additional Trigger updates.
+        background_transition:
+          name: Background Transition
+          description: Transition duration when the schedule, the scene template, or an Additional Trigger updates - i.e. nothing a person is actively waiting on.
           default: 30
           selector:
             number:
@@ -304,7 +304,7 @@ trigger:
   # an undefined name raises and aborts the whole run.
   - id: adaptive_tick
     platform: time_pattern
-    minutes: !input adaptive_tick_interval
+    minutes: !input update_interval
   # Anything named in Additional Triggers changed - e.g. a TV for a
   # brightness multiplier, or whatever the scene template depends on
   - id: extra
@@ -446,7 +446,7 @@ variables:
   room_target: !input room_target
   adaptive_sensor: !input adaptive_sensor
   scene_template: !input scene_template
-  adaptive_transition: !input adaptive_transition
+  background_transition: !input background_transition
   motion_on_transition: !input motion_on_transition
   # Exposed as a variable (not just used inline via !input, the way
   # motion_off_transition still is) specifically so the reconcile
@@ -457,7 +457,7 @@ variables:
   # Exposed as a variable for the same reason as no_motion_wait above -
   # the jitter delay step in action: below needs to reference it inside
   # a Jinja template.
-  adaptive_tick_jitter: !input adaptive_tick_jitter
+  update_jitter: !input update_jitter
   rgb_phases: !input rgb_phases
   prefer_rgb_color: "{{ states(adaptive_sensor) in rgb_phases }}"
   script_transition: >
@@ -466,7 +466,7 @@ variables:
        so there's no reason to snap. Snappier for actual motion or a
        manual run instead. #}
     {% if trigger is defined and trigger.id is defined and trigger.id in ['adaptive', 'adaptive_tick', 'extra', 'recovered'] %}
-      {{ adaptive_transition }}
+      {{ background_transition }}
     {% else %}
       {{ motion_on_transition }}
     {% endif %}
@@ -748,7 +748,7 @@ variables:
       {{ scoped | reject('is_state', 'off') | list }}
     {% endif %}
 action:
-  # Spreads a genuine phase change or the periodic Adaptive Tick's
+  # Spreads a genuine phase change or the periodic Update tick's
   # writes across a random window, so many rooms sharing one Adaptive
   # Lighting Sensor don't all send commands in the same wall-clock
   # second - most acute right at a phase boundary (adaptive), where
@@ -772,11 +772,11 @@ action:
   # starting, which resolves _async_step_delay's awaited stop future,
   # so the delayed run's next loop iteration sees self._stop.done() and
   # aborts before ever reaching the choose: block below.
-  - alias: "Jitter: spread a phase change or the periodic Adaptive Tick's writes across a random window"
+  - alias: "Jitter: spread a phase change or the periodic Update tick's writes across a random window"
     delay:
       seconds: >-
         {% if trigger is defined and trigger.id is defined and trigger.id in ['adaptive', 'adaptive_tick'] %}
-          {{ range(0, (adaptive_tick_jitter | int) + 1) | random }}
+          {{ range(0, (update_jitter | int) + 1) | random }}
         {% else %}
           0
         {% endif %}
@@ -838,7 +838,7 @@ action:
           # No occupancy sensor in Room means no independent "not
           # occupied" signal at all (see the occupied variable's
           # docstring) - so there's nothing to reconcile against and
-          # this never matches, matching Adaptive Tick Interval's own
+          # this never matches, matching Update Interval's own
           # description.
           - condition: template
             value_template: "{{ room_occupancy_entities | length > 0 }}"

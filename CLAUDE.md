@@ -2746,6 +2746,54 @@ designs were explored:
   merge didn't accidentally suppress the ordinary tick path when
   self-healing doesn't apply. Full suite: 151/151.
 
+- **Three inputs renamed to stop overloading "Adaptive" as a generic
+  prefix, plus the Brightness Scaling section - 2026-08-21, user's own
+  direct pushback right after the reconcile merge shipped**: "we've got
+  some weird field naming going on... Adaptive Tick Interval, Adaptive
+  Tick Jitter, Adaptive Transition - none of these thing are actually
+  adaptive - you've just stuck the word adaptive on everything!" Also
+  flagged that Brightness Scaling no longer accurately describes its
+  own contents, now that it holds the per-phase "lights off" pickers
+  alongside the multiplier template - those are a binary exclude, not a
+  scaling operation. Both fair - `adaptive_tick_interval`/
+  `adaptive_tick_jitter` describe a *schedule* concern (self-healing,
+  routine reapplication) that isn't specifically about the adaptive
+  curve, and `adaptive_transition` is really about *who's* waiting on
+  the update (nobody, vs. Motion On/Off's "someone's here right now"),
+  not adaptiveness either.
+
+  Renamed via `AskUserQuestion` against the user's own instinct (all
+  four "Recommended" options were picked as-is): `adaptive_tick_interval`
+  → `update_interval` ("Update Interval"), `adaptive_tick_jitter` →
+  `update_jitter` ("Update Jitter"), `adaptive_transition` →
+  `background_transition` ("Background Transition" - contrasts
+  directly with Motion On/Off Transition), and the `brightness_scaling`
+  section → `brightness_exclusions` ("Brightness & Exclusions").
+
+  **A genuine breaking rename, not just cosmetic - user's own explicit
+  call: "right now I'm the only person using this so don't worry about
+  backwards compatability - you can fix my instance."** Renamed the
+  actual `input:`/`!input` keys throughout (trigger `minutes:`,
+  `variables:`, the jitter delay template, `script_transition`), not
+  just the display `name:` labels - confirmed via `ha_config_get_automation`
+  that `automation.dining_room_lighting` had `adaptive_transition: 0`
+  explicitly set (the only one of the three with a real live override -
+  `update_interval`/`update_jitter` were introduced only hours earlier
+  the same day, in the two PRs directly above this entry, so nothing
+  could have customised those yet). The internal trigger id
+  (`id: adaptive_tick`) and its own template references
+  (`trigger.id == 'adaptive_tick'`, used throughout `script_transition`/
+  `scene_recheck_due`/the merged self-heal branch) were deliberately
+  left unchanged - not user-visible in the UI editor the way the input
+  labels are, and renaming it would have meant touching many more
+  template conditions for no real benefit to the actual complaint.
+
+  Full suite: 151/151, no mutation testing needed (a pure rename, no
+  new logic). Live automations with the old key(s) set need fixing by
+  hand after deploying - see the live-verification note for which ones
+  and how, matching the user's own "fix my instance" instruction rather
+  than leaving compatibility shims.
+
 **Deployment / operational notes:**
 - pyscript is fully gone, both from this repo and the live host.
 - The dev git-sync automation (polling this repo for new commits and
