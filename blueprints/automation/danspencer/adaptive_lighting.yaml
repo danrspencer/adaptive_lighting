@@ -57,10 +57,12 @@ blueprint:
         rgb_phases:
           name: Prefer RGB During
           description: >
-            Phases to send RGB colour instead of colour temperature
-            during, for lights that support it (auto-detected). Colour
-            reads as "relaxed/night" better than a plain colour-temperature
-            warm white does, but isn't worth it for the rest of the day.
+            Phases to send RGB colour instead of colour temperature, for
+            lights that support it (auto-detected). At the high colour
+            temperatures used during Morning/Day, this can look
+            blue-tinted rather than a clean white, so those phases are
+            off by default - Evening/Night's warmer values don't have
+            that problem.
             [Details](https://github.com/danrspencer/adaptive_lighting/blob/main/docs/BLUEPRINT.md#rgb-colour).
           default: [Evening, Night]
           selector:
@@ -169,15 +171,10 @@ blueprint:
         update_interval:
           name: Update Interval (Optional)
           description: >
-            How often to reapply lighting on a schedule, regardless of
-            whether the sensor's phase changed - the sole driver of
-            ordinary brightness/colour-temperature tracking, since a
-            same-phase sensor update alone no longer triggers a reapply
-            on its own. Also drives self-healing: on a tick where
-            nothing needs retrying, it reapplies lighting as normal
-            instead. Home Assistant's own time_pattern syntax (not
-            standard cron) - a fixed number, '*' for any, or e.g. '/1'
-            for every minute.
+            How often to check the lights are up to date, outside of a
+            phase change or motion - if everything's already correct,
+            nothing is sent. Home Assistant's time_pattern syntax, e.g.
+            '/1' for every minute.
             [Details](https://www.home-assistant.io/docs/automation/trigger/#time-pattern-trigger).
           default: "/1"
           selector:
@@ -185,14 +182,9 @@ blueprint:
         update_jitter:
           name: Update Jitter (Optional)
           description: >
-            Maximum random delay, in seconds, applied to a genuine phase
-            change and the periodic Update Interval above (including its
-            self-healing check), so many rooms' automations don't all
-            send commands in the same wall-clock second - most acute
-            right at a phase boundary, when every room sharing one
-            Adaptive Lighting Sensor transitions at literally the same
-            instant. Never delays motion, manual runs, or Additional
-            Triggers. Set to 0 to disable.
+            Spreads scheduled updates over a random delay, in seconds,
+            so multiple rooms sharing a sensor don't all send commands
+            at the same instant. Set to 0 to disable.
           default: 15
           selector:
             number:

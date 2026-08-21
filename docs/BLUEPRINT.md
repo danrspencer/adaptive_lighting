@@ -240,8 +240,10 @@ that support it (auto-detected per light, nothing to configure per bulb). Some b
 accurately in RGB mode than colour-temperature mode, which is the main reason to turn it on. Lights without RGB
 support are unaffected either way.
 
-Defaults to Evening and Night selected, Morning and Day not - colour reads as "relaxed/night" better than a
-plain warm white does, but isn't worth it for the rest of the day. Select all four (or none) if you want it
+Defaults to Evening and Night selected, Morning and Day not - at the high colour temperatures used during
+Morning/Day (the Kelvin→RGB conversion saturates the blue channel above ~6600K), RGB can render as a blue-tinted
+white rather than the clean white a bulb's native colour-temperature mode produces at the same value. Evening/Night's
+warmer values don't hit that saturation point, so RGB there looks correct. Select all four (or none) if you want it
 on/off unconditionally.
 
 ## Transition durations
