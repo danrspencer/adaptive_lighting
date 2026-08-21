@@ -108,6 +108,29 @@ def _sensor(hass: HomeAssistant):
 
 
 @pytest.fixture(autouse=True)
+def frozen_time():
+    """Every test in this file sets up a real automation carrying a live
+    adaptive_tick (time_pattern, every 1 minute - see
+    TestAdaptiveScheduleAndTransitions.test_a_flat_curve_still_gets_a_tick_from_the_time_pattern)
+    among its other real triggers. Without controlling wall-clock time,
+    any test whose setup-plus-assertion window happens to straddle a real
+    minute boundary can have that trigger fire for real mid-test - not a
+    hypothetical, reproduced locally at roughly 5% failure rate for
+    TestRecoveredTrigger.test_a_plain_off_to_on_transition_does_not_fire_it,
+    which asserts apply_lighting_calls == [] and has no way to distinguish
+    "nothing fired" from "the periodic tick happened to fire too". Freezing
+    time file-wide (not just in the handful of tests that explicitly
+    advance it) closes this off for every test, not only the one that
+    happened to get caught. A test that needs elapsed time to actually
+    pass takes this same fixture by name and calls `.tick()`/`.move_to()`
+    on it directly, rather than opening its own nested freeze_time (see
+    TestSelfHealing) - freezegun's nesting support is real, but there's no
+    reason to rely on it when the outer freeze is already right here."""
+    with freeze_time(dt_util.utcnow()) as frozen:
+        yield frozen
+
+
+@pytest.fixture(autouse=True)
 def expected_lingering_timers():
     """Every test here sets up a real automation with a live `reconcile`
     time_pattern trigger (default every 5 minutes) - that timer is
@@ -817,7 +840,7 @@ class TestSelfHealing:
     """docs/BLUEPRINT.md#self-healing"""
 
     async def test_reconcile_retries_turning_off_a_light_left_on_with_no_occupancy(
-        self, hass, light_turn_off_calls
+        self, hass, light_turn_off_calls, frozen_time
     ):
         """reconcile's own condition is a hand-written template
         comparing `now() - states[e].last_changed` against Wait time
@@ -828,22 +851,22 @@ class TestSelfHealing:
         between clearing occupancy and the reconcile tick for this to
         pass honestly - `async_fire_time_changed` only fires the event
         that trips the time_pattern trigger, it does not advance
-        `now()` itself. Time is frozen and explicitly ticked forward so
-        `now()` inside the template genuinely reflects the passed Wait
-        time, rather than the real (near-zero) wall-clock gap between
-        the two calls."""
-        with freeze_time(dt_util.utcnow()) as frozen:
-            _light(hass, "light.a", "on")
-            await hass.async_block_till_done()
-            await _setup_room_automation(
-                hass, room_target={"entity_id": ["light.a", "binary_sensor.occ"]}, reconcile_interval="/5"
-            )
-            _occupancy(hass, "binary_sensor.occ", "off")
-            await hass.async_block_till_done()
+        `now()` itself. Time is frozen file-wide (see the `frozen_time`
+        fixture) and explicitly ticked forward here so `now()` inside
+        the template genuinely reflects the passed Wait time, rather
+        than the real (near-zero) wall-clock gap between the two
+        calls."""
+        _light(hass, "light.a", "on")
+        await hass.async_block_till_done()
+        await _setup_room_automation(
+            hass, room_target={"entity_id": ["light.a", "binary_sensor.occ"]}, reconcile_interval="/5"
+        )
+        _occupancy(hass, "binary_sensor.occ", "off")
+        await hass.async_block_till_done()
 
-            frozen.tick(timedelta(minutes=6))
-            async_fire_time_changed(hass, dt_util.utcnow())
-            await hass.async_block_till_done()
+        frozen_time.tick(timedelta(minutes=6))
+        async_fire_time_changed(hass, dt_util.utcnow())
+        await hass.async_block_till_done()
 
         assert light_turn_off_calls and "light.a" in light_turn_off_calls[-1].data["entity_id"]
 
@@ -862,7 +885,7 @@ class TestSelfHealing:
         assert light_turn_off_calls == []
 
     async def test_reconcile_ignores_a_momentary_occupancy_blip_shorter_than_wait_time(
-        self, hass, light_turn_off_calls
+        self, hass, light_turn_off_calls, frozen_time
     ):
         """Live incident, 2026-08-21: a noisy-but-genuinely-occupied
         room's occupancy sensor flapped off for a few seconds at a time,
@@ -873,31 +896,30 @@ class TestSelfHealing:
         bypassing Wait time (no_motion_wait) entirely. Reproduced here by
         clearing occupancy only 30s before a reconcile boundary, with
         Wait time set well above that."""
-        with freeze_time(dt_util.utcnow()) as frozen:
-            _light(hass, "light.a", "on")
-            await hass.async_block_till_done()
-            await _setup_room_automation(
-                hass,
-                room_target={"entity_id": ["light.a", "binary_sensor.occ"]},
-                reconcile_interval="/5",
-                no_motion_wait=120,
-            )
+        _light(hass, "light.a", "on")
+        await hass.async_block_till_done()
+        await _setup_room_automation(
+            hass,
+            room_target={"entity_id": ["light.a", "binary_sensor.occ"]},
+            reconcile_interval="/5",
+            no_motion_wait=120,
+        )
 
-            now = dt_util.utcnow()
-            next_boundary = now.replace(second=0, microsecond=0) + timedelta(
-                minutes=5 - (now.minute % 5), seconds=0
-            )
+        now = dt_util.utcnow()
+        next_boundary = now.replace(second=0, microsecond=0) + timedelta(
+            minutes=5 - (now.minute % 5), seconds=0
+        )
 
-            frozen.move_to(next_boundary - timedelta(seconds=30))
-            async_fire_time_changed(hass, dt_util.utcnow())
-            await hass.async_block_till_done()
-            _occupancy(hass, "binary_sensor.occ", "off")
-            await hass.async_block_till_done()
+        frozen_time.move_to(next_boundary - timedelta(seconds=30))
+        async_fire_time_changed(hass, dt_util.utcnow())
+        await hass.async_block_till_done()
+        _occupancy(hass, "binary_sensor.occ", "off")
+        await hass.async_block_till_done()
 
-            # Occupancy has only been clear for ~30s here - well under the
-            # 120s Wait time - when reconcile's own tick fires.
-            frozen.move_to(next_boundary + timedelta(seconds=1))
-            async_fire_time_changed(hass, dt_util.utcnow())
-            await hass.async_block_till_done()
+        # Occupancy has only been clear for ~30s here - well under the
+        # 120s Wait time - when reconcile's own tick fires.
+        frozen_time.move_to(next_boundary + timedelta(seconds=1))
+        async_fire_time_changed(hass, dt_util.utcnow())
+        await hass.async_block_till_done()
 
         assert light_turn_off_calls == []

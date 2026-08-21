@@ -2287,6 +2287,73 @@ designs were explored:
 
   Full suite: 146/146.
 
+- **`TestRecoveredTrigger::test_a_plain_off_to_on_transition_does_not_fire_it`
+  was genuinely flaky, at roughly 5% (1 failure in 20 runs) - found and
+  fixed while shipping the reconcile-debounce PR directly above this
+  entry, 2026-08-21.** Root cause: `adaptive_tick`, the real
+  `time_pattern: minutes: /1` trigger added for the flat-curve fix
+  (2026-08-19, documented above), is a genuine, live trigger on every
+  test automation this file sets up - not mocked, not disabled. This
+  test's whole premise is `assert apply_lighting_calls == []` after a
+  plain off->on transition that nothing in the blueprint should react
+  to - but nothing in the test controls wall-clock time, and
+  `_setup_room_automation` genuinely schedules `adaptive_tick` against
+  real UTC time the moment the automation is set up. If real time
+  happens to cross a minute boundary between that setup call and the
+  test's final assertion - a window of a few milliseconds of real test
+  execution, but genuinely possible depending on where in the current
+  minute the test happens to start - `adaptive_tick` fires for real,
+  calls `apply_lighting`, and the "nothing fired" assertion fails for a
+  reason that has nothing to do with what the test claims to be
+  checking. Confirmed via
+  `pytest_homeassistant_custom_component.common.async_fire_time_changed`'s
+  own source: it only fires the *event* a `time_pattern` trigger is
+  scheduled to react to, it doesn't touch real time at all - so a
+  `time_pattern` trigger set up against genuine wall-clock time stays
+  live and can fire on its own schedule throughout a test's execution,
+  entirely independent of whether the test itself ever calls
+  `async_fire_time_changed`.
+
+  This is exactly the same class of gap `TestSelfHealing`'s two tests
+  (documented immediately above) were already written to guard against
+  for themselves, via an explicit `with freeze_time(dt_util.utcnow())
+  as frozen:` block - but every *other* test in this file that sets up
+  a room automation was equally exposed to the same risk, just at low
+  enough odds (needing a real minute-boundary crossing during a single
+  test's brief execution window) that most runs never hit it. Fixed by
+  promoting the freeze to a file-wide `autouse=True` fixture
+  (`frozen_time`, freezing at `dt_util.utcnow()` and yielding the
+  `FrozenDateTimeFactory`) rather than leaving it opt-in per test -
+  every test in the file now runs under frozen wall-clock time by
+  default, so `adaptive_tick` (or any other real-time-scheduled
+  trigger) can never fire on its own; a test that explicitly needs
+  elapsed time to pass takes the same `frozen_time` fixture by name and
+  calls `.tick()`/`.move_to()` on it directly. `TestSelfHealing`'s two
+  tests were refactored to use this shared fixture instead of opening
+  their own nested `freeze_time` block - freezegun does support nested
+  freezes, but there's no reason to rely on that when the outer freeze
+  is already available fixture-wide.
+
+  Verified fixed by rerunning the original repro loop (the exact
+  command that found the flake) 60 times with zero failures (20 then a
+  further 40, both zero), and the full suite once more: 146/146.
+
+  **A second, unrelated flake was found while re-verifying this fix and
+  is explicitly out of scope here** - occasional full-suite runs (not
+  single-test reruns) fail 2-4 different tests together (seen:
+  `test_area_id_room_target_resolves_both_lights_and_occupancy_sensors`,
+  `test_occupancy_detected_turns_on_off_lights_in_the_room`,
+  `test_motion_on_uses_the_motion_on_transition_duration`,
+  `test_manual_run_forces_the_tick_and_turns_on_off_lights`), with at
+  least one captured failure showing a blueprint input value from a
+  *different* test's automation setup leaking into another
+  (`motion_on_transition=2` configured, `transition=30` observed).
+  Confirmed present on the baseline commit *before* this fix too (same
+  failure shape, same ~1-in-10-15-full-suite-runs rate), so it's a
+  separate, pre-existing issue, not something this fix introduced or
+  needs to cover - flagged for its own dedicated investigation rather
+  than folded into this change.
+
 **Deployment / operational notes:**
 - pyscript is fully gone, both from this repo and the live host.
 - The dev git-sync automation (polling this repo for new commits and
