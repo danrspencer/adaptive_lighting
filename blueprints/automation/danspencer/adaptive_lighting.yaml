@@ -170,10 +170,43 @@ blueprint:
           name: Reconcile Interval (Optional)
           description: >
             How often to retry turning off lights left on with no occupancy.
-            time_pattern syntax, e.g. '/5' for every 5 minutes.
+            Home Assistant's own time_pattern syntax (not standard cron) -
+            a fixed number, '*' for any, or e.g. '/5' for every 5 minutes.
+            [Details](https://www.home-assistant.io/docs/automation/trigger/#time-pattern-trigger).
           default: "/5"
           selector:
             text: {}
+        adaptive_tick_interval:
+          name: Adaptive Tick Interval (Optional)
+          description: >
+            How often to reapply adaptive lighting on a schedule,
+            regardless of whether the sensor's phase changed - now the
+            sole driver of ordinary brightness/colour-temperature
+            tracking, since a same-phase sensor update alone no longer
+            triggers a reapply on its own. Home Assistant's own
+            time_pattern syntax (not standard cron) - a fixed number,
+            '*' for any, or e.g. '/1' for every minute.
+            [Details](https://www.home-assistant.io/docs/automation/trigger/#time-pattern-trigger).
+          default: "/1"
+          selector:
+            text: {}
+        adaptive_tick_jitter:
+          name: Adaptive Tick Jitter (Optional)
+          description: >
+            Maximum random delay, in seconds, applied to a genuine phase
+            change and the periodic Adaptive Tick above, so many rooms'
+            automations don't all send commands in the same wall-clock
+            second - most acute right at a phase boundary, when every
+            room sharing one Adaptive Lighting Sensor transitions at
+            literally the same instant. Never delays motion, manual
+            runs, Additional Triggers, or self-healing. Set to 0 to
+            disable.
+          default: 15
+          selector:
+            number:
+              min: 0
+              max: 59
+              unit_of_measurement: seconds
         motion_on_transition:
           name: Motion On Transition
           description: Transition duration when turning on via motion or a manual run.
@@ -214,40 +247,62 @@ trigger_variables:
   room_target: !input room_target
 
 trigger:
-  # The live brightness/colour-temperature sensor. With no
-  # to:/from:/attribute: filter, a state trigger fires on attribute-only
-  # changes too - which is the usual case here, since the sensor's state
-  # (the phase name) only changes four times a day while its
-  # brightness/color_temp attributes tick every minute.
+  # The live brightness/colour-temperature sensor - but only on a
+  # genuine phase transition (Morning->Day etc.), not on the
+  # attribute-only ticks that happen every ~60s while the curve is
+  # ramping (Day, and the evening/night transition). Ordinary
+  # attribute-level tracking during a ramp isn't lost - it continues
+  # via adaptive_tick below, unconditionally, on its own schedule.
+  #
+  # The `to:` list is what does this: with no to:/from:/attribute:
+  # filter at all, a `platform: state` trigger fires on attribute-only
+  # changes too (HA's own state trigger only skips a truly identical
+  # state_reported event, not an attribute-only state_changed one).
+  # Listing `to:` values switches on a different, native HA behaviour
+  # instead - confirmed by reading the trigger's own source
+  # (homeassistant/components/homeassistant/triggers/state.py,
+  # async_attach_trigger): with any of from:/not_from:/to:/not_to:
+  # present, the listener explicitly rejects an event where the old
+  # and new values are equal (`not match_all and old_value ==
+  # new_value`), i.e. it now requires an actual value change. The four
+  # values below are the sensor's only real phase values - already
+  # hardcoded in several other places in this blueprint (rgb_phases'
+  # selector options, the per-phase scene/exclude-list inputs), so
+  # this isn't a new coupling. `from:` is deliberately left
+  # unrestricted, so a transition INTO a real phase from unknown/
+  # unavailable (a restart, or the sensor's very first-ever value)
+  # still correctly fires - old_value is None there, which never
+  # equals a real phase name.
   - platform: state
     entity_id: !input adaptive_sensor
     id: adaptive
-  # ...but only while those attributes are actually *changing*. Morning
-  # and Night are flat stretches of the curve (constant brightness and
-  # Kelvin for the whole phase), so the sensor re-reports identical
-  # values and Home Assistant raises `state_reported` rather than
-  # `state_changed` - which a `platform: state` trigger does not see.
-  # The effect is that the `adaptive` trigger above goes completely
-  # silent for the whole of Morning and Night, in every room.
+    to:
+      - Morning
+      - Day
+      - Evening
+      - Night
+  # Periodic floor tick, on its own configurable interval - the sole
+  # driver of ordinary brightness/colour-temperature tracking now that
+  # `adaptive` above only fires on a real phase change, and also still
+  # the fallback for Morning/Night's flat stretches of the curve
+  # (constant brightness and Kelvin for the whole phase, where the
+  # sensor's attributes never change at all, so there'd be nothing for
+  # `adaptive` to fire on even without the `to:` filter above).
   #
-  # Diagnosed live: the sensor's own last_updated sat unmoved for ~56
-  # minutes while last_reported kept advancing every minute, and no
-  # room had a single `adaptive`-triggered run in its trace history
-  # across that window. The visible symptom was lights that came back
-  # from unavailable during Morning and then just sat at whatever
-  # brightness they powered on at, because nothing was left to correct
-  # them - the room had no occupancy sensor, and `recovered` was
-  # independently broken by an orphaned entity (see below).
+  # Diagnosed live (2026-08-19): the sensor's own last_updated sat
+  # unmoved for ~56 minutes while last_reported kept advancing every
+  # minute, and no room had a single `adaptive`-triggered run in its
+  # trace history across that window - this tick is what guarantees
+  # "the next tick will fix it" is always a true statement, whether or
+  # not the curve is moving.
   #
-  # This is the unconditional floor: a tick that happens whether or not
-  # the curve is moving, so "the next tick will fix it" is always a
-  # true statement. Deliberately a separate id rather than reusing
-  # `adaptive` - scene_recheck_due reads trigger.from_state/to_state,
-  # which a time_pattern trigger has no equivalent of, and attribute
-  # access on an undefined name raises and aborts the whole run.
+  # Deliberately a separate id rather than reusing `adaptive` -
+  # scene_recheck_due reads trigger.from_state/to_state, which a
+  # time_pattern trigger has no equivalent of, and attribute access on
+  # an undefined name raises and aborts the whole run.
   - id: adaptive_tick
     platform: time_pattern
-    minutes: /1
+    minutes: !input adaptive_tick_interval
   # Anything named in Additional Triggers changed - e.g. a TV for a
   # brightness multiplier, or whatever the scene template depends on
   - id: extra
@@ -401,6 +456,10 @@ variables:
   # condition's own comment for why it's a template rather than
   # occupancy.is_not_detected's native `for:` option.
   no_motion_wait: !input no_motion_wait
+  # Exposed as a variable for the same reason as no_motion_wait above -
+  # the jitter delay step in action: below needs to reference it inside
+  # a Jinja template.
+  adaptive_tick_jitter: !input adaptive_tick_jitter
   rgb_phases: !input rgb_phases
   prefer_rgb_color: "{{ states(adaptive_sensor) in rgb_phases }}"
   script_transition: >
@@ -660,6 +719,15 @@ variables:
   # treating every minute as "recheck due" is exactly the re-activate-
   # the-scene-every-minute behaviour this variable exists to prevent.
   # Same answer as a same-phase `adaptive` tick, for the same reason.
+  #
+  # The `adaptive` branch below is now provably unreachable-when-false:
+  # since the `adaptive` trigger itself only fires on a genuine phase
+  # change (its own `to:` filter, see trigger: above), any run that
+  # reaches this point with trigger.id == 'adaptive' already has
+  # from_state.state != to_state.state by construction. Left as-is
+  # rather than simplified in the same change that introduced that
+  # filter - still correct, just partially redundant now; treat
+  # simplifying it as a separate, lower-risk cleanup.
   scene_recheck_due: >
     {% if trigger is defined and trigger.id is defined and trigger.id == 'adaptive_tick' %}
       false
@@ -682,6 +750,36 @@ variables:
       {{ scoped | reject('is_state', 'off') | list }}
     {% endif %}
 action:
+  # Spreads a genuine phase change or the periodic Adaptive Tick's
+  # writes across a random window, so many rooms sharing one Adaptive
+  # Lighting Sensor don't all send commands in the same wall-clock
+  # second - most acute right at a phase boundary (adaptive), where
+  # every such room fires at literally the same instant, but also
+  # relevant to adaptive_tick's own synchronized time_pattern boundary.
+  # Placed first so it applies uniformly regardless of which branch
+  # below eventually runs. Every other trigger renders 0 seconds, which
+  # HA's script engine short-circuits synchronously - no real overhead
+  # for motion/manual/reconcile/extra/recovered, none of which are
+  # jittered (extra/recovered are inherently per-room events, not
+  # something that fires simultaneously across multiple rooms the way
+  # a shared sensor's phase transition or a synchronized time_pattern
+  # boundary does, so there's no cascade for jitter to address there).
+  #
+  # mode: restart (above) means a genuine trigger arriving mid-delay
+  # correctly preempts a jittered run rather than queuing behind it -
+  # confirmed against HA core's helpers/script.py: a new run's
+  # Script._async_run calls async_stop() on any in-flight run before
+  # starting, which resolves _async_step_delay's awaited stop future,
+  # so the delayed run's next loop iteration sees self._stop.done() and
+  # aborts before ever reaching the choose: block below.
+  - alias: "Jitter: spread a phase change or the periodic Adaptive Tick's writes across a random window"
+    delay:
+      seconds: >-
+        {% if trigger is defined and trigger.id is defined and trigger.id in ['adaptive', 'adaptive_tick'] %}
+          {{ range(0, (adaptive_tick_jitter | int) + 1) | random }}
+        {% else %}
+          0
+        {% endif %}
   - choose:
       # Motion timed out: turn everything reachable off - but only if
       # Room's occupancy is actually clear in aggregate right now.
