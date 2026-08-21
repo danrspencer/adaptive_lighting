@@ -29,12 +29,14 @@ correct it" true at every hour of the day, including Morning and Night's *flat* 
 and Kelvin for the whole phase, where nothing would otherwise trigger an update at all). The sensor's own state
 trigger only fires on an actual phase change (Morning→Day and so on) — not on the attribute-only ticks in
 between, which the periodic tick already covers — so a room isn't left waiting up to a full tick interval to
-notice it just entered a new phase.
+notice it just entered a new phase. This same periodic tick also drives the [Self-healing](#self-healing) check
+below - there's no separate interval for that.
 
 Both of these, plus a genuine phase change, are also where Adaptive Tick Jitter applies: a random delay (default
 up to 15 seconds) so that many rooms sharing one Adaptive Lighting Sensor don't all send commands in the same
 wall-clock second — most noticeable right at a phase boundary, when every such room would otherwise fire at
-literally the same instant. Motion, manual runs, Additional Triggers, and self-healing are never delayed.
+literally the same instant. Motion, manual runs, and Additional Triggers are never delayed - self-healing is,
+since it shares the same tick.
 
 The [dashboard curve card](../README.md#previewing-the-dashboard-card) also plots today's actual sunrise/sunset
 (from `sun.sun`) against the schedule, so it's easy to see at a glance how far the configured boundaries and
@@ -261,13 +263,17 @@ left alone rather than recommanded on every tick.
 
 ## Self-healing
 
-On a configurable interval, if the room's occupancy sensors have been continuously clear for the full Wait time
-but a light is still on, the off command is retried. This recovers from dropped commands (a missed Zigbee
-message, for example) without manual intervention.
+On every Adaptive Tick (the same periodic tick that drives ordinary brightness/colour tracking — see
+[Brightness & colour temperature schedule](#brightness--colour-temperature-schedule) — there's no separate
+interval for this), if the room's occupancy sensors have been continuously clear for the full Wait time but a
+light is still on, the off command is retried instead of the normal reapply. This recovers from dropped commands
+(a missed Zigbee message, for example) without manual intervention. There used to be a second, independent
+interval just for this check — merged away once it became clear there was no real reason for two separate
+periodic ticks per room.
 
 The Wait time check here is debounced against a momentary sensor blip, not just an instantaneous "is it clear
 right now" read — a noisy occupancy sensor that briefly reports clear before going occupied again won't trip an
-early turn-off just because a reconcile tick happens to land in that gap.
+early turn-off just because a tick happens to land in that gap.
 
 Lights handed off via a `null` multiplier (see
 [Per-light brightness scaling](#per-light-brightness-scaling)) are excluded from this retry, and don't count as
@@ -293,8 +299,7 @@ Add an automation using the "Adaptive Lighting" blueprint per room, and set:
 | Lights Off During Morning / Day / Evening / Night | no | Lights to turn off during that phase - fills in whatever Brightness Multiplier Template doesn't already cover (see [Per-light brightness scaling](#per-light-brightness-scaling)) |
 | **Timing** section | | |
 | Wait time | no | Seconds to keep lights on after motion stops (default 120) |
-| Reconcile Interval | no | Self-healing check interval (default every 5 minutes) |
-| Adaptive Tick Interval | no | How often to reapply the schedule on a fixed interval (default every minute, see [Brightness & colour temperature schedule](#brightness--colour-temperature-schedule)) |
+| Adaptive Tick Interval | no | How often to reapply the schedule on a fixed interval - also the self-healing check interval, there's no separate one (default every minute, see [Brightness & colour temperature schedule](#brightness--colour-temperature-schedule)) |
 | Adaptive Tick Jitter | no | Max random delay (seconds) on a phase change or the periodic tick, so many rooms don't fire in the same instant (default 15s, 0 disables) |
 | Motion On / Motion Off / Adaptive Transition | no | Transition durations for each trigger type (see [Transition durations](#transition-durations)) |
 
