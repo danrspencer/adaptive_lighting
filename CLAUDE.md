@@ -2180,6 +2180,113 @@ designs were explored:
   directions together, rather than presenting the startup pass as if it
   were the whole story. Full suite: 145/145.
 
+- **`reconcile`'s occupancy check had no debounce of its own, and could
+  turn a light off on a single noisy-sensor blip - found live,
+  2026-08-21, user report: dining room spots stuck off, force-run
+  needed to bring them back.** User pushed back hard on an initial
+  "restart timing race, already fixed" conclusion (the bug class the
+  five entries directly above this one cover) - "not sure we've fixed
+  everything... there have been no restarts" - and, once a first wrong
+  hypothesis (an overlapping/racing `apply_lighting` two-step
+  transition) was raised and the user was unconvinced, redirected
+  investigation again after a real illuminance/multiplier bug on the
+  *extension* lights was found in passing but confirmed by the user to
+  be unrelated to the actual report ("that only affexts the extension
+  lights though... it was the main dining room lights that were the
+  problem"). The `apply_lighting` concurrency hypothesis was disproven
+  directly against HA core source (`helpers/script.py`, `core.py`):
+  `mode: restart` already cancels an in-flight run's nested service
+  calls correctly, including through `asyncio.sleep`, via
+  `async_interrupt.interrupt` wrapping every `service:` step - ruling
+  out a race as the cause.
+
+  Root cause, confirmed by reading the deployed automation's actual
+  condition structure: `reconcile`'s branch checked only `not
+  occupancy.is_detected` at the instant its `time_pattern` trigger
+  fired - no debounce of its own, unlike `motion_off`'s trigger (which
+  already has `options: {for: {seconds: !input no_motion_wait}}}`).
+  User's own diagnosis, which is exactly what shipped: "the sensor is
+  correct, the lights should only go off once the sensor has registered
+  as empty for the given interval though." A room whose occupancy
+  sensor is genuinely noisy (reports briefly clear, then occupied
+  again, repeatedly - not the same as genuinely empty) could have a
+  `reconcile` tick land on one of those brief gaps and turn the light
+  off immediately, bypassing Wait time (`no_motion_wait`) entirely.
+
+  Two designs tried before landing on what shipped:
+  1. **Native `occupancy.is_not_detected` + `for:`** - the more
+     idiomatic fit on paper (`EntityConditionBase` in HA core's
+     `helpers/condition.py` supports a duration option via the same
+     mechanism trigger-level `for:` already uses). Broke the pre-existing
+     `test_reconcile_retries_turning_off_a_light_left_on_with_no_occupancy`
+     test outright, even after reordering the test to clear occupancy
+     only after automation setup (an attempt at giving the condition a
+     transition to observe rather than a pre-satisfied duration).
+  2. **Same, plus `options: {behavior: all}`** - `is_not_detected`'s
+     default `behavior` is `"any"` (mirroring `is_detected`'s own "any
+     entity on" semantics), which for *this* condition means "at least
+     one entity is off" - not the negation of `is_detected` once a room
+     has more than one occupancy sensor (the dining room's actual
+     configuration). Caught and fixed before shipping, but the same
+     test still failed regardless - the deeper problem was structural,
+     not this bug.
+
+  Both failed for the same underlying reason, confirmed by tracing
+  `for:`'s actual mechanism: a native duration condition needs the
+  recorder to "prime" a duration that was already satisfied *before*
+  the condition itself started watching (HA core's own
+  `_HistoryPrimingManager` exists specifically for this) - not reliably
+  available in this project's test environment (no real recorder
+  configured), and a real concern right after a genuine restart too,
+  where `reconcile`'s condition starts watching fresh with no in-memory
+  history of its own. This is the same class of restart-timing
+  unpredictability this project has been bitten by repeatedly (the five
+  entries directly above this one, and lessons 2/10 in this file).
+
+  **Shipped instead: a hand-written Jinja template**, comparing
+  `now() - states[e].last_changed` against `no_motion_wait` for every
+  occupancy-class entity in `room_occupancy_entities`, all must be
+  `off` *and* past Wait time for reconcile to proceed. `last_changed` is
+  a plain property every state object already carries, answered
+  instantly from memory - no recorder, no priming, no restart-timing
+  dependency at all. Required exposing `no_motion_wait` as a named
+  blueprint `variables:` entry (`no_motion_wait: !input no_motion_wait`)
+  for the first time - previously only ever consumed via direct
+  `!input` YAML-node substitution (e.g. in the `motion_off` trigger's
+  own `for:` clause), never as a name a Jinja template could reference;
+  `!input`'s own substitution is a YAML-node-value mechanism, not
+  something usable bare inside a template string. `motion_off`'s own
+  trigger-level `for:` was deliberately left unchanged - it already
+  debounces correctly since a real *trigger* firing after a duration is
+  exactly what `for:` is built for, this gap was specific to
+  `reconcile`'s bare instantaneous condition check.
+
+  **The existing test itself needed a real fix, not just a reorder,
+  once the new template was in place - caught by actually running it,
+  not assumed from the design change alone.** `async_fire_time_changed`
+  only fires the event that trips a `time_pattern` trigger; it does not
+  advance `now()` itself (confirmed by reading its own implementation in
+  `pytest_homeassistant_custom_component.common` - no global time patch
+  at all). Since the new condition's `now()` reads real wall-clock time,
+  the pre-existing test (real elapsed time between clearing occupancy
+  and firing the trigger: milliseconds, not six minutes) failed
+  correctly against the *new* logic - proving the debounce genuinely
+  works, not a test bug. Fixed with `freezegun.freeze_time`, ticking
+  frozen time forward by the intended gap before firing the trigger, so
+  `now()` inside the template genuinely reflects elapsed Wait time.
+  **The new momentary-blip test
+  (`test_reconcile_ignores_a_momentary_occupancy_blip_shorter_than_wait_time`)
+  had the identical, easy-to-miss problem**: its first version used
+  real (non-frozen) `async_fire_time_changed` calls, so it passed - but
+  for the wrong reason, since real elapsed time between its two calls
+  is always near-zero regardless of what the debounce logic actually
+  does. Mutation-verified this was a real gap before fixing it: removing
+  the debounce clause entirely left that test passing. Rewritten with
+  the same `freeze_time`-and-tick pattern, after which the identical
+  mutation correctly fails exactly that one test and no others.
+
+  Full suite: 146/146.
+
 **Deployment / operational notes:**
 - pyscript is fully gone, both from this repo and the live host.
 - The dev git-sync automation (polling this repo for new commits and
