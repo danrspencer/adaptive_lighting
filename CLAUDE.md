@@ -3894,6 +3894,164 @@ update+restart runs; the dashboard-YAML half (section width, grid
   precisely one test, confirming they're not accidentally redundant
   with each other. Full suite: 194/194.
 
+- **`apply_lighting` stopped reading a sensor entity internally -
+  reverted to raw `brightness`/`color_temp_kelvin`/`rgb_color` fields,
+  matching `compute_lighting_groups` exactly - 2026-08-22, prompted by
+  the user reading through the services docs and questioning the
+  design directly: "giving apply_lighting a sensor rather than just raw
+  brightness, temp and rgb... feels like it makes it harder to use for
+  different tasks for no real benefit."**
+
+  Checked before agreeing, not taken at face value: `apply_lighting`
+  was a genuine outlier. Its sibling pure planner
+  `compute_lighting_groups` already took `sensor_brightness`/
+  `sensor_color_temp_kelvin`/`rgb_color` as raw values with no entity
+  reference at all - every other field between the two schemas was
+  already identical. This is also a considered *reversal*, not a fresh
+  direction, and said so rather than glossed over: the blueprint used
+  to pre-compute these values itself, and a prior session deliberately
+  moved that into `apply_lighting` reading `sensor_entity_id`
+  internally, for two stated reasons - a hard-fail-on-missing-attribute
+  safety fix, and "genericity across multiple sensor instances."
+  Neither survived re-examination: the hard fail is preserved
+  automatically by `vol.Required`/`vol.Coerce(int)` failing at the
+  schema layer, arguably more robust than the custom
+  `ServiceValidationError` it replaced; and entity *selection* (which
+  named schedule sensor to point at) happens identically via
+  `adaptive_sensor` regardless of which layer reads its attributes
+  afterward, so "genericity" was never actually gated on where the read
+  happened. Only one blueprint call site existed (confirmed via
+  full-file grep) - the old scoped-resync second call was removed in an
+  earlier session (see the `recovered` trigger's own dated entries
+  above), so this stayed a one-block blueprint change.
+
+  **Field naming confirmed via `AskUserQuestion`**: drop the `sensor_`
+  prefix on *both* services, not just `apply_lighting` -
+  `compute_lighting_groups` also lost its `sensor_` prefix
+  (`sensor_brightness`/`sensor_color_temp_kelvin` →
+  `brightness`/`color_temp_kelvin`), a second breaking change taken on
+  deliberately rather than leaving `apply_lighting` with clean names
+  while its sibling kept a prefix that no longer meant anything for
+  either service. `grouping.py`'s own internal `build_groups()`
+  parameter names (`sensor_brightness`/`sensor_color_temp_kelvin`) were
+  deliberately left untouched - insulated from the service-level rename
+  the same way they already were from `compute_lighting_groups`'s prior
+  rename; `tests/test_grouping.py`, which calls `build_groups()`
+  directly, needed zero changes, confirmed by actually running it, not
+  just asserted from the reasoning.
+
+  **A real, previously-latent schema bug found while working through
+  the exact Jinja the blueprint would need to send `rgb_color`, before
+  any code was written.** The blueprint has to pass
+  `rgb_color: "{{ state_attr(adaptive_sensor, 'rgb_color') }}"`
+  unconditionally, the same way `entities: "{{ adaptive_target_entities
+  }}"` already does - and a hand-rolled "bring your own sensor" entity
+  is documented as free to omit that attribute entirely (see the new
+  `docs/BLUEPRINT.md#bring-your-own-sensor` section below). When it's
+  missing, that template renders a literal `None`, not an omitted key.
+  The old schema on both services
+  (`vol.Optional("rgb_color"): vol.All([vol.Coerce(int)],
+  vol.Length(min=3, max=3))`) has no path for an explicit `None` -
+  `vol.Length` applied to `None` fails outright ("not a list") - so
+  *every* `apply_lighting` call for *every* room without a custom
+  RGB-providing sensor would have started failing the instant this
+  shipped, had it not been caught here. Fixed on both schemas with
+  `vol.Any(None, vol.All([vol.Coerce(int)], vol.Length(min=3,
+  max=3)))`. Mutation-verified in `tests/integration/test_services.py`:
+  `test_apply_lighting_accepts_an_explicit_null_rgb_color` and
+  `test_compute_lighting_groups_accepts_an_explicit_null_rgb_color`
+  both fail (a real `ValueError` from voluptuous) when the fix is
+  reverted back to the bare `vol.All(...)`, and only those two.
+
+  **Shape of the change**: `APPLY_LIGHTING_SCHEMA` dropped
+  `sensor_entity_id` entirely; gained `brightness`/`color_temp_kelvin`
+  (both `vol.Required`, matching `compute_lighting_groups`'s existing
+  requirement - `color_temp_kelvin` stays required even though
+  `rgb_color` is optional, since it's still the fallback target for any
+  entity in a mixed-capability room that doesn't support RGB, even
+  under `prefer_rgb_color: true`) and `rgb_color` (optional, the
+  None-tolerant validator above). `_read_sensor_targets()` - the
+  function that used to call `hass.states.get(sensor_entity_id)` and
+  raise `ServiceValidationError` on a missing/invalid attribute - was
+  deleted outright, along with the now-unused
+  `homeassistant.exceptions.ServiceValidationError` import. The
+  `apply_lighting` handler now reads `brightness`/`color_temp_kelvin`/
+  `rgb_color` straight off `call.data`, identically to how
+  `compute_lighting_groups`'s handler already did; everything
+  downstream (`build_groups(...)`, the dispatch loop,
+  `write_tracker.async_record`) needed no changes at all, since it only
+  ever consumed the plain locals, never `sensor_entity_id` itself.
+
+  **Blueprint**: the single `apply_lighting` action's `data:` block
+  gained `brightness: "{{ state_attr(adaptive_sensor, 'brightness')
+  }}"`, `color_temp_kelvin: "{{ state_attr(adaptive_sensor,
+  'color_temp') }}"` (the sensor's own attribute is named `color_temp`,
+  not `color_temp_kelvin` - `sensor.py`'s `_AdaptiveLightingSensor`
+  exposes `"color_temp": data.get("kelvin")`; the blueprint reads that
+  attribute name but forwards it under the service's `color_temp_kelvin`
+  field), and `rgb_color: "{{ state_attr(adaptive_sensor, 'rgb_color')
+  }}"`, replacing the old `sensor_entity_id: "{{ adaptive_sensor }}"`.
+  The stale comment nearby (previously explaining why extraction was
+  moved *out* of the blueprint) was rewritten to narrate the full
+  two-designs history honestly - extraction moved into the blueprint,
+  then into `apply_lighting`, then back into the blueprint again "to
+  stay" - rather than left describing a decision this change reverses,
+  matching this project's practice of keeping decision history visible
+  instead of erasing it (see the comment starting "Brightness/colour
+  temperature are extracted here" in the blueprint file itself).
+
+  **Docs**: the "Bring your own sensor" section moved from
+  `docs/HELPERS.md` to `docs/BLUEPRINT.md` outright, not just
+  cross-referenced - neither service reads any sensor entity anymore,
+  so the concept belongs entirely with `adaptive_sensor`, the blueprint
+  input that's the only thing still doing any sensor-reading. This also
+  resolved a standing internal inconsistency in `docs/HELPERS.md` (its
+  intro paragraph claimed `apply_lighting`/`compute_lighting_groups`
+  "read brightness/colour targets off any sensor entity," directly
+  contradicting a later section that correctly described
+  `compute_lighting_groups` as taking `rgb_color` as an explicit field
+  "since it isn't reading a sensor at all" - both statements are true
+  now, instead of contradicting each other).
+
+  **Test impact**: `tests/integration/test_services.py`'s ~14 affected
+  test functions were mechanically updated - `sensor_entity_id` +
+  `_set_sensor(...)` setup replaced with literal `brightness`/
+  `color_temp_kelvin` values directly in each call's own data dict;
+  `sensor_brightness`/`sensor_color_temp_kelvin` dict keys on
+  `compute_lighting_groups` calls renamed to `brightness`/
+  `color_temp_kelvin`. The one direct `build_groups(sensor_brightness=
+  200, sensor_color_temp_kelvin=3200, ...)` call (calling `grouping.py`
+  directly, not through the service) was deliberately left untouched,
+  per the reasoning above. The now-fully-unused `_set_sensor` test
+  helper was deleted. `test_apply_lighting_missing_sensor_attribute_raises`/
+  `test_apply_lighting_unknown_sensor_raises` (testing
+  `_read_sensor_targets`'s now-deleted custom validation) were replaced
+  with `test_apply_lighting_missing_brightness_raises`/
+  `test_apply_lighting_non_numeric_color_temp_kelvin_raises`, both
+  confirming voluptuous's own `vol.Invalid` is what's actually raised
+  on a bad service call now - verified empirically by running them in
+  isolation, not assumed.
+
+  `tests/integration/test_blueprint.py`'s existing
+  `test_periodic_adaptive_tick_updates_an_already_on_light` gained
+  direct assertions on `apply_lighting_calls[-1].data["brightness"]`/
+  `["color_temp_kelvin"]`/`["rgb_color"]` - the only test proving the
+  blueprint's new Jinja extraction actually reaches `apply_lighting`
+  with correct values (`rgb_color is None`, since the autouse `_sensor`
+  fixture never sets that attribute), not just that the call happens at
+  all. **Known limitation of this specific assertion, found while
+  attempting to mutation-verify it**: `apply_lighting_calls` is wired
+  through `async_mock_service`, which intercepts the service call
+  *before* voluptuous schema validation ever runs - reverting the
+  `vol.Any(None, ...)` schema fix does **not** make this blueprint test
+  fail, since the mock never exercises the real schema at all. This
+  test's real job is proving the blueprint's own template renders the
+  right literal values (including a genuine `None`, not an omitted key
+  or a stringified `"None"`); the schema-level regression coverage for
+  the `None`-acceptance fix itself lives entirely in
+  `test_services.py`'s two new tests, which do mutation-verify
+  correctly against the real, unmocked service. Full suite: 196/196.
+
 ## Testing
 
 `pip install pytest pytest-homeassistant-custom-component && pytest`

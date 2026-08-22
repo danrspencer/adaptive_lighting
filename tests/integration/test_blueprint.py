@@ -200,6 +200,18 @@ class TestAdaptiveScheduleAndTransitions:
 
         calls = apply_lighting_calls
         assert calls and calls[-1].data["entities"] == ["light.a"]
+        # The direct end-to-end proof that the blueprint's own
+        # state_attr(adaptive_sensor, ...) extraction (brightness/
+        # color_temp_kelvin/rgb_color, replacing the old
+        # sensor_entity_id passthrough) actually reaches apply_lighting
+        # with the right values - not just that the call happens at
+        # all. rgb_color is None here because the fixture sensor never
+        # sets that attribute, which is also the live exercise of the
+        # vol.Any(None, ...) schema fix: a bare vol.All(...) would have
+        # rejected this call outright.
+        assert calls[-1].data["brightness"] == 210
+        assert calls[-1].data["color_temp_kelvin"] == 4000
+        assert calls[-1].data["rgb_color"] is None
 
     async def test_a_flat_curve_still_gets_a_tick_from_the_time_pattern(self, hass, apply_lighting_calls):
         """Morning and Night are flat stretches of the curve, so the

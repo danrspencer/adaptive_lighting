@@ -520,15 +520,38 @@ variables:
       {% endif %}
     {% endfor %}
     {{ ns.items }}
-  # Brightness/colour temperature themselves are no longer extracted
-  # here - adaptive_lighting_helpers.apply_lighting reads them straight
-  # off adaptive_sensor (and applies rgb_color, tolerance-checking,
-  # two-step transitions, etc.) rather than this blueprint pre-computing
-  # sensor_brightness/sensor_color_temp_kelvin and dispatching itself.
+  # Brightness/colour temperature are extracted here, as plain
+  # state_attr() reads off adaptive_sensor, and passed to
+  # adaptive_lighting_helpers.apply_lighting as literal values (see its
+  # own action step below) - apply_lighting itself doesn't read any
+  # sensor entity at all, matching compute_lighting_groups's own
+  # brightness/color_temp_kelvin/rgb_color fields exactly. This went
+  # through two designs, not one: originally the blueprint extracted
+  # these itself (much like this comment describes); that was then
+  # deliberately moved into apply_lighting instead (reading
+  # sensor_entity_id's attributes internally) reasoning that a hard
+  # fail on a missing attribute and support for this integration's own
+  # multiple named sensor instances both needed it there - re-examined
+  # later and found not to actually require it (voluptuous's own
+  # required-field validation gives an equivalent hard fail before this
+  # automation's own action even runs, and entity *selection* - which
+  # of the multiple sensor instances to point at - happens identically
+  # either way, via adaptive_sensor, regardless of which layer reads
+  # its attributes afterward) - so it moved back here, this time to
+  # stay, matching every other service in this integration which
+  # already takes plain values rather than an entity reference.
   # (sensor_service/sensor_scene_id, a "sensor requests scene.apply"
-  # passthrough, were removed here too - dead code: scene.apply's real
-  # service schema only accepts entities/transition, not a scene_id
-  # field, so that call never actually did anything.)
+  # passthrough, were removed here too, a while back - dead code:
+  # scene.apply's real service schema only accepts entities/transition,
+  # not a scene_id field, so that call never actually did anything.)
+  brightness: "{{ state_attr(adaptive_sensor, 'brightness') }}"
+  color_temp_kelvin: "{{ state_attr(adaptive_sensor, 'color_temp') }}"
+  # None whenever adaptive_sensor doesn't populate this attribute (a
+  # hand-rolled "bring your own sensor" entity not using prefer_rgb_color
+  # is free to omit it - see docs/BLUEPRINT.md) - apply_lighting's own
+  # rgb_color field explicitly tolerates an explicit null, not just an
+  # omitted key, for exactly this reason.
+  rgb_color: "{{ state_attr(adaptive_sensor, 'rgb_color') }}"
   # Every light this automation is allowed to touch, resolved from
   # room_target - filtered to ^light\. on every branch, since room_target
   # can also directly name occupancy-class sensor entities now
@@ -903,15 +926,18 @@ action:
       # be ~90 lines of namespace-loop Jinja, then a repeat/parallel
       # dispatch block, then a scene-mode choose: branch (removed - see
       # CLAUDE.md on why the "sensor requests scene.apply" mechanism was
-      # dead code), here. apply_lighting reads brightness/colour
-      # straight off adaptive_sensor itself and issues the
-      # light.turn_on/turn_off calls directly.
+      # dead code), here. brightness/color_temp_kelvin/rgb_color
+      # (computed above, from adaptive_sensor's own attributes) are
+      # passed as plain values - apply_lighting itself doesn't read any
+      # sensor entity, matching compute_lighting_groups exactly.
       - alias: "Apply adaptive lighting (Adaptive Lighting Helpers)"
         action: adaptive_lighting_helpers.apply_lighting
         data:
           entities: "{{ adaptive_target_entities }}"
           brightness_multipliers: "{{ brightness_multipliers }}"
-          sensor_entity_id: "{{ adaptive_sensor }}"
+          brightness: "{{ brightness }}"
+          color_temp_kelvin: "{{ color_temp_kelvin }}"
+          rgb_color: "{{ rgb_color }}"
           transition: "{{ script_transition }}"
           prefer_rgb_color: "{{ prefer_rgb_color }}"
           # Identifies this room's automation as the owner of its own

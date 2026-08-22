@@ -57,7 +57,6 @@ from homeassistant.components.http import StaticPathConfig
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import Context, HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse, callback
-from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
@@ -80,13 +79,21 @@ COMPUTE_LIGHTING_GROUPS_SCHEMA = vol.Schema(
     {
         vol.Required("entities"): [cv.entity_id],
         vol.Optional("brightness_multipliers", default=dict): dict,
-        vol.Required("sensor_brightness"): vol.Coerce(int),
-        vol.Required("sensor_color_temp_kelvin"): vol.Coerce(int),
+        vol.Required("brightness"): vol.Coerce(int),
+        vol.Required("color_temp_kelvin"): vol.Coerce(int),
         vol.Optional("brightness_tolerance", default=2): vol.Coerce(int),
         vol.Optional("color_temp_tolerance", default=10): vol.Coerce(int),
         vol.Optional("two_step_label", default="no_combined_transition"): cv.string,
         vol.Optional("prefer_rgb_color", default=False): cv.boolean,
-        vol.Optional("rgb_color"): vol.All([vol.Coerce(int)], vol.Length(min=3, max=3)),
+        # vol.Any(None, ...) rather than a bare vol.All(...) - a caller
+        # templating this from a sensor attribute that may not exist
+        # (e.g. the blueprint's own adaptive_sensor, for a "bring your
+        # own sensor" entity that doesn't populate rgb_color) renders an
+        # explicit None, not an omitted key. A bare vol.All([...],
+        # vol.Length(...)) rejects None outright as "not a list" -
+        # confirmed live as a real gap, not hypothetical, once this
+        # exact call shape was worked through for the blueprint change.
+        vol.Optional("rgb_color"): vol.Any(None, vol.All([vol.Coerce(int)], vol.Length(min=3, max=3))),
         vol.Optional("rgb_color_tolerance", default=10): vol.Coerce(int),
         vol.Optional("owner_id"): cv.string,
         vol.Optional("force", default=False): cv.boolean,
@@ -121,12 +128,16 @@ APPLY_LIGHTING_SCHEMA = vol.Schema(
     {
         vol.Required("entities"): [cv.entity_id],
         vol.Optional("brightness_multipliers", default=dict): dict,
-        vol.Required("sensor_entity_id"): cv.entity_id,
+        vol.Required("brightness"): vol.Coerce(int),
+        vol.Required("color_temp_kelvin"): vol.Coerce(int),
         vol.Required("transition"): vol.Coerce(float),
         vol.Optional("brightness_tolerance", default=2): vol.Coerce(int),
         vol.Optional("color_temp_tolerance", default=10): vol.Coerce(int),
         vol.Optional("two_step_label", default="no_combined_transition"): cv.string,
         vol.Optional("prefer_rgb_color", default=False): cv.boolean,
+        # See COMPUTE_LIGHTING_GROUPS_SCHEMA's own rgb_color comment for
+        # why vol.Any(None, ...) rather than a bare vol.All(...).
+        vol.Optional("rgb_color"): vol.Any(None, vol.All([vol.Coerce(int)], vol.Length(min=3, max=3))),
         vol.Optional("rgb_color_tolerance", default=10): vol.Coerce(int),
         vol.Optional("owner_id"): cv.string,
         vol.Optional("force", default=False): cv.boolean,
@@ -213,40 +224,6 @@ def _build_scene_lookup(hass: HomeAssistant) -> SceneLookup:
         return list(s.attributes.get("entity_id", [])) if s else []
 
     return SceneLookup(exists=exists, covered_entities=covered_entities)
-
-
-def _read_sensor_targets(hass: HomeAssistant, sensor_entity_id: str) -> tuple[int, int, tuple | None]:
-    """Reads brightness/color_temp/rgb_color off sensor_entity_id for
-    apply_lighting - fully generic, works with any entity exposing those
-    attribute names, not hardcoded to this integration's own
-    sensor.adaptive_lighting. See docs/HELPERS.md's "Bring your own
-    sensor" section for the exact contract and a template-sensor example.
-
-    brightness/color_temp are required by that contract, and a sensor
-    missing them (wrong entity picked, or the sensor is unavailable and
-    its attributes are gone) raises rather than falling back to a quiet
-    default - the old fallback (brightness 0, later floored to 1 by
-    grouping) meant a broken sensor silently dimmed every light to
-    minimum instead of surfacing anywhere."""
-    state = hass.states.get(sensor_entity_id)
-    if state is None:
-        raise ServiceValidationError(f"Sensor entity not found: {sensor_entity_id}")
-
-    def _require_int(attr: str) -> int:
-        value = state.attributes.get(attr)
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            raise ServiceValidationError(
-                f"{sensor_entity_id} has no usable '{attr}' attribute (got {value!r}) - "
-                f"apply_lighting needs brightness and color_temp on the sensor it reads"
-            )
-
-    brightness = _require_int("brightness")
-    color_temp_kelvin = _require_int("color_temp")
-    rgb = state.attributes.get("rgb_color")
-    rgb_color = tuple(rgb) if isinstance(rgb, (list, tuple)) and len(rgb) == 3 else None
-    return brightness, color_temp_kelvin, rgb_color
 
 
 def _groups_response(groups: list[Group]) -> ServiceResponse:
@@ -379,8 +356,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         groups = build_groups(
             entities=call.data["entities"],
             brightness_multipliers=call.data["brightness_multipliers"],
-            sensor_brightness=call.data["sensor_brightness"],
-            sensor_color_temp_kelvin=call.data["sensor_color_temp_kelvin"],
+            sensor_brightness=call.data["brightness"],
+            sensor_color_temp_kelvin=call.data["color_temp_kelvin"],
             lookup=_build_lookup(hass, write_tracker),
             brightness_tolerance=call.data["brightness_tolerance"],
             color_temp_tolerance=call.data["color_temp_tolerance"],
@@ -419,15 +396,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async def apply_lighting(call: ServiceCall) -> ServiceResponse:
         """adaptive_lighting_helpers.apply_lighting
 
-        Reads brightness/color_temp/rgb_color off sensor_entity_id (any
-        entity with those attributes - see README's "Bring your own
-        sensor") and actually turns entities on/off via
-        light.turn_on/turn_off, handling reachability, tolerance,
-        externally-set protection, two-step transitions, and RGB-vs-
-        colour-temp dispatch internally rather than leaving it to the
-        caller. Returns the same {"groups": [...]} shape as
-        compute_lighting_groups for introspection, but nothing requires
-        capturing it - see services.yaml for field docs.
+        Takes brightness/color_temp_kelvin/rgb_color as plain values -
+        the same three fields compute_lighting_groups already takes,
+        this being the one service in the pair that actually dispatches
+        - and turns entities on/off via light.turn_on/turn_off, handling
+        reachability, tolerance, externally-set protection, two-step
+        transitions, and RGB-vs-colour-temp dispatch internally rather
+        than leaving it to the caller. Returns the same {"groups": [...]}
+        shape as compute_lighting_groups for introspection, but nothing
+        requires capturing it - see services.yaml for field docs.
 
         owner_id (optional): identifies this caller for externally-set
         protection - e.g. a blueprint automation passing its own
@@ -448,7 +425,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         """
         owner_id = call.data.get("owner_id")
         force = call.data["force"]
-        brightness, color_temp_kelvin, rgb_color = _read_sensor_targets(hass, call.data["sensor_entity_id"])
+        brightness = call.data["brightness"]
+        color_temp_kelvin = call.data["color_temp_kelvin"]
+        rgb_color_raw = call.data.get("rgb_color")
+        rgb_color = tuple(rgb_color_raw) if rgb_color_raw else None
         lookup = _build_lookup(hass, write_tracker)
         groups = build_groups(
             entities=call.data["entities"],
