@@ -57,6 +57,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import ScheduleCoordinator, ScheduleInstance, schedule_instances
+from .grouping import target_matches_values
 from .write_tracking import SIGNAL_WRITE_TRACKING_UPDATED, LastWriteTracker
 
 
@@ -219,15 +220,33 @@ class _WriteTrackingSensor(SensorEntity):
             elif confirmed is not None and confirmed["context_id"] == live_context_id:
                 # Settled: matches the last write some earlier call
                 # actually observed landing.
-                status = "confirmed"
+                status = "controlled"
+            elif pending is not None and target_matches_values(
+                pending.get("target"),
+                state.attributes.get("brightness"),
+                state.attributes.get("color_temp_kelvin"),
+                state.attributes.get("rgb_color"),
+            ):
+                # Same rescue grouping.py's externally_set() applies:
+                # neither claim's context.id matches, but the light's
+                # current value still matches what our own last attempt
+                # asked for - almost certainly that write's own delayed
+                # confirmation landing under an unrelated context (HA's
+                # Entity._context expires 5s after the service call that
+                # set it), not a genuine external change. Also
+                # "controlled", not a separate status - this light is
+                # not excluded from the next tick either way.
+                status = "controlled"
             else:
-                # Live context matches neither claim - something else
-                # has touched this light since. Whether that counts as
-                # "externally set" for a given caller also depends on
-                # owner_id (see grouping.py's externally_set()), which
-                # this view can't show without knowing which owner_id is
-                # asking - shown here as the raw signal instead.
-                status = "mismatched"
+                # Live context matches neither claim, and the value
+                # doesn't match what we last asked for either - something
+                # else has genuinely touched this light. Whether that
+                # counts as "externally set" for a given caller also
+                # depends on owner_id (see grouping.py's externally_set()),
+                # which this view can't show without knowing which
+                # owner_id is asking - shown here as the raw signal
+                # instead.
+                status = "overridden"
             entities[entity_id] = {
                 "status": status,
                 "live_context_id": live_context_id,

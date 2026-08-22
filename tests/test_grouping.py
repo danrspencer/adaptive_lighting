@@ -594,6 +594,167 @@ def test_matching_neither_confirmed_nor_pending_is_externally_set():
     assert groups[0].combined == []
 
 
+def test_context_mismatch_is_forgiven_when_live_values_match_pendings_target():
+    # Neither confirmed nor pending's context.id matches live - but the
+    # light's current brightness/color_temp are exactly what pending's
+    # own recorded target asked for. This is what a device's real
+    # confirmation looks like when it lands more than 5 seconds after
+    # the service call (HA's own Entity._context expiry) rather than a
+    # genuine external touch - see externally_set()'s docstring.
+    lookup = make_lookup(
+        states={
+            "light.a": {
+                "state": "on",
+                "attributes": {"brightness": 200, "color_temp_kelvin": 3000},
+                "context_id": "ctx-device-echo-unrelated",
+            }
+        },
+        confirmed_context_ids={"light.a": "ctx-confirmed-stale"},
+        confirmed_owner_ids={"light.a": "ours"},
+        pending_context_ids={"light.a": "ctx-pending-stale"},
+        pending_owner_ids={"light.a": "ours"},
+        pending_targets={"light.a": {"brightness": 200, "color_temp_kelvin": 3000}},
+    )
+    groups = build_groups(
+        entities=["light.a"],
+        brightness_multipliers={},
+        sensor_brightness=200,
+        sensor_color_temp_kelvin=3000,
+        lookup=lookup,
+        owner_id="ours",
+    )
+    assert groups[0].combined == []
+    assert groups[0].needing_off == []
+    # Not externally set, but already at target - no write needed either
+    # way. Confirmed via a *different* target: if the curve had moved on
+    # since, the light would come back into combined normally (see the
+    # next test).
+
+
+def test_context_mismatch_with_stale_target_still_updates_once_the_curve_moves():
+    # Same stale-context situation as above, but the current tick wants
+    # a genuinely different value than what pending's target recorded -
+    # proving the self-heal only rescues the light from being marked
+    # external, it doesn't also freeze it at a stale value forever.
+    lookup = make_lookup(
+        states={
+            "light.a": {
+                "state": "on",
+                "attributes": {"brightness": 200, "color_temp_kelvin": 3000},
+                "context_id": "ctx-device-echo-unrelated",
+            }
+        },
+        confirmed_context_ids={"light.a": "ctx-confirmed-stale"},
+        confirmed_owner_ids={"light.a": "ours"},
+        pending_context_ids={"light.a": "ctx-pending-stale"},
+        pending_owner_ids={"light.a": "ours"},
+        pending_targets={"light.a": {"brightness": 200, "color_temp_kelvin": 3000}},
+    )
+    groups = build_groups(
+        entities=["light.a"],
+        brightness_multipliers={},
+        sensor_brightness=100,  # the curve has moved on since that echo
+        sensor_color_temp_kelvin=4500,
+        lookup=lookup,
+        owner_id="ours",
+    )
+    assert groups[0].combined == ["light.a"]
+
+
+def test_context_mismatch_is_still_external_when_live_values_dont_match_pendings_target():
+    # Same stale-context shape, but the light's current values don't
+    # match what pending asked for either - a real external change, not
+    # an echo of our own write. Must stay excluded.
+    lookup = make_lookup(
+        states={
+            "light.a": {
+                "state": "on",
+                "attributes": {"brightness": 40, "color_temp_kelvin": 6000},
+                "context_id": "ctx-someone-else",
+            }
+        },
+        confirmed_context_ids={"light.a": "ctx-confirmed-stale"},
+        confirmed_owner_ids={"light.a": "ours"},
+        pending_context_ids={"light.a": "ctx-pending-stale"},
+        pending_owner_ids={"light.a": "ours"},
+        pending_targets={"light.a": {"brightness": 200, "color_temp_kelvin": 3000}},
+    )
+    groups = build_groups(
+        entities=["light.a"],
+        brightness_multipliers={},
+        sensor_brightness=200,
+        sensor_color_temp_kelvin=3000,
+        lookup=lookup,
+        owner_id="ours",
+    )
+    assert groups[0].combined == []
+    assert groups[0].needing_off == []
+
+
+def test_context_mismatch_with_no_recorded_target_is_still_external():
+    # A pending claim exists but carries no target at all (None) - e.g.
+    # data from before this field existed, or a claim written_tracking
+    # only ever observed rather than issued (a restart/recovery
+    # snapshot). Nothing to compare against, so this must fall through
+    # to genuinely external rather than being silently forgiven.
+    lookup = make_lookup(
+        states={
+            "light.a": {
+                "state": "on",
+                "attributes": {"brightness": 200, "color_temp_kelvin": 3000},
+                "context_id": "ctx-someone-else",
+            }
+        },
+        confirmed_context_ids={"light.a": "ctx-confirmed-stale"},
+        confirmed_owner_ids={"light.a": "ours"},
+        pending_context_ids={"light.a": "ctx-pending-stale"},
+        pending_owner_ids={"light.a": "ours"},
+        # No pending_targets entry for light.a.
+    )
+    groups = build_groups(
+        entities=["light.a"],
+        brightness_multipliers={},
+        sensor_brightness=200,
+        sensor_color_temp_kelvin=3000,
+        lookup=lookup,
+        owner_id="ours",
+    )
+    assert groups[0].combined == []
+
+
+def test_context_mismatch_is_forgiven_when_live_rgb_matches_pendings_target():
+    # RGB equivalent of test_context_mismatch_is_forgiven_when_live_values_match_pendings_target.
+    lookup = make_lookup(
+        states={
+            "light.a": {
+                "state": "on",
+                "attributes": {
+                    "brightness": 200,
+                    "rgb_color": [255, 120, 10],
+                    "supported_color_modes": ["rgb"],
+                },
+                "context_id": "ctx-device-echo-unrelated",
+            }
+        },
+        confirmed_context_ids={"light.a": "ctx-confirmed-stale"},
+        confirmed_owner_ids={"light.a": "ours"},
+        pending_context_ids={"light.a": "ctx-pending-stale"},
+        pending_owner_ids={"light.a": "ours"},
+        pending_targets={"light.a": {"brightness": 200, "rgb_color": [255, 120, 10]}},
+    )
+    groups = build_groups(
+        entities=["light.a"],
+        brightness_multipliers={},
+        sensor_brightness=200,
+        sensor_color_temp_kelvin=3000,
+        lookup=lookup,
+        owner_id="ours",
+        prefer_rgb_color=True,
+        rgb_color=(255, 120, 10),
+    )
+    assert groups[0].combined_rgb == []
+
+
 def test_an_unconfirmed_first_attempt_that_does_not_match_is_not_yet_external():
     # No confirmed claim has ever been established for this light - only
     # a single pending attempt, which doesn't match live state either

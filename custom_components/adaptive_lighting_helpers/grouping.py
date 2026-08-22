@@ -49,6 +49,14 @@ class EntityLookup:
     confirmed_owner_id: Callable[[str], Optional[str]]
     pending_context_id: Callable[[str], Optional[str]]
     pending_owner_id: Callable[[str], Optional[str]]
+    # What the *pending* claim's write actually intended - {brightness,
+    # color_temp_kelvin} or {brightness, rgb_color}, or None if that
+    # claim isn't a real apply_lighting write (an off-command, or a
+    # write_tracking-observed baseline rather than one we issued). Lets
+    # externally_set() below tell "our own write, echoed back under an
+    # unrelated context" apart from a genuine external change - see its
+    # own docstring.
+    pending_target: Callable[[str], Optional[dict]]
 
     def reachable(self, entity_id: str) -> bool:
         """False for anything HA already knows it can't reach - no point commanding it."""
@@ -59,7 +67,15 @@ class EntityLookup:
         did = self.device_id(entity_id)
         return self.labels(entity_id) + (self.labels(did) if did else [])
 
-    def externally_set(self, entity_id: str, owner_id: Optional[str] = None, force: bool = False) -> bool:
+    def externally_set(
+        self,
+        entity_id: str,
+        owner_id: Optional[str] = None,
+        force: bool = False,
+        brightness_tolerance: int = 2,
+        color_temp_tolerance: int = 10,
+        rgb_color_tolerance: int = 10,
+    ) -> bool:
         """True if the entity is on and something other than *this*
         caller's own last apply_lighting write has touched it since - a
         person, another automation (even one with no context.user_id of
@@ -116,7 +132,30 @@ class EntityLookup:
            external change until a `confirmed` baseline exists to check
            against.
         4. Otherwise (a `confirmed` claim exists and neither it nor
-           `pending` matches): genuinely externally set.
+           `pending` matches): genuinely externally set - UNLESS the
+           `pending` claim recorded what it was actually trying to write
+           (brightness/color_temp_kelvin, or brightness/rgb_color) and
+           the entity's *current* reported values still match that
+           within the same tolerance apply_lighting itself uses to
+           decide "already correct". A context mismatch alone doesn't
+           prove someone else touched the light - HA's own Entity._context
+           expires 5 seconds after the service call that set it
+           (confirmed against homeassistant/core.py), so a real device
+           whose Zigbee/MQTT round-trip confirmation takes longer than
+           that reports back under a brand-new, unrelated context even
+           though it's echoing exactly the value we asked for. Without
+           this check that echo reads as an external touch and - because
+           nothing here ever un-marks it while the light stays
+           continuously on (see the module docstring's "naturally stops
+           being true" note, which only covers *turning off*) - the
+           light is silently excluded from every future tick, forever,
+           the instant it next needs a genuinely different value.
+           Confirmed live: light.kitchen_3/light.kitchen_5 stuck exactly
+           this way for over an hour, still correctly lit the whole
+           time, invisible until the phase next changed and they didn't
+           follow. Deliberately checked against `pending` (the most
+           recent attempt) rather than `confirmed` - `pending` is what
+           this specific echo would be confirming.
 
         The owner check, wherever a context matches: a claim's owner_id
         of None doesn't count against anyone (no claim was ever made);
@@ -161,6 +200,9 @@ class EntityLookup:
             return claim_owner is not None and claim_owner != owner_id
 
         if confirmed_context is None:
+            return False
+
+        if _matches_pending_target(entity_id, self, brightness_tolerance, color_temp_tolerance, rgb_color_tolerance):
             return False
 
         return True
@@ -259,7 +301,9 @@ def build_groups(
             group.needing_off = [
                 e
                 for e in group_entities
-                if lookup.reachable(e) and not lookup.is_state(e, "off") and not lookup.externally_set(e, owner_id, force)
+                if lookup.reachable(e)
+                and not lookup.is_state(e, "off")
+                and not lookup.externally_set(e, owner_id, force, brightness_tolerance, color_temp_tolerance, rgb_color_tolerance)
             ]
             groups.append(group)
             continue
@@ -274,7 +318,7 @@ def build_groups(
             e
             for e in temp_entities
             if lookup.reachable(e)
-            and not lookup.externally_set(e, owner_id, force)
+            and not lookup.externally_set(e, owner_id, force, brightness_tolerance, color_temp_tolerance, rgb_color_tolerance)
             and not _already_set(e, brightness, sensor_color_temp_kelvin, lookup, brightness_tolerance, color_temp_tolerance)
         ]
         group.two_step = [e for e in needing_update if two_step_label in lookup.tags(e)]
@@ -284,7 +328,7 @@ def build_groups(
             e
             for e in rgb_entities
             if lookup.reachable(e)
-            and not lookup.externally_set(e, owner_id, force)
+            and not lookup.externally_set(e, owner_id, force, brightness_tolerance, color_temp_tolerance, rgb_color_tolerance)
             and not _already_set_rgb(e, brightness, rgb_color, lookup, brightness_tolerance, rgb_color_tolerance)
         ]
         group.two_step_rgb = [e for e in needing_update_rgb if two_step_label in lookup.tags(e)]
@@ -301,6 +345,68 @@ def _brightness_close(entity_id: str, target_brightness: int, lookup: EntityLook
     only one copy of the "how close counts as close enough" check for it."""
     current_brightness = _as_int(lookup.state_attr(entity_id, "brightness"), -999)
     return abs(current_brightness - target_brightness) <= brightness_tolerance
+
+
+def target_matches_values(
+    target: Optional[dict],
+    current_brightness,
+    current_color_temp_kelvin,
+    current_rgb_color,
+    brightness_tolerance: int = 2,
+    color_temp_tolerance: int = 10,
+    rgb_color_tolerance: int = 10,
+) -> bool:
+    """Pure comparison (plain values in, no EntityLookup/entity_id) -
+    shared by externally_set()'s own context-mismatch fallback below and
+    sensor.py's diagnostic status classification, so both agree on what
+    counts as "still matches what we asked for" even though a
+    context.id says otherwise. `target` is a claim's recorded
+    {"brightness": ..., "color_temp_kelvin": ...} or {"brightness": ...,
+    "rgb_color": [...]} - falsy (None, or an entity missing from a
+    targets dict) never matches, same as no claim at all."""
+    if not target:
+        return False
+    target_brightness = target.get("brightness")
+    if target_brightness is None:
+        return False
+    if abs(_as_int(current_brightness, -999) - target_brightness) > brightness_tolerance:
+        return False
+    target_rgb = target.get("rgb_color")
+    if target_rgb is not None:
+        return (
+            isinstance(current_rgb_color, (list, tuple))
+            and len(current_rgb_color) == 3
+            and all(abs(a - b) <= rgb_color_tolerance for a, b in zip(current_rgb_color, target_rgb))
+        )
+    target_color_temp = target.get("color_temp_kelvin")
+    if target_color_temp is None:
+        return False
+    return abs(_as_int(current_color_temp_kelvin, -999) - target_color_temp) <= color_temp_tolerance
+
+
+def _matches_pending_target(
+    entity_id: str,
+    lookup: EntityLookup,
+    brightness_tolerance: int,
+    color_temp_tolerance: int,
+    rgb_color_tolerance: int,
+) -> bool:
+    """True if the entity's current reported values still match what the
+    *pending* claim was actually trying to write - see externally_set()'s
+    own docstring for why this rescues a context-mismatched light rather
+    than treating it as external. A pending claim with no target at all
+    (None - an off-command, or a claim write_tracking only ever
+    *observed* rather than issued, e.g. after a restart or recovery) has
+    nothing to compare against and never matches here."""
+    return target_matches_values(
+        lookup.pending_target(entity_id),
+        lookup.state_attr(entity_id, "brightness"),
+        lookup.state_attr(entity_id, "color_temp_kelvin"),
+        lookup.state_attr(entity_id, "rgb_color"),
+        brightness_tolerance,
+        color_temp_tolerance,
+        rgb_color_tolerance,
+    )
 
 
 def _already_set(

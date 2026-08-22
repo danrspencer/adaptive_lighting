@@ -111,6 +111,22 @@ not because it's ours, but because "the light hasn't changed" is
 already the retry signal every later dropped write relies on, and a
 dropped first write leaves the light's context at exactly that
 pre-write value. See async_record's docstring for the full reasoning.
+
+A context.id mismatch is still not conclusive proof of an external
+change even with both claims present, because context.id itself isn't
+permanent on the *device* side: HA's own Entity._context expires 5
+seconds after the service call that set it (confirmed against
+homeassistant/core.py), so a real device whose Zigbee/MQTT round-trip
+confirmation takes longer than that reports its state back under a
+brand-new, unrelated context - even though it's echoing exactly the
+value we asked for, not an external touch at all. Each claim now also
+records what it was actually trying to write (`target` -
+brightness/color_temp_kelvin, or brightness/rgb_color, or None for a
+claim that isn't a real write), so grouping.py's externally_set() can
+fall back to comparing the entity's *current* values against `pending`'s
+own target before concluding "external" - see its docstring for the
+live incident (light.kitchen_3/light.kitchen_5, stuck for over an hour,
+correctly lit the entire time) this closes.
 """
 
 from __future__ import annotations
@@ -143,6 +159,16 @@ class _ContextClaim(TypedDict):
     # narrow a logbook lookup to resolve a context.id into what actually
     # happened, without guessing a search window.
     recorded_at: Optional[str]
+    # What this specific write was actually trying to set -
+    # {"brightness": int, "color_temp_kelvin": int} or {"brightness":
+    # int, "rgb_color": [r, g, b]} - or None for a claim that isn't a
+    # real apply_lighting write (an off-command, or one write_tracking
+    # only *observed* rather than issued - the synthetic first-write
+    # baseline, or a resync/recovery snapshot). Lets grouping.py's
+    # externally_set() recognise its own write echoed back under an
+    # unrelated context.id as still ours, rather than external - see its
+    # own docstring for why that gap exists and matters.
+    target: Optional[dict]
 
 
 class _WriteRecord(TypedDict):
@@ -184,6 +210,7 @@ class LastWriteTracker:
                 for claim in (value.get("confirmed"), value.get("pending")):
                     if claim is not None:
                         claim.setdefault("recorded_at", None)
+                        claim.setdefault("target", None)
                 data[entity_id] = value  # already this shape
             elif "context_id" in value:
                 # The single-record format this integration shipped with
@@ -199,6 +226,7 @@ class LastWriteTracker:
                         "context_id": value["context_id"],
                         "owner_id": value.get("owner_id"),
                         "recorded_at": None,
+                        "target": None,
                     },
                     "pending": None,
                 }
@@ -273,7 +301,7 @@ class LastWriteTracker:
         operation, triggered two different ways."""
         record = self._data.get(entity_id)
         self._data[entity_id] = {
-            "confirmed": {"context_id": context_id, "owner_id": None, "recorded_at": None},
+            "confirmed": {"context_id": context_id, "owner_id": None, "recorded_at": None, "target": None},
             "pending": record.get("pending") if record else None,
         }
 
@@ -297,12 +325,18 @@ class LastWriteTracker:
         claim = record.get("pending") if record else None
         return claim.get("owner_id") if claim else None
 
+    def pending_target(self, entity_id: str) -> dict | None:
+        record = self._data.get(entity_id)
+        claim = record.get("pending") if record else None
+        return claim.get("target") if claim else None
+
     async def async_record(
         self,
         entity_ids: list[str],
         live_context_before_write: dict[str, str | None],
         context_id: str,
         owner_id: str | None = None,
+        targets: dict[str, dict] | None = None,
     ) -> None:
         """Called once per apply_lighting invocation with every entity it
         actually issued a light.turn_on/turn_off for - not entities it
@@ -347,9 +381,22 @@ class LastWriteTracker:
         cleanly instead of reading "no record -> free" and losing track
         of the attempt. owner_id=None means this synthetic baseline
         never itself blocks a different owner_id's claim - see
-        grouping.py's externally_set()."""
+        grouping.py's externally_set().
+
+        targets records, per entity, what this write actually asked for
+        - {"brightness": ..., "color_temp_kelvin": ...} or {"brightness":
+        ..., "rgb_color": [...]}. An entity missing from targets (an
+        off-command has no brightness/colour target) gets None. This is
+        what lets externally_set() recognise its own write echoed back
+        under a context.id it doesn't otherwise recognise - see its
+        docstring for why that's a real, not hypothetical, gap: HA's
+        Entity._context expires 5 seconds after the service call that
+        set it, so a device whose real confirmation takes longer than
+        that reports back under an unrelated context even when it's
+        agreeing with us exactly."""
         if not entity_ids:
             return
+        targets = targets or {}
         for entity_id in entity_ids:
             old = self._data.get(entity_id)
             confirmed: Optional[_ContextClaim]
@@ -362,13 +409,18 @@ class LastWriteTracker:
             else:
                 baseline_context = live_context_before_write.get(entity_id)
                 confirmed = (
-                    {"context_id": baseline_context, "owner_id": None, "recorded_at": None}
+                    {"context_id": baseline_context, "owner_id": None, "recorded_at": None, "target": None}
                     if baseline_context is not None
                     else None
                 )
             self._data[entity_id] = {
                 "confirmed": confirmed,
-                "pending": {"context_id": context_id, "owner_id": owner_id, "recorded_at": dt_util.utcnow().isoformat()},
+                "pending": {
+                    "context_id": context_id,
+                    "owner_id": owner_id,
+                    "recorded_at": dt_util.utcnow().isoformat(),
+                    "target": targets.get(entity_id),
+                },
             }
         await self._store.async_save(self._data)
         async_dispatcher_send(self._hass, SIGNAL_WRITE_TRACKING_UPDATED)
