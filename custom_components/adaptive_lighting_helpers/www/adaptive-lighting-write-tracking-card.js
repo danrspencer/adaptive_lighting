@@ -175,9 +175,12 @@ class AdaptiveLightingWriteTrackingCard extends HTMLElement {
   }
 
   async _clear(entityId) {
-    if (!window.confirm(`Clear tracked ownership for ${entityId}? This removes its confirmed/pending record entirely - override protection is off for it until the next write, from anyone.`)) {
-      return;
-    }
+    // No confirmation prompt - clearing just lets the light get
+    // updated normally again on the next tick, from anyone. Not a
+    // destructive action worth gating (unlike, say, deleting data):
+    // the record is a diagnostic bookkeeping entry, not the light
+    // itself, and a fresh one gets re-established the moment anything
+    // next writes to this entity.
     this._clearing.add(entityId);
     this._clearErrors.delete(entityId);
     this._render();
