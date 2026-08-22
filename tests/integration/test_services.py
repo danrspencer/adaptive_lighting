@@ -16,16 +16,20 @@ Store round-trip.
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 import pytest
+from freezegun import freeze_time
 from pytest_homeassistant_custom_component.common import MockConfigEntry, async_mock_service
 
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import Context, HomeAssistant
 from homeassistant.exceptions import ServiceValidationError
+from homeassistant.util import dt as dt_util
 
 from custom_components.adaptive_lighting_helpers import _build_lookup, async_setup_entry
 from custom_components.adaptive_lighting_helpers.grouping import build_groups
-from custom_components.adaptive_lighting_helpers.write_tracking import LastWriteTracker
+from custom_components.adaptive_lighting_helpers.write_tracking import STALE_RECORD_MAX_AGE_DAYS, LastWriteTracker
 
 DOMAIN = "adaptive_lighting_helpers"
 
@@ -972,6 +976,114 @@ async def test_resync_preserves_the_pending_claim(setup_integration: HomeAssista
     await resynced_tracker.async_resync_to_live_state(hass)
 
     assert resynced_tracker.pending_context_id("light.a") == original_pending_context
+
+
+async def test_async_load_backfills_last_seen_for_legacy_records_without_it(hass: HomeAssistant):
+    """Every record persisted before last_seen existed is missing the
+    key entirely - backfilled to *now* on load, not left missing (which
+    async_prune_stale treats as "can't judge age, leave alone" - see its
+    own docstring) and not backdated (which would let a legitimate,
+    currently-relevant record get immediately swept up by the very next
+    prune pass, the "mass prune on upgrade" this backfill specifically
+    exists to avoid)."""
+    from homeassistant.helpers.storage import Store
+
+    from custom_components.adaptive_lighting_helpers.write_tracking import STORAGE_KEY, STORAGE_VERSION
+
+    legacy_store = Store(hass, STORAGE_VERSION, STORAGE_KEY)
+    await legacy_store.async_save(
+        {
+            "light.a": {
+                "confirmed": {"context_id": "ctx-old", "owner_id": "automation.room"},
+                "pending": None,
+                # no last_seen key at all - the pre-upgrade shape.
+            }
+        }
+    )
+
+    tracker = LastWriteTracker(hass)
+    await tracker.async_load()
+
+    record = tracker.snapshot()["light.a"]
+    assert record.get("last_seen") is not None
+    assert dt_util.utcnow() - dt_util.parse_datetime(record["last_seen"]) < timedelta(seconds=5)
+
+
+async def test_prune_stale_removes_a_record_untouched_past_the_cutoff(setup_integration: HomeAssistant):
+    hass = setup_integration
+    async_mock_service(hass, "light", "turn_on")
+    _set_sensor(hass, brightness=180, color_temp=3200)
+    _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
+
+    with freeze_time(dt_util.utcnow()) as frozen:
+        await hass.services.async_call(
+            DOMAIN,
+            "apply_lighting",
+            {
+                "entities": ["light.a"],
+                "sensor_entity_id": "sensor.test_adaptive",
+                "transition": 2,
+                "owner_id": "automation.room",
+            },
+            blocking=True,
+        )
+        tracker = LastWriteTracker(hass)
+        await tracker.async_load()
+        assert "light.a" in tracker.snapshot()
+
+        frozen.move_to(dt_util.utcnow() + timedelta(days=STALE_RECORD_MAX_AGE_DAYS, hours=1))
+        await tracker.async_prune_stale()
+
+    assert "light.a" not in tracker.snapshot()
+
+
+async def test_prune_stale_leaves_a_recent_record_alone(setup_integration: HomeAssistant):
+    """The boundary case - a record still within the cutoff must survive
+    a prune pass. Without this, a mutation that pruned everything
+    regardless of age would pass test_prune_stale_removes_a_record_untouched_past_the_cutoff
+    just as easily as the real implementation."""
+    hass = setup_integration
+    async_mock_service(hass, "light", "turn_on")
+    _set_sensor(hass, brightness=180, color_temp=3200)
+    _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
+
+    with freeze_time(dt_util.utcnow()) as frozen:
+        await hass.services.async_call(
+            DOMAIN,
+            "apply_lighting",
+            {
+                "entities": ["light.a"],
+                "sensor_entity_id": "sensor.test_adaptive",
+                "transition": 2,
+                "owner_id": "automation.room",
+            },
+            blocking=True,
+        )
+        tracker = LastWriteTracker(hass)
+        await tracker.async_load()
+
+        frozen.move_to(dt_util.utcnow() + timedelta(hours=1))
+        await tracker.async_prune_stale()
+
+    assert "light.a" in tracker.snapshot()
+
+
+async def test_prune_stale_leaves_a_record_with_no_last_seen_alone(hass: HomeAssistant):
+    """Defensive branch: a record whose age genuinely can't be judged
+    (shouldn't happen after async_load()'s own backfill, but nothing
+    else in this module ever deletes on ambiguity either - see
+    async_prune_stale's own docstring) must never be pruned."""
+    tracker = LastWriteTracker(hass)
+    await tracker.async_load()
+    tracker._data["light.a"] = {  # bypassing the public API is deliberate here - this shape shouldn't occur naturally
+        "confirmed": {"context_id": "ctx-old", "owner_id": "automation.room", "recorded_at": None, "target": None},
+        "pending": None,
+        "last_seen": None,
+    }
+
+    await tracker.async_prune_stale()
+
+    assert "light.a" in tracker.snapshot()
 
 
 async def test_recovered_light_is_freed_while_an_unrelated_override_stays_protected(

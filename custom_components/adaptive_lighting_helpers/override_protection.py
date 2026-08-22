@@ -73,6 +73,12 @@ class _ContextClaim(TypedDict):
 class _WriteRecord(TypedDict):
     confirmed: Optional[_ContextClaim]
     pending: Optional[_ContextClaim]
+    # ISO 8601 - the last time this record was written or observed (a
+    # real write, or a startup/recovery resync). Pure write_tracking.py
+    # bookkeeping for its own staleness pruning (async_prune_stale) -
+    # classify() never reads this, it has no bearing on what a record
+    # currently means, only on how long it's allowed to keep existing.
+    last_seen: Optional[str]
 
 
 def _as_int(value, default: int) -> int:

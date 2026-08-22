@@ -131,6 +131,7 @@ correctly lit the entire time) this closes.
 
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Optional
 
 from homeassistant.core import CALLBACK_TYPE, Event, EventStateChangedData, HomeAssistant, callback
@@ -142,6 +143,31 @@ from .override_protection import _ContextClaim, _WriteRecord
 
 STORAGE_VERSION = 1
 STORAGE_KEY = "adaptive_lighting_helpers.last_write_context_ids"
+
+# How long a tracked record is kept after it was last written or
+# observed, before async_prune_stale() discards it outright - see that
+# method's own docstring for why this exists at all (an entity deleted
+# from HA entirely, not just restarting, has no event this integration
+# can observe to know it should stop tracking it). Deliberately short:
+# pruning a record is never actually risky, regardless of how soon it
+# happens - classify() treats "no record at all" identically to
+# "unclaimed" (see its own docstring), never as blocked, so a pruned
+# light simply looks brand-new again and re-establishes a real record
+# on its next write. There's no lockout to guard against by being
+# conservative here, so there's no reason to hold onto a record for a
+# still-real, still-relevant light any longer than "hasn't needed a
+# write in a day" already implies it's not needed.
+STALE_RECORD_MAX_AGE_DAYS = 1
+
+# How often async_prune_stale() actually gets called while running (in
+# addition to once at startup, in __init__.py) - with a one-day cutoff,
+# only pruning at startup would mean a record could sit stale for as
+# long as HA happens to stay up between restarts before ever being
+# cleaned, which defeats "a day" as a real promise. Frequent enough to
+# keep that promise, infrequent enough that it costs nothing meaningful
+# (a plain dict scan over however many entities are tracked, typically
+# a few dozen).
+PRUNE_CHECK_INTERVAL = timedelta(hours=1)
 
 # Fired (with no payload - listeners re-read via snapshot()) whenever
 # self._data changes, so the diagnostic sensor in sensor.py can refresh
@@ -171,6 +197,7 @@ class LastWriteTracker:
 
     async def async_load(self) -> None:
         raw = await self._store.async_load() or {}
+        now_iso = dt_util.utcnow().isoformat()
         data: dict[str, _WriteRecord] = {}
         for entity_id, value in raw.items():
             if not isinstance(value, dict):
@@ -184,6 +211,15 @@ class LastWriteTracker:
                     if claim is not None:
                         claim.setdefault("recorded_at", None)
                         claim.setdefault("target", None)
+                # Records from before last_seen existed (every record
+                # persisted prior to this feature shipping) get backfilled
+                # to *now*, not left missing or backdated - deliberately
+                # conservative: this is what gives every already-tracked
+                # light a fresh full STALE_RECORD_MAX_AGE_DAYS window
+                # after upgrading, rather than risking a one-time mass
+                # prune of legitimate, currently-relevant records the very
+                # first time this loads on an existing install.
+                value.setdefault("last_seen", now_iso)
                 data[entity_id] = value  # already this shape
             elif "context_id" in value:
                 # The single-record format this integration shipped with
@@ -202,6 +238,7 @@ class LastWriteTracker:
                         "target": None,
                     },
                     "pending": None,
+                    "last_seen": now_iso,
                 }
             # Anything else (the even older bare-string format, or
             # malformed data) is dropped - same safe "no record -> free"
@@ -276,6 +313,7 @@ class LastWriteTracker:
         self._data[entity_id] = {
             "confirmed": {"context_id": context_id, "owner_id": None, "recorded_at": None, "target": None},
             "pending": record.get("pending") if record else None,
+            "last_seen": dt_util.utcnow().isoformat(),
         }
 
     def confirmed_context_id(self, entity_id: str) -> str | None:
@@ -419,7 +457,68 @@ class LastWriteTracker:
                     "recorded_at": dt_util.utcnow().isoformat(),
                     "target": targets.get(entity_id),
                 },
+                "last_seen": dt_util.utcnow().isoformat(),
             }
+        await self._store.async_save(self._data)
+        async_dispatcher_send(self._hass, SIGNAL_WRITE_TRACKING_UPDATED)
+
+    async def async_prune_stale(self) -> None:
+        """Discards any tracked record that hasn't been written or
+        observed in over STALE_RECORD_MAX_AGE_DAYS days - the cleanup
+        an entity genuinely *deleted* from Home Assistant (not just
+        restarting) never otherwise gets. Every existing cleanup path
+        here (async_start_listening's drop-detection,
+        async_resync_to_live_state's startup pass) depends on
+        `hass.states.get(entity_id)` returning *something* - a real
+        on/off state, or at least unavailable/unknown - to have anything
+        to act on. An entity removed outright (no device, no
+        entity_id, nothing - e.g. a Zigbee2MQTT group deleted at the
+        source) produces none of that: `hass.states.get(...)` just
+        returns `None` forever, silently skipped by both of those paths
+        (see their own docstrings), leaving its record in the Store
+        indefinitely with nothing left in Home Assistant that could ever
+        prompt its removal. Confirmed live: `light.extension_spots_left`,
+        a deleted Zigbee2MQTT group with no matching entity anywhere in
+        the registry, found stuck in this Store with no way to ever
+        observe its own deletion.
+
+        Called once at startup (right after async_load()/
+        async_resync_to_live_state), and again every PRUNE_CHECK_INTERVAL
+        while running (see __init__.py) - the one-day cutoff needs the
+        periodic call to mean anything in practice, since a startup-only
+        pass would let a record sit stale for as long as HA happens to
+        stay up between restarts before ever being cleaned.
+
+        Deliberately aggressive on timing, not conservative: unlike most
+        of this integration's own decisions, there's no failure mode to
+        weigh against pruning too soon - `classify()` treats "no record
+        at all" identically to `"unclaimed"` (see its own docstring),
+        never as blocked, so a pruned-too-early record for a still-real
+        light just makes it look brand new again, re-established
+        normally on its very next write. The only thing at stake here is
+        Store hygiene, not override protection, which is why this can
+        be short where nearly everything else in this module is
+        deliberately lenient/slow-to-conclude instead.
+
+        Still, a record with no `last_seen` at all
+        (shouldn't happen after async_load()'s own backfill, but handled
+        defensively) or an unparseable one is left alone rather than
+        pruned - when age can't be judged, the same "don't delete on
+        ambiguity" preference this integration applies everywhere else
+        (see the module docstring's first-write-baseline reasoning)."""
+        cutoff = dt_util.utcnow() - timedelta(days=STALE_RECORD_MAX_AGE_DAYS)
+        stale = []
+        for entity_id, record in self._data.items():
+            last_seen = record.get("last_seen")
+            if not last_seen:
+                continue
+            parsed = dt_util.parse_datetime(last_seen)
+            if parsed is not None and parsed < cutoff:
+                stale.append(entity_id)
+        if not stale:
+            return
+        for entity_id in stale:
+            del self._data[entity_id]
         await self._store.async_save(self._data)
         async_dispatcher_send(self._hass, SIGNAL_WRITE_TRACKING_UPDATED)
 

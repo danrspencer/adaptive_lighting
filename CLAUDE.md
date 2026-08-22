@@ -3804,6 +3804,96 @@ update+restart runs; the dashboard-YAML half (section width, grid
   (`docs/HELPERS.md`'s "Using override protection standalone"
   section).
 
+- **`write_tracking.py` gained a genuine expiry mechanism -
+  `async_prune_stale()` - 2026-08-22, prompted directly by cleaning up
+  real leftover Zigbee2MQTT groups in the live house.** After removing
+  `light.ensuite_spots` (a deleted Zigbee2MQTT group device, still
+  lingering in HA's registry - a real Zigbee/HA-registry cleanup, not
+  this integration's concern) the user separately flagged
+  `light.extension_spots_left`, which turned out to be a *different*
+  kind of leftover entirely: not a stray HA registry entry at all (it
+  had already been fully deleted, `ha_get_entity` returned "not found"),
+  but a stale record in *this integration's own* `write_tracking.py`
+  Store, for an entity Home Assistant had otherwise completely
+  forgotten. Root cause: every existing cleanup path
+  (`async_start_listening`'s drop-detection,
+  `async_resync_to_live_state`'s startup pass) depends on
+  `hass.states.get(entity_id)` returning *something* to act on - even
+  just `unavailable`. An entity deleted outright returns `None`
+  forever, silently skipped by both paths, with nothing left in Home
+  Assistant that could ever prompt the record's removal.
+
+  User's own framing, directly: "we need a timeout in our state
+  tracking - we don't wanna hold onto random state forever." First
+  draft shipped internally (never merged) with a 30-day cutoff,
+  reasoned from "how long could a legitimately-idle light plausibly go
+  without a real write" - **user corrected this immediately, and the
+  correction is the more important part**: "last seen makes me think
+  you're overthinking it... if we've got a record that's not been
+  updated in a day then I doubt we care about it." Re-derived properly
+  in response: pruning a record is **never actually risky**, regardless
+  of how soon it happens - `classify()` treats "no record at all"
+  identically to `"unclaimed"` (see its own docstring), never as
+  blocked, so a record pruned too early for a still-real light just
+  makes it look brand-new again, re-established normally on its very
+  next write. There's no lockout to weigh against being aggressive
+  here, unlike nearly every other decision in this module - the 30-day
+  reasoning was solving for a risk that doesn't exist. Shipped with
+  `STALE_RECORD_MAX_AGE_DAYS = 1` instead.
+
+  A one-day cutoff only means something if it's actually checked more
+  than once a restart, though - a startup-only pass would let a record
+  sit stale for as long as HA happens to stay up between restarts.
+  Added `PRUNE_CHECK_INTERVAL` (1 hour) via `async_track_time_interval`
+  in `__init__.py`, alongside the existing startup call (which still
+  matters on its own - it catches anything that went stale while HA
+  was down). **Real test failure caught and fixed, not assumed
+  correct**: the periodic timer registration
+  (`entry.async_on_unload(async_track_time_interval(...))`) initially
+  failed nearly every integration test in the suite with "Lingering
+  timer after job ... _periodic_prune" - `tests/integration/test_services.py`'s
+  own `setup_integration` fixture calls `async_setup_entry` directly
+  and never unloads the entry afterward (deliberately, per its own
+  docstring, to avoid resolving the `frontend`/`http` manifest
+  dependencies), so `entry.async_on_unload`'s callbacks never fire in
+  these tests, and pytest-homeassistant-custom-component's own teardown
+  fixture asserts against exactly this: a real `asyncio.TimerHandle`
+  still scheduled on the event loop after a test ends. Root-caused
+  against HA core's own `_TrackTimeInterval` source rather than
+  guessed: `cancel_on_shutdown=True` on the job is checked explicitly
+  by that same lingering-timer assertion (`if job.cancel_on_shutdown:
+  continue`) - and is also the semantically correct production setting
+  regardless of the test, not just a workaround: a periodic maintenance
+  timer has no reason to keep rescheduling itself once Home Assistant
+  itself is shutting down, restart or not.
+
+  New `last_seen` field added to the shared `_WriteRecord` shape
+  (`override_protection.py`, alongside `confirmed`/`pending` - unused
+  by `classify()`, pure `write_tracking.py` bookkeeping), stamped by
+  every place that already writes or observes a record
+  (`async_record()`, `_snapshot_confirmed()` - both its startup-resync
+  and live-recovery callers). Pre-existing persisted records (from
+  before this field existed) are backfilled to *now*, not left missing
+  or backdated, on `async_load()` - deliberately conservative on this
+  one specific point even though pruning-too-early is otherwise
+  harmless, since immediately mass-pruning every already-tracked
+  light's diagnostic history the very first time this loads on an
+  upgraded install would be a needlessly disruptive way to roll this
+  out, however harmless the underlying effect actually is.
+
+  Four new tests in `tests/integration/test_services.py`
+  (`test_async_load_backfills_last_seen_for_legacy_records_without_it`,
+  `test_prune_stale_removes_a_record_untouched_past_the_cutoff`,
+  `test_prune_stale_leaves_a_recent_record_alone`,
+  `test_prune_stale_leaves_a_record_with_no_last_seen_alone`), all
+  mutation-verified individually: always-prune-regardless-of-cutoff
+  fails exactly the "leaves a recent record alone" test; treating a
+  missing `last_seen` as immediately stale fails exactly the "leaves a
+  record with no last_seen alone" test; removing the `async_load()`
+  backfill fails exactly the "backfills" test - each mutation caught
+  precisely one test, confirming they're not accidentally redundant
+  with each other. Full suite: 194/194.
+
 ## Testing
 
 `pip install pytest pytest-homeassistant-custom-component && pytest`

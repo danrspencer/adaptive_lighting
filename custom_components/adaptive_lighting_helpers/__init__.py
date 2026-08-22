@@ -61,7 +61,7 @@ from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
-from homeassistant.helpers.event import async_track_state_change_event
+from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
 from homeassistant.helpers.typing import ConfigType
 
 from .const import DOMAIN
@@ -71,7 +71,7 @@ from .grouping import EntityLookup, Group, build_groups
 from .override_protection import classify, is_blocked
 from .scenes import SceneLookup, compute_scene_coverage
 from .two_step_check import async_start_watching
-from .write_tracking import LastWriteTracker
+from .write_tracking import PRUNE_CHECK_INTERVAL, LastWriteTracker
 
 SCHEDULE_PLATFORMS = [Platform.SENSOR, Platform.SELECT, Platform.NUMBER, Platform.TIME, Platform.SWITCH]
 
@@ -342,6 +342,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # entry for the live incident (light.kitchen_1, genuinely on, stuck
     # excluded purely from a restart) that prompted this.
     await write_tracker.async_resync_to_live_state(hass)
+    # An entity deleted from HA outright (not just restarting - e.g. a
+    # Zigbee2MQTT group removed at the source) never triggers the
+    # unavailable-transition cleanup async_start_listening watches for,
+    # since hass.states.get(...) just returns None forever with nothing
+    # left to observe - see async_prune_stale's own docstring for the
+    # live incident (light.extension_spots_left) that prompted this.
+    # Called once here (catches anything that went stale while HA was
+    # down) and again every PRUNE_CHECK_INTERVAL below (keeps the
+    # promise current while running, not just at the next restart).
+    await write_tracker.async_prune_stale()
+
+    async def _periodic_prune(now) -> None:
+        await write_tracker.async_prune_stale()
+
+    entry.async_on_unload(
+        async_track_time_interval(hass, _periodic_prune, PRUNE_CHECK_INTERVAL, cancel_on_shutdown=True)
+    )
     entry.async_on_unload(write_tracker.async_start_listening(hass))
 
     # Raises a fixable repair when a bulb that's known to need two-step
