@@ -14,13 +14,41 @@ Tracks a target brightness and Kelvin value that follows the [Morning/Day/Evenin
 applied once a minute to whichever of the room's lights are already on, so they drift with the schedule
 instead of jumping - regardless of whether the room currently reads as occupied (see
 [Occupancy-driven on/off](#occupancy-driven-onoff) - occupancy decides whether to turn lights on or off, never
-whether an already-on light keeps tracking the curve). `apply_lighting` itself isn't limited to this integration's
-own sensor - any entity following the
-[attribute contract in docs/HELPERS.md](HELPERS.md#bring-your-own-sensor) works, and that's still true here. The
-Adaptive Lighting Sensor input's own picker, though, is filtered to just this integration's sensors (so you don't
-have to hunt through every sensor in the house to find the right one) - a hand-written "bring your own" sensor
-won't show up in that dropdown. It still works if you point at it via the automation's **Edit in YAML** view
-instead of the picker.
+whether an already-on light keeps tracking the curve). The blueprint reads `brightness`/`color_temp`/`rgb_color`
+straight off the Adaptive Lighting Sensor's own attributes and passes them to `apply_lighting` as plain values -
+`apply_lighting` itself doesn't read any sensor entity at all (see [docs/HELPERS.md](HELPERS.md) for its full
+field contract), so the Adaptive Lighting Sensor input isn't limited to this integration's own sensor - see
+["Bring your own sensor"](#bring-your-own-sensor) below.
+
+### Bring your own sensor
+
+The Adaptive Lighting Sensor input can point at any entity exposing this attribute shape, not just this
+integration's own named schedule sensors:
+
+| Attribute | Type | Required |
+|---|---|---|
+| `brightness` | 0-255 | yes |
+| `color_temp` | Kelvin | yes |
+| `rgb_color` | `[r, g, b]` | no — only needed if you're using `prefer_rgb_color` |
+
+A minimal hand-written template sensor satisfying that contract:
+
+```yaml
+template:
+  - sensor:
+      - name: "My Room's Adaptive Lighting"
+        state: "{{ 'Evening' if now().hour >= 18 else 'Day' }}" # anything - the blueprint only reads the phase off this integration's own sensor for phase-name-keyed inputs (rgb_phases, phase scenes/exclusions) - a custom sensor doesn't need a matching state to work for brightness/colour
+        attributes:
+          brightness: "{{ 180 if now().hour >= 18 else 255 }}"
+          color_temp: "{{ 3200 if now().hour >= 18 else 5500 }}"
+          # Optional - only needed for prefer_rgb_color
+          rgb_color: "{{ [255, 200, 150] if now().hour >= 18 else [255, 255, 255] }}"
+```
+
+The Adaptive Lighting Sensor input's own picker is filtered to just this integration's sensors (so you don't have
+to hunt through every sensor in the house to find the right one) - a hand-written "bring your own" sensor won't
+show up in that dropdown. It still works if you point at it via the automation's **Edit in YAML** view instead of
+the picker.
 
 That cadence comes from two triggers, not one, with two different jobs. A plain time pattern - Update Interval
 below (default every minute) - is the one actually doing the routine work: it reapplies the schedule on a fixed
@@ -288,7 +316,7 @@ Add an automation using the "Adaptive Lighting" blueprint per room, and set:
 
 | Input | Required | Description |
 |---|---|---|
-| Adaptive Lighting Sensor | yes | Sensor providing brightness/colour temperature - filtered to this integration's own sensors (see [Brightness & colour temperature schedule](#brightness--colour-temperature-schedule) for the "bring your own sensor" case) |
+| Adaptive Lighting Sensor | yes | Sensor providing brightness/colour temperature - filtered to this integration's own sensors (see [Bring your own sensor](#bring-your-own-sensor) for pointing at a different one) |
 | Room | no | Entity/device/area/floor/label - lights within it are controlled, occupancy sensors within it govern on/off (see [One target, two jobs](#one-target-two-jobs)) |
 | Additional Triggers | no | Entities that trigger immediate re-evaluation (see [Additional triggers](#additional-triggers)) |
 | **Colour** section | | |

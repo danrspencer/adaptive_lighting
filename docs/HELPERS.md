@@ -7,49 +7,22 @@
 Seven services, each documented in full in `services.yaml` (visible in Home Assistant's Developer Tools → Actions
 once installed) — call them directly from your own automations or scripts, no blueprint required.
 
-## Bring your own sensor
-
-`apply_lighting` and `compute_lighting_groups` don't require this integration's own `sensor.adaptive_lighting` —
-they'll read brightness/colour targets off any sensor entity that exposes the right attributes. That's the whole
-contract, and nothing else about the entity matters (its `state` is never read):
-
-| Attribute | Type | Required |
-|---|---|---|
-| `brightness` | 0-255 | yes |
-| `color_temp` | Kelvin | yes |
-| `rgb_color` | `[r, g, b]` | no — only needed if you're using `prefer_rgb_color` |
-
-A minimal hand-written template sensor satisfying that contract:
-
-```yaml
-template:
-  - sensor:
-      - name: "My Room's Adaptive Lighting"
-        state: "{{ 'Evening' if now().hour >= 18 else 'Day' }}" # anything - not read by these services
-        attributes:
-          brightness: "{{ 180 if now().hour >= 18 else 255 }}"
-          color_temp: "{{ 3200 if now().hour >= 18 else 5500 }}"
-          # Optional - only needed for prefer_rgb_color
-          rgb_color: "{{ [255, 200, 150] if now().hour >= 18 else [255, 255, 255] }}"
-```
-
-Point `apply_lighting`'s `sensor_entity_id` (or the blueprint's Adaptive Lighting Sensor input) at that entity
-and everything else — reachability, tolerance, override protection, two-step transitions, RGB dispatch —
-works exactly the same as with this integration's own sensor.
-
 ## `adaptive_lighting_helpers.apply_lighting`
 
-The "just make it happen" service: reads brightness/colour-temperature (and optionally RGB colour) off any
-sensor entity you point it at — see ["Bring your own sensor"](#bring-your-own-sensor) above for
-the exact contract — and actually turns entities on/off via `light.turn_on`/`light.turn_off`, handling
-reachability, tolerance, override protection, two-step transitions, and RGB-vs-colour-temp dispatch
-internally. This is what the blueprint calls.
+The "just make it happen" service: given a target brightness/colour-temperature (and optionally RGB colour) as
+plain values, actually turns entities on/off via `light.turn_on`/`light.turn_off`, handling reachability,
+tolerance, override protection, two-step transitions, and RGB-vs-colour-temp dispatch internally. Neither this
+nor `compute_lighting_groups` reads any sensor entity - if you're feeding these values from a sensor's own
+attributes (the adaptive_lighting blueprint in this repo does exactly that, reading its own Adaptive Lighting
+Sensor input - see [docs/BLUEPRINT.md](BLUEPRINT.md#bring-your-own-sensor) for the attribute contract that
+relies on), that's an ordinary template on the caller's side, not something this service does for you.
 
 ```yaml
 action: adaptive_lighting_helpers.apply_lighting
 data:
   entities: [light.kitchen_1, light.kitchen_2]
-  sensor_entity_id: sensor.adaptive_lighting
+  brightness: 200
+  color_temp_kelvin: 3200
   transition: 2
   brightness_multipliers: { light.kitchen_2: 0.5 }
   prefer_rgb_color: true # optional - see "RGB colour" below
@@ -307,8 +280,8 @@ dispatch the calls yourself (custom transition curves, logging, etc.).
 action: adaptive_lighting_helpers.compute_lighting_groups
 data:
   entities: [light.kitchen_1, light.kitchen_2]
-  sensor_brightness: 200
-  sensor_color_temp_kelvin: 3200
+  brightness: 200
+  color_temp_kelvin: 3200
   brightness_multipliers: { light.kitchen_2: 0.5 }
 response_variable: plan
 # plan.groups -> [{multiplier, brightness, needing_off, combined, two_step, combined_rgb, two_step_rgb}, ...]
@@ -316,13 +289,13 @@ response_variable: plan
 
 ### RGB colour
 
-Both services above accept `prefer_rgb_color` (off by default). When on, entities whose `supported_color_modes`
-indicates RGB support (auto-detected — nothing to configure per light) are routed to `rgb_color` instead of
-`color_temp_kelvin`; entities without RGB support are unaffected. `apply_lighting` reads the RGB target straight
-off `sensor_entity_id`'s `rgb_color` attribute; `compute_lighting_groups` takes it as an explicit `rgb_color`
-field since it isn't reading a sensor at all. Neither service invents an RGB target on its own — see
-`compute_curve` below (or `sensor.adaptive_lighting`'s own `rgb_color` attribute) for where that value comes
-from, or supply your own.
+Both services above accept `prefer_rgb_color` (off by default) and an explicit `rgb_color` field. When
+`prefer_rgb_color` is on, entities whose `supported_color_modes` indicates RGB support (auto-detected — nothing
+to configure per light) are routed to `rgb_color` instead of `color_temp_kelvin`; entities without RGB support
+are unaffected. Neither service invents an RGB target on its own, or reads one off a sensor — see `compute_curve`
+below (or `sensor.adaptive_lighting`'s own `rgb_color` attribute) for where that value comes from, or supply your
+own. `rgb_color` can be left unset, or passed explicitly as `null` (useful if you're templating it from a source
+that doesn't always have one) — either way it's simply ignored unless `prefer_rgb_color` is also on.
 
 ## `adaptive_lighting_helpers.compute_curve`
 
@@ -442,7 +415,7 @@ Each sensor's device contains, computed the same way `compute_curve` computes th
 
 | Entity | What it is |
 |---|---|
-| `sensor.<name_>adaptive_lighting` | Combined "right now" reading — state is the phase (Morning/Day/Evening/Night), `attributes.brightness` (0-255), `attributes.color_temp` (Kelvin), and `attributes.rgb_color` (`[r, g, b]`) are exactly the attribute names `apply_lighting`'s `sensor_entity_id` and the blueprint's `adaptive_sensor` input already read, so this can be pointed at directly. Also carries today's four phase-boundary timestamps as `attributes.morning_start`/`day_start`/`evening_start`/`night_start`, plus `attributes.evening_earliest`/`evening_latest` (the two configured bounds Evening was actually clamped between) — no separate boundary sensors, since a phase-change automation only needs a `platform: state, attribute: phase` trigger on this same entity, and anything that specifically wants a boundary time (the dashboard card, in particular) can read it straight off these attributes. `attributes.points` carries the full day as 289 `{t, brightness, kelvin}` samples — what the [dashboard card](../README.md#previewing-the-dashboard-card) reads for its chart, deliberately **not** following a manual phase override (see below) the way the rest of this entity's attributes do, since it's a full-day schedule, not a "right now" value |
+| `sensor.<name_>adaptive_lighting` | Combined "right now" reading — state is the phase (Morning/Day/Evening/Night), `attributes.brightness` (0-255), `attributes.color_temp` (Kelvin), and `attributes.rgb_color` (`[r, g, b]`) are exactly the attribute names the blueprint's `adaptive_sensor` input already reads to feed `apply_lighting`'s own `brightness`/`color_temp_kelvin`/`rgb_color` fields (see [docs/BLUEPRINT.md](BLUEPRINT.md#bring-your-own-sensor)), so this can be pointed at directly. Also carries today's four phase-boundary timestamps as `attributes.morning_start`/`day_start`/`evening_start`/`night_start`, plus `attributes.evening_earliest`/`evening_latest` (the two configured bounds Evening was actually clamped between) — no separate boundary sensors, since a phase-change automation only needs a `platform: state, attribute: phase` trigger on this same entity, and anything that specifically wants a boundary time (the dashboard card, in particular) can read it straight off these attributes. `attributes.points` carries the full day as 289 `{t, brightness, kelvin}` samples — what the [dashboard card](../README.md#previewing-the-dashboard-card) reads for its chart, deliberately **not** following a manual phase override (see below) the way the rest of this entity's attributes do, since it's a full-day schedule, not a "right now" value |
 | `select.<name_>adaptive_lighting_phase` | Manual override — `Auto` (default) or a specific phase. Pinning a phase holds it until the *schedule itself* next moves on (e.g. override to `Day` during `Evening` and it still becomes `Night` once Evening would naturally have ended, rather than staying on `Day` forever) — see the sticky-override switch below to disable that and keep an override until you clear it yourself instead |
 | `time.<name_>morning_time` / `day_time` / `evening_earliest_time` / `evening_latest_time` / `night_time` | The five schedule boundaries — start times for Morning, Day, and Night, and Evening's earliest/latest bound. Each starts at a representative default (06:00/08:00/17:00/20:00/22:00) and is adjustable at any time; the change applies within seconds, not on the next 60s poll |
 | `number.<name_>morning_brightness` / `morning_kelvin` / `day_brightness` / `day_end_kelvin` / `evening_brightness` / `evening_kelvin` / `night_brightness` / `night_kelvin` | The eight brightness (0-255)/colour-temperature (1000-10000K) curve values, one pair per phase (`day_end_kelvin` is what Day ramps down to by the time Evening starts). Each starts at the value shown in `compute_curve`'s own field list above, and is adjustable at any time |
@@ -454,8 +427,9 @@ usable from dashboards/automations, without being sixteen always-visible entitie
 This replaces what used to be a config-flow form only reachable via Configure - the schedule/curve values are now
 just entities like anything else, immediately visible and editable from the device page, no separate step needed.
 
-Point `apply_lighting`'s `sensor_entity_id` (or the blueprint's Adaptive Lighting Sensor input) at whichever
-sensor's `sensor.<name_>adaptive_lighting` you want. A sensor's whole device is removable later from the
+Point the blueprint's Adaptive Lighting Sensor input (or your own template reading the same attributes into
+`apply_lighting`'s `brightness`/`color_temp_kelvin`/`rgb_color` fields) at whichever sensor's
+`sensor.<name_>adaptive_lighting` you want. A sensor's whole device is removable later from the
 integration's page; there's no reconfigure form since there's nothing left to reconfigure that way - edit the
 `time.*`/`number.*`/`switch.*` entities directly, or rename the device, instead.
 

@@ -19,12 +19,12 @@ from __future__ import annotations
 from datetime import timedelta
 
 import pytest
+import voluptuous as vol
 from freezegun import freeze_time
 from pytest_homeassistant_custom_component.common import MockConfigEntry, async_mock_service
 
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import Context, HomeAssistant
-from homeassistant.exceptions import ServiceValidationError
 from homeassistant.util import dt as dt_util
 
 from custom_components.adaptive_lighting_helpers import _build_lookup, async_setup_entry
@@ -62,19 +62,6 @@ def _set_light(hass: HomeAssistant, entity_id: str, state: str, *, context: Cont
     hass.states.async_set(entity_id, state, attrs, context=context)
 
 
-def _set_sensor(
-    hass: HomeAssistant,
-    entity_id: str = "sensor.test_adaptive",
-    brightness: int = 200,
-    color_temp: int = 4000,
-    rgb_color: list | None = None,
-) -> None:
-    attrs = {"brightness": brightness, "color_temp": color_temp}
-    if rgb_color is not None:
-        attrs["rgb_color"] = rgb_color
-    hass.states.async_set(entity_id, "unknown", attrs)
-
-
 @pytest.fixture
 async def setup_integration(hass: HomeAssistant):
     await _setup_entry(hass)
@@ -107,8 +94,8 @@ async def test_compute_lighting_groups_is_read_only(setup_integration: HomeAssis
         "compute_lighting_groups",
         {
             "entities": ["light.a"],
-            "sensor_brightness": 200,
-            "sensor_color_temp_kelvin": 4000,
+            "brightness": 200,
+            "color_temp_kelvin": 4000,
         },
         blocking=True,
         return_response=True,
@@ -122,14 +109,14 @@ async def test_apply_lighting_turns_on_reachable_entities(setup_integration: Hom
     hass = setup_integration
     turn_on_calls = async_mock_service(hass, "light", "turn_on")
     _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
-    _set_sensor(hass, brightness=180, color_temp=3200)
 
     await hass.services.async_call(
         DOMAIN,
         "apply_lighting",
         {
             "entities": ["light.a"],
-            "sensor_entity_id": "sensor.test_adaptive",
+            "brightness": 180,
+            "color_temp_kelvin": 3200,
             "transition": 2,
         },
         blocking=True,
@@ -141,42 +128,100 @@ async def test_apply_lighting_turns_on_reachable_entities(setup_integration: Hom
     assert turn_on_calls[0].data["color_temp_kelvin"] == 3200
 
 
-async def test_apply_lighting_missing_sensor_attribute_raises(setup_integration: HomeAssistant):
-    """A sensor with no brightness/color_temp attribute must raise, not
-    silently dim everything to brightness 1 - see _read_sensor_targets'
-    own docstring for the incident this guards against."""
+async def test_apply_lighting_missing_brightness_raises(setup_integration: HomeAssistant):
+    """brightness/color_temp_kelvin are vol.Required - a caller (e.g. the
+    blueprint's own state_attr() read, if the sensor it's pointed at
+    doesn't actually have the attribute) omitting one must raise, not
+    silently dim everything to brightness 1 - see the schema's own
+    history: an early version read this off a sensor internally and had
+    exactly this silent-default bug, fixed by making it a hard failure.
+    Voluptuous's own required-field validation gives that same hard
+    failure now, one layer earlier (before the handler even runs)."""
     hass = setup_integration
-    hass.states.async_set("sensor.broken", "unknown", {})
     _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
 
-    with pytest.raises(ServiceValidationError):
+    with pytest.raises(vol.Invalid):
         await hass.services.async_call(
             DOMAIN,
             "apply_lighting",
             {
                 "entities": ["light.a"],
-                "sensor_entity_id": "sensor.broken",
+                "color_temp_kelvin": 3200,
                 "transition": 2,
             },
             blocking=True,
         )
 
 
-async def test_apply_lighting_unknown_sensor_raises(setup_integration: HomeAssistant):
+async def test_apply_lighting_non_numeric_color_temp_kelvin_raises(setup_integration: HomeAssistant):
     hass = setup_integration
     _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
 
-    with pytest.raises(ServiceValidationError):
+    with pytest.raises(vol.Invalid):
         await hass.services.async_call(
             DOMAIN,
             "apply_lighting",
             {
                 "entities": ["light.a"],
-                "sensor_entity_id": "sensor.does_not_exist",
+                "brightness": 180,
+                "color_temp_kelvin": "not-a-number",
                 "transition": 2,
             },
             blocking=True,
         )
+
+
+async def test_apply_lighting_accepts_an_explicit_null_rgb_color(setup_integration: HomeAssistant):
+    """A hand-rolled 'bring your own sensor' entity is free to omit
+    rgb_color entirely (see docs/BLUEPRINT.md), and the blueprint's own
+    state_attr(adaptive_sensor, 'rgb_color') then renders a literal
+    None, not an omitted key - vol.Length applied to None used to fail
+    schema validation outright (vol.Length expects a sized value), which
+    would have broken apply_lighting for every such room the moment the
+    blueprint started passing this field unconditionally. The fix is
+    vol.Any(None, ...) on the schema; this must NOT raise."""
+    hass = setup_integration
+    turn_on_calls = async_mock_service(hass, "light", "turn_on")
+    _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
+
+    await hass.services.async_call(
+        DOMAIN,
+        "apply_lighting",
+        {
+            "entities": ["light.a"],
+            "brightness": 180,
+            "color_temp_kelvin": 3200,
+            "rgb_color": None,
+            "transition": 2,
+        },
+        blocking=True,
+    )
+
+    assert len(turn_on_calls) == 1
+
+
+async def test_compute_lighting_groups_accepts_an_explicit_null_rgb_color(setup_integration: HomeAssistant):
+    """Same schema gap, same fix, on compute_lighting_groups - never
+    exercised live (nothing calls it with an explicit None today), but
+    the identical vol.Length-on-None failure was present before the fix
+    and must not resurface."""
+    hass = setup_integration
+    _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
+
+    result = await hass.services.async_call(
+        DOMAIN,
+        "compute_lighting_groups",
+        {
+            "entities": ["light.a"],
+            "brightness": 200,
+            "color_temp_kelvin": 4000,
+            "rgb_color": None,
+        },
+        blocking=True,
+        return_response=True,
+    )
+
+    assert result["groups"][0]["combined"] == ["light.a"]
 
 
 async def test_check_ownership_reports_unclaimed_for_a_brand_new_entity(setup_integration: HomeAssistant):
@@ -384,7 +429,6 @@ async def test_override_protection_survives_a_real_write_tracking_round_trip(set
     hass = setup_integration
     turn_on_calls = async_mock_service(hass, "light", "turn_on")
     _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
-    _set_sensor(hass, brightness=180, color_temp=3200)
 
     our_context = Context()
     await hass.services.async_call(
@@ -392,7 +436,8 @@ async def test_override_protection_survives_a_real_write_tracking_round_trip(set
         "apply_lighting",
         {
             "entities": ["light.a"],
-            "sensor_entity_id": "sensor.test_adaptive",
+            "brightness": 180,
+            "color_temp_kelvin": 3200,
             "transition": 2,
             "owner_id": "automation.test_room",
         },
@@ -430,7 +475,8 @@ async def test_override_protection_survives_a_real_write_tracking_round_trip(set
         "apply_lighting",
         {
             "entities": ["light.a"],
-            "sensor_entity_id": "sensor.test_adaptive",
+            "brightness": 180,
+            "color_temp_kelvin": 3200,
             "transition": 2,
             "owner_id": "automation.test_room",
         },
@@ -465,14 +511,14 @@ async def test_a_devices_own_delayed_echo_does_not_permanently_lock_the_light_ou
     # baseline exists via an observed promotion (not just the lenient
     # first-write gap) - matching kitchen_3/kitchen_5's actual live
     # state, which had both a confirmed and a pending claim.
-    _set_sensor(hass, brightness=180, color_temp=3200)
     first_context = Context()
     await hass.services.async_call(
         DOMAIN,
         "apply_lighting",
         {
             "entities": ["light.a"],
-            "sensor_entity_id": "sensor.test_adaptive",
+            "brightness": 180,
+            "color_temp_kelvin": 3200,
             "transition": 2,
             "owner_id": "automation.test_room",
         },
@@ -489,14 +535,14 @@ async def test_a_devices_own_delayed_echo_does_not_permanently_lock_the_light_ou
         context=first_context,
     )
 
-    _set_sensor(hass, brightness=200, color_temp=3000)
     second_context = Context()
     await hass.services.async_call(
         DOMAIN,
         "apply_lighting",
         {
             "entities": ["light.a"],
-            "sensor_entity_id": "sensor.test_adaptive",
+            "brightness": 200,
+            "color_temp_kelvin": 3000,
             "transition": 2,
             "owner_id": "automation.test_room",
         },
@@ -540,7 +586,8 @@ async def test_a_devices_own_delayed_echo_does_not_permanently_lock_the_light_ou
         "apply_lighting",
         {
             "entities": ["light.a"],
-            "sensor_entity_id": "sensor.test_adaptive",
+            "brightness": 200,
+            "color_temp_kelvin": 3000,
             "transition": 2,
             "owner_id": "automation.test_room",
         },
@@ -550,13 +597,13 @@ async def test_a_devices_own_delayed_echo_does_not_permanently_lock_the_light_ou
 
     # The curve moves on to a genuinely different value - the real test:
     # a light that's actually excluded would stay excluded here too.
-    _set_sensor(hass, brightness=100, color_temp=4500)
     await hass.services.async_call(
         DOMAIN,
         "apply_lighting",
         {
             "entities": ["light.a"],
-            "sensor_entity_id": "sensor.test_adaptive",
+            "brightness": 100,
+            "color_temp_kelvin": 4500,
             "transition": 2,
             "owner_id": "automation.test_room",
         },
@@ -583,14 +630,14 @@ async def test_a_dropped_first_write_self_heals_on_the_next_tick_with_no_interfe
     # externally_set()'s own is_state guard), so this has to start "on"
     # to actually exercise it.
     _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=90, color_temp_kelvin=3200)
-    _set_sensor(hass, brightness=180, color_temp=3200)
 
     await hass.services.async_call(
         DOMAIN,
         "apply_lighting",
         {
             "entities": ["light.a"],
-            "sensor_entity_id": "sensor.test_adaptive",
+            "brightness": 180,
+            "color_temp_kelvin": 3200,
             "transition": 2,
             "owner_id": "automation.test_room",
         },
@@ -606,7 +653,8 @@ async def test_a_dropped_first_write_self_heals_on_the_next_tick_with_no_interfe
         "apply_lighting",
         {
             "entities": ["light.a"],
-            "sensor_entity_id": "sensor.test_adaptive",
+            "brightness": 180,
+            "color_temp_kelvin": 3200,
             "transition": 2,
             "owner_id": "automation.test_room",
         },
@@ -627,7 +675,6 @@ async def test_force_bypasses_protection_and_reclaims_ownership(setup_integratio
     CLAUDE.md's dated incident)."""
     hass = setup_integration
     turn_on_calls = async_mock_service(hass, "light", "turn_on")
-    _set_sensor(hass, brightness=180, color_temp=3200)
 
     # A light with an existing, unrelated write record (as if a
     # different owner had claimed it).
@@ -637,7 +684,8 @@ async def test_force_bypasses_protection_and_reclaims_ownership(setup_integratio
         "apply_lighting",
         {
             "entities": ["light.a"],
-            "sensor_entity_id": "sensor.test_adaptive",
+            "brightness": 180,
+            "color_temp_kelvin": 3200,
             "transition": 2,
             "owner_id": "automation.other_room",
         },
@@ -651,7 +699,8 @@ async def test_force_bypasses_protection_and_reclaims_ownership(setup_integratio
         "apply_lighting",
         {
             "entities": ["light.a"],
-            "sensor_entity_id": "sensor.test_adaptive",
+            "brightness": 180,
+            "color_temp_kelvin": 3200,
             "transition": 2,
             "owner_id": "automation.test_room",
             "force": True,
@@ -685,8 +734,8 @@ async def test_force_bypasses_protection_and_reclaims_ownership(setup_integratio
         "compute_lighting_groups",
         {
             "entities": ["light.a"],
-            "sensor_brightness": 180,
-            "sensor_color_temp_kelvin": 3200,
+            "brightness": 180,
+            "color_temp_kelvin": 3200,
             "owner_id": "automation.test_room",
         },
         blocking=True,
@@ -709,7 +758,6 @@ async def test_write_tracking_record_is_cleared_when_light_goes_unavailable(setu
     perfectly ordinary, non-forced call is enough once it's cleared."""
     hass = setup_integration
     turn_on_calls = async_mock_service(hass, "light", "turn_on")
-    _set_sensor(hass, brightness=180, color_temp=3200)
 
     _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
     await hass.services.async_call(
@@ -717,7 +765,8 @@ async def test_write_tracking_record_is_cleared_when_light_goes_unavailable(setu
         "apply_lighting",
         {
             "entities": ["light.a"],
-            "sensor_entity_id": "sensor.test_adaptive",
+            "brightness": 180,
+            "color_temp_kelvin": 3200,
             "transition": 2,
             "owner_id": "automation.room",
         },
@@ -745,7 +794,8 @@ async def test_write_tracking_record_is_cleared_when_light_goes_unavailable(setu
         "apply_lighting",
         {
             "entities": ["light.a"],
-            "sensor_entity_id": "sensor.test_adaptive",
+            "brightness": 180,
+            "color_temp_kelvin": 3200,
             "transition": 2,
             "owner_id": "automation.room",
         },
@@ -769,7 +819,6 @@ async def test_a_restart_resyncs_confirmed_to_live_context_so_an_on_light_stays_
     data, the same "restart" a real process go-around would produce."""
     hass = setup_integration
     turn_on_calls = async_mock_service(hass, "light", "turn_on")
-    _set_sensor(hass, brightness=180, color_temp=3200)
 
     _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
     await hass.services.async_call(
@@ -777,7 +826,8 @@ async def test_a_restart_resyncs_confirmed_to_live_context_so_an_on_light_stays_
         "apply_lighting",
         {
             "entities": ["light.a"],
-            "sensor_entity_id": "sensor.test_adaptive",
+            "brightness": 180,
+            "color_temp_kelvin": 3200,
             "transition": 2,
             "owner_id": "automation.room",
         },
@@ -862,7 +912,6 @@ async def test_the_listener_resyncs_a_light_still_unavailable_when_startup_resyn
     needs the *recovery* direction specifically to be fixed."""
     hass = setup_integration
     real_tracker = next(v for v in hass.data[DOMAIN].values() if isinstance(v, LastWriteTracker))
-    _set_sensor(hass, brightness=180, color_temp=3200)
 
     # A pre-existing record, as if written before this process (and its
     # listener) ever existed - two real writes, so `confirmed` holds an
@@ -899,8 +948,8 @@ async def test_the_listener_resyncs_a_light_still_unavailable_when_startup_resyn
         "compute_lighting_groups",
         {
             "entities": ["light.a"],
-            "sensor_brightness": 200,
-            "sensor_color_temp_kelvin": 3200,
+            "brightness": 200,
+            "color_temp_kelvin": 3200,
             "owner_id": "automation.room",
         },
         blocking=True,
@@ -948,7 +997,6 @@ async def test_resync_preserves_the_pending_claim(setup_integration: HomeAssista
     write overwrites it."""
     hass = setup_integration
     async_mock_service(hass, "light", "turn_on")
-    _set_sensor(hass, brightness=180, color_temp=3200)
 
     _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
     await hass.services.async_call(
@@ -956,7 +1004,8 @@ async def test_resync_preserves_the_pending_claim(setup_integration: HomeAssista
         "apply_lighting",
         {
             "entities": ["light.a"],
-            "sensor_entity_id": "sensor.test_adaptive",
+            "brightness": 180,
+            "color_temp_kelvin": 3200,
             "transition": 2,
             "owner_id": "automation.room",
         },
@@ -1012,7 +1061,6 @@ async def test_async_load_backfills_last_seen_for_legacy_records_without_it(hass
 async def test_prune_stale_removes_a_record_untouched_past_the_cutoff(setup_integration: HomeAssistant):
     hass = setup_integration
     async_mock_service(hass, "light", "turn_on")
-    _set_sensor(hass, brightness=180, color_temp=3200)
     _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
 
     with freeze_time(dt_util.utcnow()) as frozen:
@@ -1021,7 +1069,8 @@ async def test_prune_stale_removes_a_record_untouched_past_the_cutoff(setup_inte
             "apply_lighting",
             {
                 "entities": ["light.a"],
-                "sensor_entity_id": "sensor.test_adaptive",
+                "brightness": 180,
+                "color_temp_kelvin": 3200,
                 "transition": 2,
                 "owner_id": "automation.room",
             },
@@ -1044,7 +1093,6 @@ async def test_prune_stale_leaves_a_recent_record_alone(setup_integration: HomeA
     just as easily as the real implementation."""
     hass = setup_integration
     async_mock_service(hass, "light", "turn_on")
-    _set_sensor(hass, brightness=180, color_temp=3200)
     _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
 
     with freeze_time(dt_util.utcnow()) as frozen:
@@ -1053,7 +1101,8 @@ async def test_prune_stale_leaves_a_recent_record_alone(setup_integration: HomeA
             "apply_lighting",
             {
                 "entities": ["light.a"],
-                "sensor_entity_id": "sensor.test_adaptive",
+                "brightness": 180,
+                "color_temp_kelvin": 3200,
                 "transition": 2,
                 "owner_id": "automation.room",
             },
@@ -1095,7 +1144,6 @@ async def test_recovered_light_is_freed_while_an_unrelated_override_stays_protec
     must stay protected exactly as before."""
     hass = setup_integration
     turn_on_calls = async_mock_service(hass, "light", "turn_on")
-    _set_sensor(hass, brightness=180, color_temp=3200)
 
     for entity_id in ("light.recovering", "light.sibling"):
         _set_light(hass, entity_id, "off", supported_color_modes=["color_temp"])
@@ -1106,7 +1154,8 @@ async def test_recovered_light_is_freed_while_an_unrelated_override_stays_protec
         "apply_lighting",
         {
             "entities": ["light.recovering", "light.sibling"],
-            "sensor_entity_id": "sensor.test_adaptive",
+            "brightness": 180,
+            "color_temp_kelvin": 3200,
             "transition": 2,
             "owner_id": "automation.room",
         },
@@ -1148,8 +1197,8 @@ async def test_recovered_light_is_freed_while_an_unrelated_override_stays_protec
         "compute_lighting_groups",
         {
             "entities": ["light.recovering", "light.sibling"],
-            "sensor_brightness": 180,
-            "sensor_color_temp_kelvin": 3200,
+            "brightness": 180,
+            "color_temp_kelvin": 3200,
             "owner_id": "automation.room",
         },
         blocking=True,
@@ -1180,7 +1229,6 @@ async def test_a_restart_style_unavailable_blip_does_not_clear_an_existing_recor
     it is still correctly protected."""
     hass = setup_integration
     turn_on_calls = async_mock_service(hass, "light", "turn_on")
-    _set_sensor(hass, brightness=180, color_temp=3200)
 
     _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
     our_context = Context()
@@ -1189,7 +1237,8 @@ async def test_a_restart_style_unavailable_blip_does_not_clear_an_existing_recor
         "apply_lighting",
         {
             "entities": ["light.a"],
-            "sensor_entity_id": "sensor.test_adaptive",
+            "brightness": 180,
+            "color_temp_kelvin": 3200,
             "transition": 2,
             "owner_id": "automation.room",
         },
@@ -1227,8 +1276,8 @@ async def test_a_restart_style_unavailable_blip_does_not_clear_an_existing_recor
         "compute_lighting_groups",
         {
             "entities": ["light.a"],
-            "sensor_brightness": 180,
-            "sensor_color_temp_kelvin": 3200,
+            "brightness": 180,
+            "color_temp_kelvin": 3200,
             "owner_id": "automation.room",
         },
         blocking=True,

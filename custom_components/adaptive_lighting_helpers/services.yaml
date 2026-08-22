@@ -34,7 +34,7 @@ compute_lighting_groups:
       example: '{"light.lamp": 0.5, "light.strip": 0}'
       selector:
         object:
-    sensor_brightness:
+    brightness:
       name: Target brightness
       description: Base brightness (0-255) before multipliers are applied.
       required: true
@@ -42,7 +42,7 @@ compute_lighting_groups:
         number:
           min: 0
           max: 255
-    sensor_color_temp_kelvin:
+    color_temp_kelvin:
       name: Target colour temperature
       description: Target colour temperature in Kelvin.
       required: true
@@ -92,7 +92,7 @@ compute_lighting_groups:
         supported_color_modes indicates RGB support are returned
         separately (as "combined_rgb"/"two_step_rgb") targeting rgb_color
         instead of "combined"/"two_step" targeting
-        sensor_color_temp_kelvin. Entities without RGB support are
+        color_temp_kelvin. Entities without RGB support are
         unaffected either way. Off by default - behaviour is identical to
         before this field existed.
       default: false
@@ -104,7 +104,9 @@ compute_lighting_groups:
         The RGB colour to use for RGB-capable entities when
         prefer_rgb_color is true. Typically the Kelvin -> RGB conversion
         of the same target colour temperature (see compute_curve's own
-        rgb_color output).
+        rgb_color output). Leave unset (or pass null explicitly - useful
+        when templating this from a source that may not always have one)
+        if you're not using prefer_rgb_color.
       selector:
         color_rgb:
     rgb_color_tolerance:
@@ -150,16 +152,17 @@ compute_lighting_groups:
 apply_lighting:
   name: Apply adaptive lighting
   description: >-
-    Reads brightness/colour temperature (and optionally RGB colour) off
-    sensor_entity_id and actually turns entities on/off via
-    light.turn_on/light.turn_off - the same reachability/tolerance/
-    override-protection/two-step/RGB-vs-colour-temp logic
-    compute_lighting_groups exposes as data, but dispatched for you.
-    sensor_entity_id can be any sensor with brightness/color_temp
-    attributes (optionally rgb_color too) - this integration's own
-    sensor.adaptive_lighting works, but so does a hand-written template
-    sensor (see README's "Bring your own sensor" section). Standalone -
-    call this from your own automation, it doesn't require the
+    Given a target brightness/colour-temperature (and optionally RGB
+    colour), actually turns entities on/off via light.turn_on/
+    light.turn_off - the same reachability/tolerance/override-protection/
+    two-step/RGB-vs-colour-temp logic compute_lighting_groups exposes as
+    data, but dispatched for you. Takes the same brightness/
+    color_temp_kelvin/rgb_color fields compute_lighting_groups does - if
+    you're feeding these from a sensor entity's attributes yourself (e.g.
+    the adaptive_lighting blueprint in this repo, reading its own
+    adaptive_sensor input), that's just an ordinary template on the
+    caller's side; this service itself doesn't read any entity. Standalone
+    - call this from your own automation, it doesn't require the
     adaptive_lighting blueprint in this repo.
   fields:
     entities:
@@ -181,16 +184,23 @@ apply_lighting:
       example: '{"light.lamp": 0.5, "light.strip": 0}'
       selector:
         object:
-    sensor_entity_id:
-      name: Sensor
-      description: >-
-        The sensor to read brightness/color_temp/rgb_color attributes
-        from - see README's "Bring your own sensor" section for the
-        exact contract.
+    brightness:
+      name: Target brightness
+      description: Base brightness (0-255) before multipliers are applied.
       required: true
       selector:
-        entity:
-          domain: sensor
+        number:
+          min: 0
+          max: 255
+    color_temp_kelvin:
+      name: Target colour temperature
+      description: Target colour temperature in Kelvin.
+      required: true
+      selector:
+        number:
+          min: 1000
+          max: 10000
+          unit_of_measurement: K
     transition:
       name: Transition
       description: >-
@@ -238,14 +248,24 @@ apply_lighting:
     prefer_rgb_color:
       name: Prefer RGB colour
       description: >-
-        When true, entities whose supported_color_modes indicates RGB
-        support get the sensor's rgb_color attribute instead of
-        color_temp_kelvin. Entities without RGB support, or used when the
-        sensor has no rgb_color attribute, are unaffected. Off by
-        default.
+        When true (and rgb_color is given), entities whose
+        supported_color_modes indicates RGB support get rgb_color
+        instead of color_temp_kelvin. Entities without RGB support are
+        unaffected either way. Off by default.
       default: false
       selector:
         boolean:
+    rgb_color:
+      name: Target RGB colour
+      description: >-
+        The RGB colour to use for RGB-capable entities when
+        prefer_rgb_color is true. Typically the Kelvin -> RGB conversion
+        of the same target colour temperature (see compute_curve's own
+        rgb_color output). Leave unset (or pass null explicitly - useful
+        when templating this from a source that may not always have one)
+        if you're not using prefer_rgb_color.
+      selector:
+        color_rgb:
     rgb_color_tolerance:
       name: RGB colour tolerance
       description: >-
