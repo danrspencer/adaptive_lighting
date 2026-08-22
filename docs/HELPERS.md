@@ -113,7 +113,19 @@ The check itself asks, in this order, for one specific light:
    `owner_id` (including the synthetic first-write baseline's, which claims nobody) means the write is free
    to proceed.
 7. **Neither matches, and a `confirmed` claim exists.** Something has touched this light since either
-   recorded write - externally set; left alone.
+   recorded write - externally set; left alone. Unless: `pending` recorded what its write actually asked for
+   (brightness/colour-temperature, or brightness/RGB), and the light's *current* value still matches that
+   within the same tolerance `apply_lighting` uses to decide "already correct" - see below for why that's not
+   external either.
+
+A `context.id` mismatch alone isn't conclusive proof of an external touch, even with both claims present:
+Home Assistant's own `Entity._context` expires 5 seconds after the service call that set it, so a real device
+whose Zigbee/MQTT round-trip confirmation takes longer than that reports its state back under a brand-new,
+unrelated context - even though it's echoing exactly the value that was asked for. Without step 7's exception
+above, that echo reads as an external touch, and - since nothing here ever un-marks a light while it stays
+continuously on (only turning it off does) - it's excluded from every future tick indefinitely, invisible
+until the phase next changes and it silently doesn't follow. Confirmed live: two kitchen spotlights sat
+excluded this way for over an hour, still correctly lit the entire time.
 
 Steps 5 and 6 are both really the same question ("does a recorded owner conflict with the one asking now?"),
 just checked against two different claims instead of one - two different callers writing the *same* light
@@ -169,11 +181,16 @@ indirectly through `compute_lighting_groups`'s `combined`/`needing_off` output (
 light is currently excluded, never *why*). Its state is the number of lights currently tracked; its `entities`
 attribute holds, per light, the raw `confirmed`/`pending` claims plus a computed `status`:
 
-- `confirmed` — the light's live `context.id` matches the `confirmed` claim. Settled.
+- `controlled` — the light's live `context.id` matches the `confirmed` claim, settled; or it matches neither
+  claim's `context.id` but its current value still matches what `pending`'s own `target` asked for - almost
+  certainly that write's own delayed confirmation landing under an unrelated context (HA's `Entity._context`
+  expires 5s after the service call that set it), not a real external change. Either way, not excluded from
+  the next tick.
 - `pending` — matches `pending` only, not yet independently reconfirmed by a later tick.
-- `mismatched` — matches neither. Something has touched this light since either recorded write - whether
-  that means "externally set" for a given caller also depends on `owner_id` (see the numbered check above),
-  which this sensor can't evaluate without knowing which `owner_id` would be asking.
+- `overridden` — matches neither claim's `context.id`, and the current value doesn't match `pending`'s own
+  target either. Something has genuinely touched this light since either recorded write - whether that means
+  "externally set" for a given caller also depends on `owner_id` (see the numbered check above), which this
+  sensor can't evaluate without knowing which `owner_id` would be asking.
 - `unavailable` — the entity currently has no live state to compare against.
 
 This entity is entry-scoped, not tied to any one schedule instance (it exists even with zero "Add Sensor"

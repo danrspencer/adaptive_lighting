@@ -129,12 +129,13 @@
         'sensor.adaptive_lighting_write_tracking': state(4, {
           entities: {
             'light.living_room_pendant_1': {
-              status: 'confirmed',
+              status: 'controlled',
               live_context_id: '01M0FGWR11K8K1KDE56JJRJ94C',
               confirmed: {
                 context_id: '01M0FGWR11K8K1KDE56JJRJ94C',
                 owner_id: 'automation.living_room_lights_new',
                 recorded_at: minutesAgo(12),
+                target: { brightness: 200, color_temp_kelvin: 4000 },
               },
               pending: null,
             },
@@ -145,20 +146,45 @@
                 context_id: '01M0FTHVWMJ0DRSNB5RT92ZXVC',
                 owner_id: 'automation.kitchen_lights',
                 recorded_at: minutesAgo(6),
+                target: { brightness: 255, color_temp_kelvin: 5000 },
               },
               pending: {
                 context_id: '01M0FTMHAJTQH94ZKP6DRSN2MK',
                 owner_id: 'automation.kitchen_lights',
                 recorded_at: minutesAgo(1),
+                target: { brightness: 255, color_temp_kelvin: 4800 },
+              },
+            },
+            'light.kitchen_3': {
+              // Controlled via the value-match rescue, not a context
+              // match - the device's own delayed confirmation landed
+              // under an unrelated context (HA's Entity._context expires
+              // 5s after the service call that set it), but still
+              // reports exactly what pending asked for. See
+              // grouping.py's externally_set() docstring.
+              status: 'controlled',
+              live_context_id: '01M0DEVICEECHO000000001',
+              confirmed: {
+                context_id: '01M0EARLIERCONFIRMED00001',
+                owner_id: 'automation.kitchen_lights',
+                recorded_at: minutesAgo(75),
+                target: { brightness: 255, color_temp_kelvin: 6535 },
+              },
+              pending: {
+                context_id: '01M0LATERPENDING0000001',
+                owner_id: 'automation.kitchen_lights',
+                recorded_at: minutesAgo(64),
+                target: { brightness: 255, color_temp_kelvin: 6535 },
               },
             },
             'light.study_pendant': {
-              status: 'mismatched',
+              status: 'overridden',
               live_context_id: '01M0EXTERNALCHANGE0000001',
               confirmed: {
                 context_id: '01M0F1953BZB75V27GJNXH3ABW',
                 owner_id: 'automation.study_lights',
                 recorded_at: minutesAgo(90),
+                target: { brightness: 180, color_temp_kelvin: 3200 },
               },
               pending: null,
             },
@@ -169,6 +195,7 @@
                 context_id: '01M00S8AVPV6BDQEJ22A04R3NM',
                 owner_id: 'automation.ensuite_lights',
                 recorded_at: minutesAgo(240),
+                target: { brightness: 200, color_temp_kelvin: 2700 },
               },
               pending: null,
             },

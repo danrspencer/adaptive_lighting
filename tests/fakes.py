@@ -16,6 +16,7 @@ def make_lookup(
     confirmed_owner_ids: Optional[dict] = None,
     pending_context_ids: Optional[dict] = None,
     pending_owner_ids: Optional[dict] = None,
+    pending_targets: Optional[dict] = None,
 ) -> EntityLookup:
     """
     states:    {entity_id: {"state": "on"/"off"/"unavailable"/..., "attributes": {...}, "context_id": "..."}}
@@ -31,6 +32,11 @@ def make_lookup(
                "pending" claim - the most recent write attempted, not yet
                verified either way. Absent means no attempt is currently
                outstanding.
+    pending_targets: {entity_id: {"brightness": ..., "color_temp_kelvin": ...}
+               or {"brightness": ..., "rgb_color": [...]}} - what the
+               pending claim's write actually asked for. Absent means no
+               target is known for that claim (an off-command, or a
+               claim write_tracking only observed rather than issued).
     """
     device_of = device_of or {}
     labels_of = labels_of or {}
@@ -38,6 +44,7 @@ def make_lookup(
     confirmed_owner_ids = confirmed_owner_ids or {}
     pending_context_ids = pending_context_ids or {}
     pending_owner_ids = pending_owner_ids or {}
+    pending_targets = pending_targets or {}
 
     def is_state(entity_id, value):
         return states.get(entity_id, {}).get("state") == value
@@ -66,6 +73,9 @@ def make_lookup(
     def pending_owner_id(entity_id):
         return pending_owner_ids.get(entity_id)
 
+    def pending_target(entity_id):
+        return pending_targets.get(entity_id)
+
     return EntityLookup(
         is_state=is_state,
         state_attr=state_attr,
@@ -76,6 +86,7 @@ def make_lookup(
         confirmed_owner_id=confirmed_owner_id,
         pending_context_id=pending_context_id,
         pending_owner_id=pending_owner_id,
+        pending_target=pending_target,
     )
 
 

@@ -253,6 +253,129 @@ async def test_override_protection_survives_a_real_write_tracking_round_trip(set
     assert len(turn_on_calls) == 1
 
 
+async def test_a_devices_own_delayed_echo_does_not_permanently_lock_the_light_out(setup_integration: HomeAssistant):
+    """Real-world incident, not a hypothetical: light.kitchen_3/
+    light.kitchen_5 sat excluded from every tick for over an hour, still
+    correctly lit the whole time, because HA's own Entity._context
+    expires 5 seconds after the service call that set it (confirmed
+    against homeassistant/core.py) - a device whose real Zigbee/MQTT
+    confirmation lands after that window reports back under a brand-new,
+    unrelated context.id even though it's echoing exactly the value we
+    asked for. Unlike test_override_protection_survives_a_real_write_tracking_round_trip
+    above, the light's *values* never actually change here - only its
+    context.id does, with nothing in between issuing a real command.
+    Before the fix in grouping.py's externally_set(), this light would
+    stay excluded forever once the curve moved on, exactly like the
+    original bug write_tracking.py's confirmed/pending design already
+    fixes for a dropped write - just triggered by an echo instead."""
+    hass = setup_integration
+    turn_on_calls = async_mock_service(hass, "light", "turn_on")
+    _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
+
+    # Two real writes to *different* targets, so a genuine `confirmed`
+    # baseline exists via an observed promotion (not just the lenient
+    # first-write gap) - matching kitchen_3/kitchen_5's actual live
+    # state, which had both a confirmed and a pending claim.
+    _set_sensor(hass, brightness=180, color_temp=3200)
+    first_context = Context()
+    await hass.services.async_call(
+        DOMAIN,
+        "apply_lighting",
+        {
+            "entities": ["light.a"],
+            "sensor_entity_id": "sensor.test_adaptive",
+            "transition": 2,
+            "owner_id": "automation.test_room",
+        },
+        blocking=True,
+        context=first_context,
+    )
+    _set_light(
+        hass,
+        "light.a",
+        "on",
+        supported_color_modes=["color_temp"],
+        brightness=180,
+        color_temp_kelvin=3200,
+        context=first_context,
+    )
+
+    _set_sensor(hass, brightness=200, color_temp=3000)
+    second_context = Context()
+    await hass.services.async_call(
+        DOMAIN,
+        "apply_lighting",
+        {
+            "entities": ["light.a"],
+            "sensor_entity_id": "sensor.test_adaptive",
+            "transition": 2,
+            "owner_id": "automation.test_room",
+        },
+        blocking=True,
+        context=second_context,
+    )
+    _set_light(
+        hass,
+        "light.a",
+        "on",
+        supported_color_modes=["color_temp"],
+        brightness=200,
+        color_temp_kelvin=3000,
+        context=second_context,
+    )
+    assert len(turn_on_calls) == 2
+
+    # The device's own delayed confirmation lands under a fresh context -
+    # not from any service call, not our_context, not tied to any
+    # apply_lighting write at all - reporting within tolerance of what
+    # we asked for (a real bulb's round-trip is rarely exact), not the
+    # identical value: HA only replaces an entity's context on an actual
+    # state change, not a same-state "state_reported" re-set, so reusing
+    # 200/3000 exactly here would leave the light's context untouched
+    # and silently defeat this test (see the identical gotcha noted in
+    # test_force_bypasses_protection_and_reclaims_ownership above).
+    _set_light(
+        hass,
+        "light.a",
+        "on",
+        supported_color_modes=["color_temp"],
+        brightness=201,
+        color_temp_kelvin=3005,
+    )
+
+    # Same target - nothing should be written (already correct either
+    # way), but this must NOT be the moment the light gets marked
+    # externally-set.
+    await hass.services.async_call(
+        DOMAIN,
+        "apply_lighting",
+        {
+            "entities": ["light.a"],
+            "sensor_entity_id": "sensor.test_adaptive",
+            "transition": 2,
+            "owner_id": "automation.test_room",
+        },
+        blocking=True,
+    )
+    assert len(turn_on_calls) == 2
+
+    # The curve moves on to a genuinely different value - the real test:
+    # a light that's actually excluded would stay excluded here too.
+    _set_sensor(hass, brightness=100, color_temp=4500)
+    await hass.services.async_call(
+        DOMAIN,
+        "apply_lighting",
+        {
+            "entities": ["light.a"],
+            "sensor_entity_id": "sensor.test_adaptive",
+            "transition": 2,
+            "owner_id": "automation.test_room",
+        },
+        blocking=True,
+    )
+    assert len(turn_on_calls) == 3
+
+
 async def test_a_dropped_first_write_self_heals_on_the_next_tick_with_no_interference(
     setup_integration: HomeAssistant,
 ):

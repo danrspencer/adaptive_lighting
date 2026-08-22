@@ -31,17 +31,30 @@
 const DEFAULT_ENTITY = 'sensor.adaptive_lighting_write_tracking';
 
 const STATUS_LABEL = {
-  confirmed: 'Confirmed',
+  controlled: 'Controlled',
   pending: 'Pending',
-  mismatched: 'Mismatched',
+  overridden: 'Overridden',
   unavailable: 'Unavailable',
+};
+
+// Shown as hover text on each status badge - what the word actually
+// means, since "Controlled" vs "Overridden" isn't self-explanatory
+// without knowing how the confirmed/pending mechanism behind it works.
+const STATUS_TOOLTIP = {
+  controlled: 'This light is under adaptive control - its current value matches a write we made (or, even if its ' +
+    'reported context differs, still matches what we last asked for). It will be updated normally on the next tick.',
+  pending: "Our most recent write hasn't been reconfirmed by a later tick yet - still effectively under control, " +
+    'just not yet double-checked.',
+  overridden: "Something else changed this light since our last write, and its current value doesn't match what " +
+    'we asked for either - left alone until it turns off, goes unavailable and reconnects, or you force an update.',
+  unavailable: "This light isn't reporting a state right now (offline, unreachable, or reconnecting).",
 };
 
 // Kept in the same rough "most interesting first" order a user
 // debugging an override issue would actually want, without hardcoding
-// entity order - lights with nothing surprising going on (confirmed)
+// entity order - lights with nothing surprising going on (controlled)
 // sink to the bottom.
-const STATUS_ORDER = ['mismatched', 'pending', 'unavailable', 'confirmed'];
+const STATUS_ORDER = ['overridden', 'pending', 'unavailable', 'controlled'];
 
 function relativeTime(iso) {
   if (!iso) return null;
@@ -233,7 +246,7 @@ class AdaptiveLightingWriteTrackingCard extends HTMLElement {
               <div class="light-name">${friendly}</div>
               <div class="light-id muted">${entityId}</div>
             </td>
-            <td><span class="status-badge status-${record.status}">${STATUS_LABEL[record.status] || record.status}</span></td>
+            <td><span class="status-badge status-${record.status}" title="${STATUS_TOOLTIP[record.status] || ''}">${STATUS_LABEL[record.status] || record.status}</span></td>
             <td>${this._claimCell(entityId, 'confirmed', record.confirmed)}</td>
             <td>${this._claimCell(entityId, 'pending', record.pending)}</td>
           </tr>
@@ -289,10 +302,11 @@ class AdaptiveLightingWriteTrackingCard extends HTMLElement {
           border-radius: 10px;
           font-size: 0.85em;
           white-space: nowrap;
+          cursor: help;
         }
-        .status-confirmed { background: var(--success-color, #43a047); color: white; }
+        .status-controlled { background: var(--success-color, #43a047); color: white; }
         .status-pending { background: var(--warning-color, #ffa726); color: white; }
-        .status-mismatched { background: var(--error-color, #e53935); color: white; }
+        .status-overridden { background: var(--error-color, #e53935); color: white; }
         .status-unavailable { background: var(--disabled-color, #9e9e9e); color: white; }
         .claim { min-width: 160px; }
         .owner { font-weight: 500; }
@@ -327,9 +341,9 @@ class AdaptiveLightingWriteTrackingCard extends HTMLElement {
               <thead>
                 <tr>
                   <th>Light</th>
-                  <th>Status</th>
-                  <th>Confirmed</th>
-                  <th>Pending</th>
+                  <th title="Whether this light is currently under adaptive control - see each status badge for what it means.">Status</th>
+                  <th title="The last write to this light that a later tick actually observed landing.">Confirmed</th>
+                  <th title="The most recent write attempted for this light, not yet reconfirmed by a later tick.">Pending</th>
                 </tr>
               </thead>
               <tbody>${bodyRows}</tbody>

@@ -3150,6 +3150,163 @@ change above, it ships once this branch's PR merges and HACS
 update+restart runs; the dashboard-YAML half (section width, grid
 `columns`) needed no card-code change and is already live.
 
+- **A device's own delayed write confirmation could permanently lock a
+  light out of adaptive control while it stayed continuously on - a
+  genuinely new failure mode, distinct from every dropped-write/restart/
+  recovery scenario already fixed, because it never touches unavailable/
+  unknown at all. Found live, 2026-08-22, from a direct user report that
+  the write-tracking sensor "doesn't seem right" for kitchen lights that
+  were neither manually overridden nor failing to update.** Confirmed
+  with live forensics before touching any code, per the user's own three
+  hypotheses: `light.kitchen_3`/`light.kitchen_5` were genuinely,
+  correctly lit at the Morning target (255 brightness, 6535K - their own
+  device max, clamped below the nominal 6667K) the entire time, yet
+  their write-tracking record hadn't moved in over an hour while every
+  other light on the same automation, same tick, kept getting fresh
+  writes every few minutes - and a real automation trace confirmed
+  `apply_lighting`'s own `entities` list included both lights on every
+  call, proving the exclusion was internal to `externally_set()`, not a
+  blueprint-level omission.
+
+  Root-caused with a standalone reproduction script against the real
+  `grouping.py`/`write_tracking.py` algorithms (a plain-dict mirror of
+  `async_record`, no HA needed) rather than continued guessing from live
+  JSON snapshots - live forensics alone had produced two successive
+  wrong theories (a hardware-model correlation, disproven by checking
+  `kitchen_4`/`kitchen_7` - identical "Hue white ambiance GU10 with
+  Bluetooth" model, behaving perfectly normally; and a drop/recovery-
+  listener guard bug, which didn't match the observed data once traced
+  through by hand) before the repro nailed the real mechanism directly:
+  a light that stays "on" continuously, whose live `context.id` changes
+  even once to something `write_tracking.py` never recorded - with
+  *nothing* else about its reported value actually different - flips
+  `externally_set()` permanently `True`, with no path back, because
+  nothing here ever un-marks it short of the light turning off (the
+  existing self-heal, `is_state(entity_id, "on")` returning `False`) or
+  going through `unavailable`/`unknown` (the existing clear-on-drop
+  listener). A light that just sits there, correctly lit, hits neither.
+
+  The trigger for that first stray context is entirely mundane, not a
+  hardware defect: confirmed against the pinned HA core source
+  (`homeassistant/core.py`) that `Entity._context` expires exactly 5
+  seconds after the service call that set it (the same fact this
+  project already cited for the *restart*/device-recovery case, just
+  not previously connected to an *ordinary*, healthy device). A real
+  Zigbee/MQTT round-trip confirmation arriving after that window - mesh
+  congestion, an extra hop, nothing wrong with the bulb - gets processed
+  as a context-less write and lands under a brand-new, unrelated
+  context, even though it's echoing exactly the value that was asked
+  for. `kitchen_4`/`kitchen_7` not being stuck too isn't evidence
+  against this - it's a per-tick timing coincidence, not a hardware
+  property, so it doesn't reproduce on demand and doesn't need to.
+
+  **Fixed by teaching `externally_set()` a value-based fallback, not by
+  touching the context-comparison mechanism itself.** Each stored claim
+  (`_ContextClaim` in `write_tracking.py`) now also records `target` -
+  what that specific write actually asked for
+  (`{"brightness": ..., "color_temp_kelvin": ...}` or `{"brightness":
+  ..., "rgb_color": [...]}`), populated by `apply_lighting`'s own
+  dispatch loop in `__init__.py` per group as it already builds
+  `written_entities`. `grouping.py`'s `externally_set()` gains one more
+  step before concluding "genuinely external": if the light's *current*
+  reported values still match `pending`'s own recorded `target` within
+  the same tolerance `_already_set`/`_already_set_rgb` already use, this
+  reads as our own write's delayed echo, not a real touch - rescued back
+  to "not externally set," not just to a one-off allowance, so the
+  *next* tick treats it completely normally, including writing a
+  genuinely different value once the curve moves on. The comparison
+  itself (`target_matches_values`) is a small, pure function taking
+  plain values, not an `EntityLookup`/entity_id - deliberately factored
+  out so `sensor.py`'s diagnostic status can reuse the *exact* same
+  logic (see below), rather than the two drifting apart over time.
+
+  **Deliberately checked against `pending` (the most recent attempt),
+  not `confirmed`** - `pending` is what a given echo would actually be
+  confirming; comparing against the older, possibly long-stale
+  `confirmed` value instead would rescue a light whose target has
+  already moved on, which is exactly the outcome this fix needs to
+  avoid.
+
+  A first attempt at a test for this shipped with a real gap, caught
+  before landing by checking the assertion actually discriminates
+  the bug (this project's standing mutation-testing habit) rather than
+  assuming a "before/after" pair means it does: the initial version's
+  "rescued" case asserted the light stayed excluded from `combined`
+  both with and without the fix - true either way, since a light
+  already at its (unchanged) target isn't written regardless of whether
+  it's "excluded" or merely "already correct." The real, only-with-a-
+  broken-fix-visible case needs the target to have moved on since the
+  echo - `test_context_mismatch_with_stale_target_still_updates_once_the_curve_moves`
+  in `tests/test_grouping.py` is the one that actually fails under
+  mutation (reverting the fallback back to a bare `return True`), and is
+  the only one of the five new `test_grouping.py` cases that does - the
+  other four (forgiven-with-matching-values, still-external-with-
+  different-values, no-recorded-target-stays-external, the RGB variant)
+  remain valid regression/documentation coverage but don't discriminate
+  *this specific* change on their own, which is expected and fine, not
+  a gap. The same lesson applied to
+  `tests/integration/test_services.py`'s end-to-end version
+  (`test_a_devices_own_delayed_echo_does_not_permanently_lock_the_light_out`):
+  its first draft's simulated "device echo" reused the identical
+  brightness/color_temp as the light's current state, which HA collapses
+  into a no-context-change `state_reported` event rather than a real
+  state change (the identical gotcha this file's own
+  `test_force_bypasses_protection_and_reclaims_ownership` already
+  documents) - so the echo silently never happened at all, and the test
+  passed under mutation for the wrong reason. Fixed by echoing a value
+  within tolerance but not identical (201/3005 against a 200/3000
+  target), which HA does treat as a real change. Both fixes confirmed by
+  actually applying the mutation and rerunning, not reasoned about in
+  the abstract. Full suite: 158/158.
+
+  `write_tracking.py`'s module docstring and `EntityLookup.externally_set()`'s
+  own docstring both carry the full reasoning (the 5-second window, why
+  `pending` and not `confirmed`, the live incident) - `docs/HELPERS.md`'s
+  "Override protection" section gained a matching paragraph and a new
+  step 7 exception, rather than restating it from scratch.
+
+- **`sensor.adaptive_lighting_write_tracking`'s `status` values and the
+  write-tracking dashboard card's terminology renamed the same day,
+  prompted directly by the incident above - user's own follow-on
+  feedback: "confirmed should be 'controlled', 'pending' is fine, then
+  we need a word that means 'been controlled by something else', ideally
+  with hover text on each to explain what it means."** `confirmed` →
+  `controlled` (now also covers the value-match rescue above - that
+  light genuinely isn't excluded from the next tick either, so folding
+  it into the same word is accurate, not a new fifth status invented for
+  a narrow case), `mismatched` → `overridden`, `pending` unchanged. The
+  raw claim *names* in the data model (`confirmed`/`pending` - a write
+  earlier observed landing vs. the most recent attempt) are deliberately
+  left alone; only the computed `status` word and the card's own labels
+  changed - the claim names are a different concept (which stored slot)
+  from the status verdict (what it means right now), and conflating them
+  would have been a regression, not a simplification.
+
+  `www/adaptive-lighting-write-tracking-card.js` gained a `STATUS_TOOLTIP`
+  map wired to each badge's native `title` attribute (`cursor: help`
+  added to `.status-badge` as the visual affordance), plus tooltips on
+  the Status/Confirmed/Pending column headers themselves - the latter
+  explain what the raw claim *slots* mean, which needed saying somewhere
+  since renaming `status` alone doesn't explain why a "Controlled" light
+  can still show a `Pending` claim next to it. Verified via the Browser
+  pane against `dashboard/preview.html` (served over HTTP via
+  `.claude/launch.json`'s `dashboard-preview` config, not `file://` -
+  the latter renders as a static snapshot with no script execution, per
+  this project's own established preview workflow) - confirmed all four
+  tooltip strings and both new CSS class names
+  (`status-controlled`/`status-overridden`) are wired correctly by
+  reading the rendered shadow DOM directly, not just visually (a native
+  `title` tooltip doesn't reliably appear in a headless screenshot
+  either way). `dashboard/preview.html`'s synthetic seed data updated to
+  the new status strings, plus a new `light.kitchen_3` entry
+  demonstrating the value-match-rescued "Controlled" case specifically
+  (a `context.id` that matches neither claim, `target`s that do) rather
+  than only the plain context-match case the existing entries already
+  covered. `tests/integration/test_write_tracking_sensor.py`'s two
+  renamed tests plus one new one
+  (`test_status_controlled_when_context_mismatches_but_value_matches_pendings_target`)
+  mutation-verified the same way as above. Full suite: 158/158.
+
 ## Testing
 
 `pip install pytest pytest-homeassistant-custom-component && pytest`

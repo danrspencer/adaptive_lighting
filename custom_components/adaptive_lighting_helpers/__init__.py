@@ -178,6 +178,7 @@ def _build_lookup(hass: HomeAssistant, tracker: LastWriteTracker) -> EntityLooku
         confirmed_owner_id=tracker.confirmed_owner_id,
         pending_context_id=tracker.pending_context_id,
         pending_owner_id=tracker.pending_owner_id,
+        pending_target=tracker.pending_target,
     )
 
 
@@ -437,6 +438,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # matching what grouping.py's externally_set() compares against
         # on the next tick.
         written_entities: list = []
+        # What each entity's write actually asked for, keyed the same
+        # way as written_entities - passed to write_tracker.async_record
+        # below so a later context.id mismatch can be checked against
+        # what we intended rather than assumed external. An off-command
+        # has no brightness/colour target, so needing_off entities are
+        # simply left out (write_targets.get() defaults to None).
+        write_targets: dict = {}
         tasks = []
         for g in groups:
             if g.needing_off:
@@ -452,6 +460,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 )
             if g.combined:
                 written_entities.extend(g.combined)
+                for e in g.combined:
+                    write_targets[e] = {"brightness": g.brightness, "color_temp_kelvin": color_temp_kelvin}
                 tasks.append(
                     hass.services.async_call(
                         "light",
@@ -468,6 +478,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 )
             if g.combined_rgb:
                 written_entities.extend(g.combined_rgb)
+                for e in g.combined_rgb:
+                    write_targets[e] = {"brightness": g.brightness, "rgb_color": rgb_color_list}
                 tasks.append(
                     hass.services.async_call(
                         "light",
@@ -484,6 +496,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 )
             if g.two_step:
                 written_entities.extend(g.two_step)
+                for e in g.two_step:
+                    write_targets[e] = {"brightness": g.brightness, "color_temp_kelvin": color_temp_kelvin}
                 tasks.append(
                     _two_step_turn_on(
                         hass,
@@ -496,6 +510,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 )
             if g.two_step_rgb:
                 written_entities.extend(g.two_step_rgb)
+                for e in g.two_step_rgb:
+                    write_targets[e] = {"brightness": g.brightness, "rgb_color": rgb_color_list}
                 tasks.append(
                     _two_step_turn_on(
                         hass, g.two_step_rgb, g.brightness, half_transition, call.context, rgb_color=rgb_color_list
@@ -516,7 +532,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         if tasks:
             await asyncio.gather(*tasks)
         if written_entities:
-            await write_tracker.async_record(written_entities, live_context_before_write, call.context.id, owner_id)
+            await write_tracker.async_record(
+                written_entities, live_context_before_write, call.context.id, owner_id, targets=write_targets
+            )
 
         return _groups_response(groups)
 
