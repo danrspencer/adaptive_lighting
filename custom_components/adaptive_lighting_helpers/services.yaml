@@ -65,7 +65,10 @@ compute_lighting_groups:
       name: Colour temperature tolerance
       description: >-
         A light already within this many Kelvin of the target is left
-        alone instead of being recommanded.
+        alone instead of being recommanded. A colour temperature that's
+        identical once converted to mireds (the unit real devices
+        actually use) always counts as a match regardless of this
+        setting, even if the Kelvin gap exceeds it.
       default: 10
       selector:
         number:
@@ -213,7 +216,10 @@ apply_lighting:
       name: Colour temperature tolerance
       description: >-
         A light already within this many Kelvin of the target is left
-        alone instead of being recommanded.
+        alone instead of being recommanded. A colour temperature that's
+        identical once converted to mireds (the unit real devices
+        actually use) always counts as a match regardless of this
+        setting, even if the Kelvin gap exceeds it.
       default: 10
       selector:
         number:
@@ -481,7 +487,11 @@ check_ownership:
           max: 50
     color_temp_tolerance:
       name: Colour temperature tolerance
-      description: Same rescue, for colour temperature (Kelvin).
+      description: >-
+        Same rescue, for colour temperature (Kelvin) - plus, always, a
+        colour temperature that's identical once converted to mireds
+        (the unit real devices actually use), regardless of this
+        setting.
       default: 10
       selector:
         number:

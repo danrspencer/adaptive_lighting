@@ -2,11 +2,15 @@
 Turns "these entities, this target brightness/colour-temperature" into
 the minimal set of light.turn_on/turn_off calls actually needed.
 
-Pure logic, no Home Assistant dependency - HA access (current state,
-attributes, device/label lookups) is injected via an EntityLookup so
-this is testable with plain pytest and fakes, and so the integration's
-__init__.py (custom_components/adaptive_lighting_helpers/__init__.py)
-stays a thin adapter registering this as a standalone HA service.
+Pure logic - HA access (current state, attributes, device/label
+lookups) is injected via an EntityLookup so this is testable with
+plain pytest and fakes, and so the integration's __init__.py
+(custom_components/adaptive_lighting_helpers/__init__.py) stays a thin
+adapter registering this as a standalone HA service. Transitively
+imports homeassistant.util.color (via override_protection.py's own
+_color_temp_matches, used below in _already_set) - see that module's
+own docstring for why that's a deliberate exception rather than an
+oversight.
 
 This is a direct port of what used to be the blueprint's repeat-loop
 `variables:` block (powerable_entities / multiplier_groups /
@@ -21,15 +25,21 @@ from typing import Callable, Optional
 try:
     # Real package context (production HA, tests/integration/) - grouping.py
     # is imported as custom_components.adaptive_lighting_helpers.grouping.
-    from .override_protection import classify, is_blocked, target_matches_values  # noqa: F401 (re-exported for sensor.py)
+    from .override_protection import (  # noqa: F401 (classify/target_matches_values re-exported for sensor.py)
+        _color_temp_matches,
+        classify,
+        is_blocked,
+        target_matches_values,
+    )
 except ImportError:
     # Bare top-level module context (tests/test_grouping.py, via
     # tests/conftest.py putting this directory straight on sys.path -
-    # see its own comment for why: fast, HA-independent pure-logic
-    # tests). override_protection.py sits alongside this file, so a
-    # plain top-level import resolves the same way curve.py/scenes.py
-    # already do for their own bare-module test usage.
-    from override_protection import classify, is_blocked, target_matches_values  # noqa: F401
+    # see its own comment for why). override_protection.py sits
+    # alongside this file, so a plain top-level import resolves the
+    # same way curve.py/scenes.py already do for their own bare-module
+    # test usage. Note this module now needs homeassistant importable
+    # either way - see override_protection.py's own docstring.
+    from override_protection import _color_temp_matches, classify, is_blocked, target_matches_values  # noqa: F401
 
 _RGB_COLOR_MODES = {"rgb", "rgbw", "rgbww", "hs", "xy"}
 
@@ -211,7 +221,7 @@ class EntityLookup:
             else None
         )
 
-        status, claim_owner = classify(
+        status, claim_owner, _matched_via = classify(
             self.is_state(entity_id, "on"),
             confirmed,
             pending,
@@ -375,13 +385,20 @@ def _already_set(
 ) -> bool:
     """Within tolerance (not exact match) because some bulbs round-trip
     brightness/colour-temp a point or two off from what was actually
-    sent - an exact-match check would recommand them forever."""
+    sent - an exact-match check would recommand them forever. Colour
+    temperature also gets the mired-equivalence check on top of the
+    plain Kelvin tolerance (_color_temp_matches) - a target Kelvin
+    value that round-trips through a real device's native mired unit
+    to a *different* Kelvin reading is still "already set", not a
+    genuine mismatch; without this, a light could be needlessly
+    re-commanded every single tick purely from that unit-conversion
+    rounding, never actually settling into "no write needed"."""
     if not lookup.is_state(entity_id, "on"):
         return False
     if not _brightness_close(entity_id, target_brightness, lookup, brightness_tolerance):
         return False
     current_color_temp = _as_int(lookup.state_attr(entity_id, "color_temp_kelvin"), -999)
-    return abs(current_color_temp - target_color_temp_kelvin) <= color_temp_tolerance
+    return _color_temp_matches(current_color_temp, target_color_temp_kelvin, color_temp_tolerance)
 
 
 def _already_set_rgb(

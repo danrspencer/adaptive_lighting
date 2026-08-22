@@ -127,6 +127,17 @@ continuously on (only turning it off does) - it's excluded from every future tic
 until the phase next changes and it silently doesn't follow. Confirmed live: two kitchen spotlights sat
 excluded this way for over an hour, still correctly lit the entire time.
 
+Step 7's value comparison also recognises a colour-temperature match that a flat Kelvin tolerance alone would
+miss: Zigbee bulbs communicate colour temperature in **mireds** (`1,000,000 / kelvin`, always a whole number),
+not Kelvin, so Home Assistant converts a Kelvin value to mireds before sending it to the device and converts
+the device's own reported mireds back to Kelvin for display - two lossy `floor()` conversions. Two Kelvin
+values that floor to the identical mired reading are indistinguishable to the device, even when the gap
+between them (in Kelvin terms) is much larger than the tolerance - confirmed live: `4373K` asked for, `4385K`
+reported back (both floor to mired `228`), a 12K gap against a 10K default tolerance, with the bulb having
+done exactly what it was told. A single mired step is worth as little as ~5K near 2700K but ~20K+ near 4500K,
+so no single flat Kelvin tolerance could reliably cover this on its own - the mired-equivalence check is
+always-on, on top of whatever `color_temp_tolerance` is configured.
+
 Steps 5 and 6 are both really the same question ("does a recorded owner conflict with the one asking now?"),
 just checked against two different claims instead of one - two different callers writing the *same* light
 with *different* `owner_id`s never look "externally set" to *each other* by context alone, since each one's
@@ -186,7 +197,10 @@ data:
   entities: [light.kitchen_1]
   owner_id: "{{ this.entity_id }}"
 response_variable: ownership
-# ownership.results["light.kitchen_1"] -> {"blocked": false, "status": "controlled", "owner_id": "..."}
+# ownership.results["light.kitchen_1"] -> {"blocked": false, "status": "controlled", "owner_id": "...", "matched_via": "context"}
+# matched_via is "context" (a direct context.id match) or "value" (the delayed-echo/mired rescue above) for a
+# "pending"/"controlled" status, null otherwise - useful for understanding *why* a light is considered ours,
+# not just that it is.
 ```
 
 ```yaml
@@ -229,7 +243,12 @@ light is currently excluded, never *why*). Its state is the number of lights cur
 attribute holds, per light, the raw `confirmed`/`pending` claims plus a computed `status` and `owner_id` -
 whichever claim's owner actually matched to produce that `status` (`null` for `off`/`unavailable`/`overridden`/a
 claimless `controlled`, since there's nothing to attribute in those cases - the same value `check_ownership`
-returns for a given entity, surfaced here without needing to ask on anyone's behalf).
+returns for a given entity, surfaced here without needing to ask on anyone's behalf), plus `matched_via` -
+`"context"` or `"value"` for a `pending`/`controlled` status, `null` otherwise - saying *how* that match was
+determined, so a viewer doesn't have to guess whether a light is "controlled" because its own reported
+context.id matched directly, or because it was rescued via the delayed-echo/mired-equivalence value comparison
+described above. The **Adaptive Lighting Write Tracking** dashboard card shows this as a small annotation
+under each status badge.
 
 - `controlled` — the light's live `context.id` matches the `confirmed` claim, settled; or it matches neither
   claim's `context.id` but its current value still matches what `pending`'s own `target` asked for - almost

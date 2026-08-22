@@ -53,6 +53,23 @@ const STATUS_TOOLTIP = {
     'time it turns on.',
 };
 
+// Short, human explanation of matched_via - only meaningful for
+// pending/controlled (classify() returns null otherwise, nothing to
+// explain). Shown as a small inline annotation next to the status
+// badge, so "why" is visible without needing to hover - the tooltip
+// text alone was easy to miss.
+const MATCHED_VIA_LABEL = {
+  context: 'context matched',
+  value: 'colour/brightness matched',
+};
+
+const MATCHED_VIA_TOOLTIP = {
+  context: "The light's own reported context.id is exactly the one we wrote it with - a direct, unambiguous match.",
+  value: "The light's reported context.id doesn't match anything we recorded, but its current brightness/colour " +
+    'still matches exactly what we last asked for - almost certainly the device\'s own delayed confirmation ' +
+    "landing under a new context (Home Assistant only reuses our context.id for up to 5 seconds), not a real touch.",
+};
+
 // Kept in the same rough "most interesting first" order a user
 // debugging an override issue would actually want, without hardcoding
 // entity order - lights with nothing surprising going on (controlled)
@@ -276,6 +293,17 @@ class AdaptiveLightingWriteTrackingCard extends HTMLElement {
       .map(([entityId, record]) => {
         const friendly = (this._hass.states[entityId] && this._hass.states[entityId].attributes.friendly_name) || entityId;
         const owner = friendlyOwner(record.owner_id);
+        // Only link the owner when it resolves to a real, currently-live
+        // entity - owner_id is a free-text field for callers other than
+        // the blueprint (which always passes a real this.entity_id), and
+        // an entity can also have been removed since the claim was made.
+        const ownerIsEntity = !!(record.owner_id && this._hass.states[record.owner_id]);
+        const ownerCell = owner
+          ? ownerIsEntity
+            ? `<span class="owner-cell owner-link" data-entity="${record.owner_id}">${owner}</span>`
+            : `<span class="owner-cell">${owner}</span>`
+          : '<span class="muted">—</span>';
+        const matchedViaLabel = MATCHED_VIA_LABEL[record.matched_via];
         const clearing = this._clearing.has(entityId);
         const clearError = this._clearErrors.get(entityId);
         return `
@@ -284,8 +312,11 @@ class AdaptiveLightingWriteTrackingCard extends HTMLElement {
               <div class="light-name">${friendly}</div>
               <div class="light-id muted">${entityId}</div>
             </td>
-            <td><span class="status-badge status-${record.status}" title="${STATUS_TOOLTIP[record.status] || ''}">${STATUS_LABEL[record.status] || record.status}</span></td>
-            <td>${owner ? `<span class="owner-cell">${owner}</span>` : '<span class="muted">—</span>'}</td>
+            <td>
+              <span class="status-badge status-${record.status}" title="${STATUS_TOOLTIP[record.status] || ''}">${STATUS_LABEL[record.status] || record.status}</span>
+              ${matchedViaLabel ? `<div class="matched-via muted" title="${MATCHED_VIA_TOOLTIP[record.matched_via] || ''}">${matchedViaLabel}</div>` : ''}
+            </td>
+            <td>${ownerCell}</td>
             <td>${this._claimCell(entityId, 'confirmed', record.confirmed)}</td>
             <td>${this._claimCell(entityId, 'pending', record.pending)}</td>
             <td>
@@ -370,6 +401,9 @@ class AdaptiveLightingWriteTrackingCard extends HTMLElement {
         .trace-error { color: var(--error-color, red); font-size: 0.85em; margin-top: 4px; max-width: 160px; }
         .trace-entry { padding: 2px 0; }
         .owner-cell { font-weight: 500; }
+        .owner-link { cursor: pointer; text-decoration: underline dotted; text-underline-offset: 2px; }
+        .owner-link:hover { color: var(--primary-color); }
+        .matched-via { font-size: 0.78em; margin-top: 2px; cursor: help; }
         .clear-btn {
           background: none;
           border: 1px solid var(--error-color, #e53935);
@@ -443,8 +477,12 @@ class AdaptiveLightingWriteTrackingCard extends HTMLElement {
       });
     });
 
-    this.shadowRoot.querySelectorAll('.light-cell').forEach((cell) => {
-      cell.addEventListener('click', () => {
+    // Both the light cell and a resolved owner link open the same
+    // more-info dialog, just for whichever entity_id they carry in
+    // data-entity - one handler covers both rather than duplicating it.
+    this.shadowRoot.querySelectorAll('.light-cell, .owner-link').forEach((cell) => {
+      cell.addEventListener('click', (ev) => {
+        ev.stopPropagation();
         this.dispatchEvent(
           new CustomEvent('hass-more-info', {
             detail: { entityId: cell.dataset.entity },

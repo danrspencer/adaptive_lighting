@@ -574,10 +574,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         contract this mirrors.
 
         Returns: {"results": {entity_id: {"blocked": bool, "status":
-        str, "owner_id": str|None}, ...}} - "status" is one of "off",
-        "unclaimed", "pending", "controlled", "overridden" (see
-        override_protection.classify()'s own docstring); "owner_id" is
-        whichever claim's owner matched, or null if none did - see
+        str, "owner_id": str|None, "matched_via": str|None}, ...}} -
+        "status" is one of "off", "unclaimed", "pending", "controlled",
+        "overridden" (see override_protection.classify()'s own
+        docstring); "owner_id" is whichever claim's owner matched, or
+        null if none did; "matched_via" is "context" or "value" for a
+        "pending"/"controlled" status (null otherwise) - see
         services.yaml for field docs.
         """
         owner_id = call.data.get("owner_id")
@@ -604,7 +606,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 if pending_ctx is not None
                 else None
             )
-            status, claim_owner = classify(
+            status, claim_owner, matched_via = classify(
                 state is not None and state.state == "on",
                 confirmed,
                 pending,
@@ -620,6 +622,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 "blocked": is_blocked(status, claim_owner, owner_id, force),
                 "status": status,
                 "owner_id": claim_owner,
+                "matched_via": matched_via,
             }
         return {"results": results}
 
