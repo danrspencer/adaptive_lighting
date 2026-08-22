@@ -68,6 +68,7 @@ from .const import DOMAIN
 from .coordinator import CURVE_KEYS, ScheduleCoordinator, schedule_instances
 from .curve import phase_at, targets_for_phase
 from .grouping import EntityLookup, Group, build_groups
+from .override_protection import classify, is_blocked
 from .scenes import SceneLookup, compute_scene_coverage
 from .two_step_check import async_start_watching
 from .write_tracking import LastWriteTracker
@@ -129,6 +130,25 @@ APPLY_LIGHTING_SCHEMA = vol.Schema(
         vol.Optional("rgb_color_tolerance", default=10): vol.Coerce(int),
         vol.Optional("owner_id"): cv.string,
         vol.Optional("force", default=False): cv.boolean,
+    }
+)
+
+CHECK_OWNERSHIP_SCHEMA = vol.Schema(
+    {
+        vol.Required("entities"): [cv.entity_id],
+        vol.Optional("owner_id"): cv.string,
+        vol.Optional("force", default=False): cv.boolean,
+        vol.Optional("brightness_tolerance", default=2): vol.Coerce(int),
+        vol.Optional("color_temp_tolerance", default=10): vol.Coerce(int),
+        vol.Optional("rgb_color_tolerance", default=10): vol.Coerce(int),
+    }
+)
+
+RECORD_OWNERSHIP_SCHEMA = vol.Schema(
+    {
+        vol.Required("entities"): [cv.entity_id],
+        vol.Optional("owner_id"): cv.string,
+        vol.Optional("targets", default=dict): dict,
     }
 )
 
@@ -538,6 +558,95 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         return _groups_response(groups)
 
+    async def check_ownership(call: ServiceCall) -> ServiceResponse:
+        """adaptive_lighting_helpers.check_ownership
+
+        For each of `entities`, decides whether a write should currently
+        be blocked for `owner_id` - the exact same override-protection
+        mechanism apply_lighting uses internally (grouping.py's
+        EntityLookup.externally_set(), itself a thin wrapper over
+        override_protection.classify()/is_blocked()), exposed standalone
+        so any caller can ask "should I write this entity" without any
+        of this integration's brightness/curve logic at all - see
+        docs/HELPERS.md's "Override protection" section for the full
+        contract this mirrors.
+
+        Returns: {"results": {entity_id: {"blocked": bool, "status":
+        str, "owner_id": str|None}, ...}} - "status" is one of "off",
+        "unclaimed", "pending", "controlled", "overridden" (see
+        override_protection.classify()'s own docstring); "owner_id" is
+        whichever claim's owner matched, or null if none did - see
+        services.yaml for field docs.
+        """
+        owner_id = call.data.get("owner_id")
+        force = call.data["force"]
+        brightness_tolerance = call.data["brightness_tolerance"]
+        color_temp_tolerance = call.data["color_temp_tolerance"]
+        rgb_color_tolerance = call.data["rgb_color_tolerance"]
+        results: dict[str, Any] = {}
+        for entity_id in call.data["entities"]:
+            state = hass.states.get(entity_id)
+            confirmed_ctx = write_tracker.confirmed_context_id(entity_id)
+            confirmed = (
+                {"context_id": confirmed_ctx, "owner_id": write_tracker.confirmed_owner_id(entity_id)}
+                if confirmed_ctx is not None
+                else None
+            )
+            pending_ctx = write_tracker.pending_context_id(entity_id)
+            pending = (
+                {
+                    "context_id": pending_ctx,
+                    "owner_id": write_tracker.pending_owner_id(entity_id),
+                    "target": write_tracker.pending_target(entity_id),
+                }
+                if pending_ctx is not None
+                else None
+            )
+            status, claim_owner = classify(
+                state is not None and state.state == "on",
+                confirmed,
+                pending,
+                state.context.id if state is not None else None,
+                state.attributes.get("brightness") if state is not None else None,
+                state.attributes.get("color_temp_kelvin") if state is not None else None,
+                state.attributes.get("rgb_color") if state is not None else None,
+                brightness_tolerance,
+                color_temp_tolerance,
+                rgb_color_tolerance,
+            )
+            results[entity_id] = {
+                "blocked": is_blocked(status, claim_owner, owner_id, force),
+                "status": status,
+                "owner_id": claim_owner,
+            }
+        return {"results": results}
+
+    async def record_ownership(call: ServiceCall) -> ServiceResponse:
+        """adaptive_lighting_helpers.record_ownership
+
+        Records that `owner_id` (this call's own context.id, from
+        call.context) just wrote `entities`, optionally with what each
+        write actually asked for (`targets`) - a thin wrapper around
+        write_tracker.async_record(), exposed standalone so a caller
+        using check_ownership on its own can also participate in the
+        same override-protection bookkeeping apply_lighting uses,
+        without going through apply_lighting's brightness/curve logic
+        at all. Call this *after* actually issuing whatever write you
+        decided on, the same way apply_lighting itself does - recording
+        a write that didn't happen would make a later check_ownership
+        call see a claim with nothing behind it.
+
+        Returns: {"recorded": [...]} - the entity_ids actually recorded.
+        """
+        entities = call.data["entities"]
+        owner_id = call.data.get("owner_id")
+        targets = call.data.get("targets", {})
+        live_context_before_write = {
+            e: (state.context.id if (state := hass.states.get(e)) is not None else None) for e in entities
+        }
+        await write_tracker.async_record(entities, live_context_before_write, call.context.id, owner_id, targets=targets)
+        return {"recorded": entities}
+
     async def compute_scene_coverage_service(call: ServiceCall) -> ServiceResponse:
         """adaptive_lighting_helpers.compute_scene_coverage
 
@@ -583,6 +692,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "apply_lighting",
         apply_lighting,
         schema=APPLY_LIGHTING_SCHEMA,
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "check_ownership",
+        check_ownership,
+        schema=CHECK_OWNERSHIP_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "record_ownership",
+        record_ownership,
+        schema=RECORD_OWNERSHIP_SCHEMA,
         supports_response=SupportsResponse.OPTIONAL,
     )
 

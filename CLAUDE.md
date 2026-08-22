@@ -3307,6 +3307,182 @@ update+restart runs; the dashboard-YAML half (section width, grid
   (`test_status_controlled_when_context_mismatches_but_value_matches_pendings_target`)
   mutation-verified the same way as above. Full suite: 158/158.
 
+- **Override protection extracted into its own standalone module and
+  two new services (`check_ownership`/`record_ownership`) - and, as a
+  direct structural consequence, a real off-light misclassification bug
+  fixed for good rather than patched. 2026-08-22, same day, prompted by
+  the user reviewing the just-shipped terminology rename and reporting
+  "loads of lights are marked as overridden in the UI but shouldn't be,
+  and seem to be working correctly."**
+
+  **The bug, confirmed live before writing any code**: 6/6 sampled
+  lights reading `status: "overridden"` were all genuinely, harmlessly
+  `state: "off"` (the whole `dining_room_1..8`/`extension_left_1..6`
+  batch, switched off together under one shared `motion_off` context -
+  a code path outside `apply_lighting` whose context `write_tracking.py`
+  never records). Root cause: `grouping.py`'s `EntityLookup.externally_set()`
+  - the check `apply_lighting` actually uses - has always started with
+  `if not self.is_state(entity_id, "on"): return False`, but
+  `sensor.py`'s separately-maintained status classification never
+  mirrored that precondition, so an off light with no matching claim
+  fell straight into the same final `else` branch a *genuinely*
+  overridden light does. This is exactly the class of bug this
+  session's earlier `target`/rescue fix was itself trying to prevent
+  (two copies of "what does this claim mean" drifting apart) - just a
+  second instance of it, in the other direction.
+
+  **Rather than patch `sensor.py`'s branch list a second time, the user
+  asked a bigger question first**: "currently I think all this owner
+  tracking is part of the adaptive lighting right? can we pull it into
+  its own thing? ... make that its own service, that just happens to
+  get natively used by the adaptive lighting service ... might make it
+  easier to test and debug." Confirmed via `AskUserQuestion`: stays in
+  this same integration (no new HACS install step - matches how
+  `compute_scene_coverage` was already built as standalone-useful
+  inside this same package); ships as two services mirroring the
+  existing `compute_lighting_groups`/`apply_lighting` read/write split;
+  the light-specific `target` shape (`{brightness, color_temp_kelvin,
+  rgb_color}`) stays as-is rather than generalising to arbitrary entity
+  attributes - a relocation, not a redesign.
+
+  **New module: `override_protection.py`** (pure, no `hass` import,
+  same pattern as `curve.py`/`scenes.py`). Holds `_ContextClaim`/
+  `_WriteRecord` (moved from `write_tracking.py`, which now imports
+  them back), `target_matches_values()` (moved from `grouping.py`
+  verbatim), and two new functions extracted from
+  `EntityLookup.externally_set()`'s own body:
+  - `classify(is_on, confirmed, pending, current_context,
+    current_brightness, current_color_temp_kelvin, current_rgb_color,
+    ...) -> (status, claim_owner_id)` - the actual decision table,
+    returning one of `"off"` (checked first, before any claim - the
+    fix), `"unclaimed"` (no claim at all, or only an unconfirmed first
+    attempt - today's existing leniency), `"pending"`, `"controlled"`
+    (context match *or* the delayed-echo rescue), `"overridden"`.
+  - `is_blocked(status, claim_owner_id, owner_id, force) -> bool` - the
+    remaining "is this blocked *for this specific caller*" step
+    (force/owner_id-None bypasses, then the owner-conflict check),
+    factored out separately from `classify()` so the raw classification
+    stays reusable by something that only wants to *display* a claim
+    (the sensor, which shows every owner regardless of who's asking)
+    without also needing a specific caller's owner_id.
+
+  **Bundled correctness fix, found while moving this logic, not
+  designed in from the start**: the delayed-echo rescue used to return
+  "not externally set" completely unconditionally, with zero owner
+  check - unlike the two context-match branches, which both always
+  checked ownership first. A light whose live value happened to match
+  a *different* owner's `pending` target would have incorrectly read
+  as free-to-manage for anyone asking. `classify()`'s rescue branch now
+  returns `pending`'s own owner instead of `None`, so all three matched
+  cases go through the identical `is_blocked()` owner check uniformly.
+  Mutation-verified at both layers: a pure `classify()` test and a new
+  `build_groups()`-level test
+  (`test_context_mismatch_rescue_still_checks_owner_id`, deliberately
+  asking for a target the light *isn't* already at, so `_already_set()`
+  can't mask the difference the way an identical-target version of this
+  test would have) both fail correctly when the fix is reverted, and
+  only those two.
+
+  **`grouping.py`'s `EntityLookup.externally_set()` becomes a thin
+  adapter** - gathers plain values via its own existing injected
+  closures, calls `classify()`/`is_blocked()`, done. Deliberately kept
+  its exact signature, and `EntityLookup`'s dataclass fields and
+  `tests/fakes.py`'s `make_lookup()` signature untouched - this is what
+  let all 20 tracking-related `test_grouping.py` tests (of 38 total)
+  keep passing with zero edits, proof the refactor genuinely didn't
+  change `build_groups()`'s observable behaviour (beyond the one
+  deliberate owner-check fix above). Bare-module import gotcha: since
+  `tests/conftest.py` puts `custom_components/adaptive_lighting_helpers/`
+  directly on `sys.path` so `test_grouping.py` can import `grouping`
+  without pulling in `homeassistant` (see that file's own comment), a
+  plain `from .override_protection import ...` inside `grouping.py`
+  would fail in that bare-module context (no parent package to resolve
+  the dot against) while working fine in production/`tests/integration/`
+  - fixed with a `try: from .override_protection import ... except
+  ImportError: from override_protection import ...` fallback, the
+  standard pattern for a module that needs to work both ways.
+  `write_tracking.py` needed no such handling - it's never imported
+  bare (it needs a real `hass` regardless), so a plain relative import
+  is fine there.
+
+  **`sensor.py`'s status property now also calls `classify()`** instead
+  of its own separately-maintained comparison chain - this is what
+  fixes the off-light bug structurally rather than as a one-off patch:
+  the sensor and `externally_set()` are now provably looking at the
+  same table, so they can't drift apart silently again the way they
+  already had once. `classify()`'s `"unclaimed"` status displays as
+  `"controlled"` (unchanged from today's behaviour - a claim-free
+  entity was never a concern), `"off"` is new. Two tests added
+  (`test_status_off_when_the_light_is_legitimately_off`,
+  `test_status_off_takes_precedence_over_a_stale_context_match` - the
+  latter locks in branch *order*, not just presence, by deliberately
+  reusing a stale claim's own `context_id` for the off-transition).
+  Mutation-verified by removing `classify()`'s `is_on` guard entirely:
+  failed exactly those two tests, the equivalent new pure
+  `test_override_protection.py` test, *and* the pre-existing
+  `test_grouping.py::test_turning_the_light_off_ends_the_protection` -
+  confirming the shared logic genuinely protects both consumers now,
+  not just the one being tested at the time.
+
+  **Two new services, `check_ownership` (read-only,
+  `supports_response: ONLY`) and `record_ownership`** (side-effecting,
+  context read from `call.context.id` automatically, matching
+  `apply_lighting`'s own convention) - registered in `__init__.py`,
+  documented in `services.yaml` following the existing
+  `compute_lighting_groups`/`apply_lighting` field conventions exactly.
+  Deliberately built directly against `write_tracker`/`hass.states`
+  rather than constructing a full `EntityLookup` first - `check_ownership`
+  has no need for `EntityLookup`'s brightness-bucketing concerns
+  (`reachable`/`tags`/`supports_rgb`), only the five tracking-related
+  values `classify()` itself needs. `apply_lighting`/`build_groups()`
+  keep calling the underlying Python functions directly (not through
+  `hass.services.async_call`) - per the user's own framing, these are a
+  parallel, independently-callable surface onto the same functions, not
+  a new indirection layer `apply_lighting` has to pay for.
+
+  Four new integration tests in `test_services.py` cover: a brand-new
+  entity reading `"unclaimed"`; a full `check_ownership`/
+  `record_ownership` round trip - our own write read back as not
+  blocked, then a genuine external change reading as blocked, then a
+  *different* `owner_id` correctly still seeing that same matched claim
+  as blocked, all in one sequence (had to be corrected mid-write - a
+  first draft's assertions expected `"controlled"` after the first ever
+  write to an entity, but that write's `live_context_before_write` and
+  the recording call's own `context.id` happened to be identical in the
+  test's own setup, so the synthetic first-write baseline recorded
+  under `confirmed` and the real `pending` claim ended up sharing one
+  context.id - `classify()` correctly reports `"pending"` there, checked
+  first per its own precedence; not a bug, a wrong test expectation,
+  caught by actually running it rather than assumed correct); `force`
+  bypassing regardless of claims; and the off-light case at the service
+  layer specifically (mutation-verified separately from the
+  sensor/pure-function versions, by forcing `is_on=True` inside the
+  service handler itself - confirms the handler's own plumbing, not
+  just `classify()`'s logic underneath it, which was already proven).
+
+  Docs: `docs/HELPERS.md` gained a new "Using override protection
+  standalone" section (with a real YAML example for both services)
+  between "A plain Home Assistant restart..." and "Inspecting
+  write-tracking state", plus the `off` status bullet; "Four services"
+  in the file's own intro became "Six". `dashboard/preview.html` gained
+  a `light.dining_room_1` entry demonstrating `status: 'off'`
+  (mirroring the real incident); the dashboard card's `STATUS_LABEL`/
+  `STATUS_TOOLTIP`/`STATUS_ORDER`/CSS all gained the new status, `off`
+  placed last in `STATUS_ORDER` (more inert even than `controlled` -
+  nothing is being actively managed at all). Verified in-browser via
+  `dashboard/preview.html` (served over HTTP, not `file://`) by reading
+  the rendered shadow DOM directly for the new badge's label/class/
+  tooltip and correct sort position - same method established earlier
+  the same day, since this environment's own screenshot capture had
+  already been found unreliable for this kind of check.
+
+  Full suite: 181/181 (158 baseline + 16 new pure `override_protection`
+  tests (11 for `classify()`/`target_matches_values`, 5 for
+  `is_blocked()`) + 2 sensor off-light tests + 1 `build_groups`
+  owner-check-on-rescue test + 4 new `check_ownership`/
+  `record_ownership` integration tests, all mutation-verified where the
+  change was behavioural rather than a pure relocation).
+
 ## Testing
 
 `pip install pytest pytest-homeassistant-custom-component && pytest`

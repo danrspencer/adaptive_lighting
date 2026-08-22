@@ -431,4 +431,107 @@ compute_scene_coverage:
       required: true
       selector:
         entity:
+
+check_ownership:
+  name: Check ownership
+  description: >-
+    For each entity, decides whether a write should currently be blocked
+    for owner_id - the exact override-protection mechanism
+    apply_lighting/compute_lighting_groups use internally, exposed
+    standalone so any automation can ask "should I write this" without
+    any of this integration's brightness/curve logic at all. Read-only -
+    call record_ownership afterward if you actually write the entity, so
+    a later check_ownership call recognises it as yours.
+  fields:
+    entities:
+      name: Entities
+      description: Entities to check. Any domain - this mechanism isn't light-specific.
+      required: true
+      selector:
+        entity:
+          multiple: true
+    owner_id:
+      name: Owner ID
+      description: >-
+        Identifies this caller - e.g. an automation passing its own
+        {{ this.entity_id }}. Left unset, every entity reports not
+        blocked (the check is skipped entirely), same as force below,
+        but without claiming anything for a later call to recognise.
+      selector:
+        text:
+    force:
+      name: Force
+      description: >-
+        Every entity reports not blocked, regardless of owner_id or any
+        recorded claim. Off by default.
+      default: false
+      selector:
+        boolean:
+    brightness_tolerance:
+      name: Brightness tolerance
+      description: >-
+        Used only for the delayed-echo rescue: a light whose current
+        brightness is within this many points of what a still-unconfirmed
+        write asked for is treated as that write's own echo, not an
+        external change.
+      default: 2
+      selector:
+        number:
+          min: 0
+          max: 50
+    color_temp_tolerance:
+      name: Colour temperature tolerance
+      description: Same rescue, for colour temperature (Kelvin).
+      default: 10
+      selector:
+        number:
+          min: 0
+          max: 500
+          unit_of_measurement: K
+    rgb_color_tolerance:
+      name: RGB colour tolerance
+      description: Same rescue, for RGB colour (0-255 scale, per channel).
+      default: 10
+      selector:
+        number:
+          min: 0
+          max: 100
+
+record_ownership:
+  name: Record ownership
+  description: >-
+    Records that owner_id (this call's own context) just wrote entities -
+    call this immediately after actually issuing whatever write
+    check_ownership told you was allowed, so a later check_ownership call
+    recognises it as yours. A thin wrapper around the same bookkeeping
+    apply_lighting uses internally.
+  fields:
+    entities:
+      name: Entities
+      description: Entities that were actually written.
+      required: true
+      selector:
+        entity:
+          multiple: true
+    owner_id:
+      name: Owner ID
+      description: >-
+        Identifies this caller - e.g. an automation passing its own
+        {{ this.entity_id }}. Left unset, the write is recorded with no
+        owner (doesn't count against anyone later, but claims nothing
+        either).
+      selector:
+        text:
+    targets:
+      name: Targets
+      description: >-
+        Map of entity_id to what that write actually asked for -
+        {"brightness": ..., "color_temp_kelvin": ...} or {"brightness":
+        ..., "rgb_color": [...]}. Optional, but needed for
+        check_ownership's delayed-echo rescue to work for these entities
+        later - without it, a context.id mismatch alone is always treated
+        as external.
+      example: '{"light.lamp": {"brightness": 200, "color_temp_kelvin": 3000}}'
+      selector:
+        object:
           multiple: true

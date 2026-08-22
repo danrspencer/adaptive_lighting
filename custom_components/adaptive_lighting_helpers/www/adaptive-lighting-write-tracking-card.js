@@ -35,6 +35,7 @@ const STATUS_LABEL = {
   pending: 'Pending',
   overridden: 'Overridden',
   unavailable: 'Unavailable',
+  off: 'Off',
 };
 
 // Shown as hover text on each status badge - what the word actually
@@ -48,13 +49,16 @@ const STATUS_TOOLTIP = {
   overridden: "Something else changed this light since our last write, and its current value doesn't match what " +
     'we asked for either - left alone until it turns off, goes unavailable and reconnects, or you force an update.',
   unavailable: "This light isn't reporting a state right now (offline, unreachable, or reconnecting).",
+  off: "This light is currently off - override protection doesn't apply to it. It'll be freely managed the next " +
+    'time it turns on.',
 };
 
 // Kept in the same rough "most interesting first" order a user
 // debugging an override issue would actually want, without hardcoding
 // entity order - lights with nothing surprising going on (controlled)
-// sink to the bottom.
-const STATUS_ORDER = ['overridden', 'pending', 'unavailable', 'controlled'];
+// sink to the bottom, and off lights sink lowest of all (more inert
+// even than controlled - nothing is being actively managed at all).
+const STATUS_ORDER = ['overridden', 'pending', 'unavailable', 'controlled', 'off'];
 
 function relativeTime(iso) {
   if (!iso) return null;
@@ -308,6 +312,7 @@ class AdaptiveLightingWriteTrackingCard extends HTMLElement {
         .status-pending { background: var(--warning-color, #ffa726); color: white; }
         .status-overridden { background: var(--error-color, #e53935); color: white; }
         .status-unavailable { background: var(--disabled-color, #9e9e9e); color: white; }
+        .status-off { background: var(--state-icon-off-color, #44739e); color: white; }
         .claim { min-width: 160px; }
         .owner { font-weight: 500; }
         .meta { display: flex; gap: 8px; align-items: baseline; font-size: 0.82em; color: var(--secondary-text-color); }

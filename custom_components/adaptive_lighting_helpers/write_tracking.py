@@ -131,12 +131,14 @@ correctly lit the entire time) this closes.
 
 from __future__ import annotations
 
-from typing import Optional, TypedDict
+from typing import Optional
 
 from homeassistant.core import CALLBACK_TYPE, Event, EventStateChangedData, HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
+
+from .override_protection import _ContextClaim, _WriteRecord
 
 STORAGE_VERSION = 1
 STORAGE_KEY = "adaptive_lighting_helpers.last_write_context_ids"
@@ -145,35 +147,6 @@ STORAGE_KEY = "adaptive_lighting_helpers.last_write_context_ids"
 # self._data changes, so the diagnostic sensor in sensor.py can refresh
 # itself immediately instead of polling - see snapshot()'s own docstring.
 SIGNAL_WRITE_TRACKING_UPDATED = "adaptive_lighting_helpers_write_tracking_updated"
-
-
-class _ContextClaim(TypedDict):
-    context_id: str
-    owner_id: Optional[str]
-    # ISO 8601, or None for the synthetic first-write baseline (see
-    # async_record's docstring) - we only ever observe that context
-    # after the fact, with no way to know how long it had already been
-    # live, so a timestamp there would claim more precision than we
-    # actually have. Lets the diagnostic sensor (and a dashboard card
-    # built on it) show "how long has this been pending/confirmed" and
-    # narrow a logbook lookup to resolve a context.id into what actually
-    # happened, without guessing a search window.
-    recorded_at: Optional[str]
-    # What this specific write was actually trying to set -
-    # {"brightness": int, "color_temp_kelvin": int} or {"brightness":
-    # int, "rgb_color": [r, g, b]} - or None for a claim that isn't a
-    # real apply_lighting write (an off-command, or one write_tracking
-    # only *observed* rather than issued - the synthetic first-write
-    # baseline, or a resync/recovery snapshot). Lets grouping.py's
-    # externally_set() recognise its own write echoed back under an
-    # unrelated context.id as still ours, rather than external - see its
-    # own docstring for why that gap exists and matters.
-    target: Optional[dict]
-
-
-class _WriteRecord(TypedDict):
-    confirmed: Optional[_ContextClaim]
-    pending: Optional[_ContextClaim]
 
 
 class LastWriteTracker:
