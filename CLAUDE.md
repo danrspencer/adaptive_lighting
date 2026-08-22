@@ -4052,6 +4052,30 @@ update+restart runs; the dashboard-YAML half (section width, grid
   `test_services.py`'s two new tests, which do mutation-verify
   correctly against the real, unmocked service. Full suite: 196/196.
 
+  **Deployed and confirmed live.** A stale module-level docstring
+  (still saying `apply_lighting` "read its brightness/colour target off
+  any sensor entity you point it at") survived the PR's own review and
+  was only caught by `ha_read_file`'s post-HACS-download content check
+  - fixed in a direct follow-up commit
+  (`7cdbfb3`, docstring only, no behaviour change) and redeployed before
+  restarting. One real, expected transient during the deploy window
+  itself: the blueprint half is a separate deploy step from the
+  integration half, so the first `adaptive_tick` after HA came back up
+  (still running the *old*, not-yet-reimported blueprint, against the
+  *already-restarted* integration with the new schema) errored with
+  `extra keys not allowed @ data['sensor_entity_id']` - self-resolved
+  the moment `ha_import_blueprint` ran moments later, and every trace
+  since has been clean. Confirmed via `ha_get_automation_traces` against
+  `automation.dining_room_lighting`: the `apply_lighting` call in a real
+  post-deploy trace carries `brightness: 80`, `color_temp_kelvin: 2700`,
+  `rgb_color: [255, 167, 87]` (Night phase, `prefer_rgb_color: true`),
+  matching the sensor's real state at that moment - no `sensor_entity_id`
+  anywhere. Also called `apply_lighting` directly against
+  `light.extension_left_1` with `brightness: 180, color_temp_kelvin:
+  3200, force: true` and confirmed via `ha_get_state` it landed exactly
+  there (`color_temp_kelvin: 3205`, device-rounded). `repair_count: 0`
+  and `config_check: valid` throughout.
+
 ## Testing
 
 `pip install pytest pytest-homeassistant-custom-component && pytest`
