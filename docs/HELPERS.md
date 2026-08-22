@@ -251,6 +251,14 @@ context.id matched directly, or because it was rescued via the delayed-echo/mire
 described above. The **Adaptive Lighting Write Tracking** dashboard card shows this as a small annotation
 under each status badge.
 
+Records are discarded automatically once they've gone a full day without being written or observed - not just
+for lights that are still around but quiet, which is harmless (see the numbered check above: no record at all
+reads the same as `unclaimed`, never blocked, so a pruned-too-early record for a still-real light simply
+re-establishes itself on its next write), but specifically for an entity *deleted from Home Assistant outright*
+(a Zigbee2MQTT group removed at the source, say) - the one case none of the recovery/restart handling above can
+ever detect, since there's no state left in Home Assistant to observe going away. Runs once at startup and
+hourly while running; nothing to configure.
+
 - `controlled` — the light's live `context.id` matches the `confirmed` claim, settled; or it matches neither
   claim's `context.id` but its current value still matches what `pending`'s own `target` asked for - almost
   certainly that write's own delayed confirmation landing under an unrelated context (HA's `Entity._context`
