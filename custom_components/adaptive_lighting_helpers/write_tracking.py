@@ -303,6 +303,31 @@ class LastWriteTracker:
         claim = record.get("pending") if record else None
         return claim.get("target") if claim else None
 
+    async def async_clear(self, entity_ids: list[str]) -> None:
+        """Manually discards an entity's tracked record entirely -
+        deliberately invoked, unlike every other path that removes a
+        record (async_start_listening's drop-detection, which only ever
+        fires on an *observed* unavailable transition). Backs the
+        clear_ownership service and the write-tracking dashboard card's
+        "Clear" action - the escape hatch for a light that's landed in
+        "overridden" without ever actually going unavailable, and so
+        has no other way back: build_groups() (grouping.py) never calls
+        async_record for anything externally_set() already excludes, so
+        an overridden light's own `pending` target only gets staler
+        over time and can never refresh itself on a ramping curve -
+        confirmed live, several kitchen lights during a Day-phase Kelvin
+        ramp, correctly lit the whole time but permanently excluded once
+        the live colour temperature drifted a single Kelvin past the
+        rescue tolerance of a `pending` claim that was itself frozen the
+        moment exclusion began. A no-op for an entity with no record."""
+        changed = False
+        for entity_id in entity_ids:
+            if self._data.pop(entity_id, None) is not None:
+                changed = True
+        if changed:
+            await self._store.async_save(self._data)
+            async_dispatcher_send(self._hass, SIGNAL_WRITE_TRACKING_UPDATED)
+
     async def async_record(
         self,
         entity_ids: list[str],

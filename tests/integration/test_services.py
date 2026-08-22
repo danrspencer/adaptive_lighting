@@ -298,6 +298,58 @@ async def test_check_ownership_off_light_is_never_blocked(setup_integration: Hom
     assert result["results"]["light.a"] == {"blocked": False, "status": "off", "owner_id": None}
 
 
+async def test_clear_ownership_frees_a_light_stuck_overridden(setup_integration: HomeAssistant):
+    """The manual escape hatch: an entity showing "overridden" (blocked
+    for any owner_id) with no other way back - see write_tracking.py's
+    async_clear docstring for why this can happen on its own (an
+    excluded entity's own pending target goes stale forever, since
+    build_groups() never calls record_ownership/async_record for
+    anything already excluded). clear_ownership discards the record
+    outright; the very next check_ownership call then sees a brand-new
+    entity with nothing to compare against - unclaimed, never blocked."""
+    hass = setup_integration
+    our_context = Context()
+    _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=100, color_temp_kelvin=3000, context=our_context)
+    await hass.services.async_call(
+        DOMAIN,
+        "record_ownership",
+        {"entities": ["light.a"], "owner_id": "automation.test_room"},
+        blocking=True,
+        context=our_context,
+    )
+    # A genuinely different value under a genuinely different context -
+    # the delayed-echo rescue can't save this one either, so it reads as
+    # overridden and would stay excluded from every future write.
+    _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=40, color_temp_kelvin=6000)
+    result = await hass.services.async_call(
+        DOMAIN,
+        "check_ownership",
+        {"entities": ["light.a"], "owner_id": "automation.test_room"},
+        blocking=True,
+        return_response=True,
+    )
+    assert result["results"]["light.a"]["status"] == "overridden"
+
+    await hass.services.async_call(DOMAIN, "clear_ownership", {"entities": ["light.a"]}, blocking=True)
+
+    result = await hass.services.async_call(
+        DOMAIN,
+        "check_ownership",
+        {"entities": ["light.a"], "owner_id": "automation.test_room"},
+        blocking=True,
+        return_response=True,
+    )
+    assert result["results"]["light.a"] == {"blocked": False, "status": "unclaimed", "owner_id": None}
+
+
+async def test_clear_ownership_is_a_noop_for_an_untracked_entity(setup_integration: HomeAssistant):
+    hass = setup_integration
+    result = await hass.services.async_call(
+        DOMAIN, "clear_ownership", {"entities": ["light.never_tracked"]}, blocking=True, return_response=True
+    )
+    assert result == {"cleared": ["light.never_tracked"]}
+
+
 async def test_override_protection_survives_a_real_write_tracking_round_trip(setup_integration: HomeAssistant):
     """End-to-end version of what tests/test_grouping.py already proves
     at the pure-function level - this time through the real

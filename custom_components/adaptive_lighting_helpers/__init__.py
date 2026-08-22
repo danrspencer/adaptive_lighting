@@ -152,6 +152,8 @@ RECORD_OWNERSHIP_SCHEMA = vol.Schema(
     }
 )
 
+CLEAR_OWNERSHIP_SCHEMA = vol.Schema({vol.Required("entities"): [cv.entity_id]})
+
 
 def _build_lookup(hass: HomeAssistant, tracker: LastWriteTracker) -> EntityLookup:
     """Adapts real HA state/registries to the plain EntityLookup
@@ -647,6 +649,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         await write_tracker.async_record(entities, live_context_before_write, call.context.id, owner_id, targets=targets)
         return {"recorded": entities}
 
+    async def clear_ownership(call: ServiceCall) -> ServiceResponse:
+        """adaptive_lighting_helpers.clear_ownership
+
+        Discards `entities`' tracked confirmed/pending claims entirely -
+        the manual escape hatch for a light stuck "overridden" with no
+        other way back (see write_tracking.py's async_clear docstring
+        for why that can happen on its own for a light that never
+        actually went unavailable). The next write to a cleared entity,
+        from anyone, is treated exactly like a brand-new entity's first
+        write - free to manage, no owner-conflict check possible yet.
+
+        Returns: {"cleared": [...]} - the entity_ids passed through.
+        """
+        entities = call.data["entities"]
+        await write_tracker.async_clear(entities)
+        return {"cleared": entities}
+
     async def compute_scene_coverage_service(call: ServiceCall) -> ServiceResponse:
         """adaptive_lighting_helpers.compute_scene_coverage
 
@@ -706,6 +725,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "record_ownership",
         record_ownership,
         schema=RECORD_OWNERSHIP_SCHEMA,
+        supports_response=SupportsResponse.OPTIONAL,
+    )
+    hass.services.async_register(
+        DOMAIN,
+        "clear_ownership",
+        clear_ownership,
+        schema=CLEAR_OWNERSHIP_SCHEMA,
         supports_response=SupportsResponse.OPTIONAL,
     )
 
@@ -784,6 +810,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.services.async_remove(DOMAIN, "compute_curve")
     hass.services.async_remove(DOMAIN, "compute_scene_coverage")
     hass.services.async_remove(DOMAIN, "apply_lighting")
+    hass.services.async_remove(DOMAIN, "check_ownership")
+    hass.services.async_remove(DOMAIN, "record_ownership")
+    hass.services.async_remove(DOMAIN, "clear_ownership")
 
     instances = schedule_instances(entry)
     unloaded = await hass.config_entries.async_unload_platforms(entry, SCHEDULE_PLATFORMS)

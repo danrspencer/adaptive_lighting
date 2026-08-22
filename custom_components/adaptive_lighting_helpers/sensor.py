@@ -211,6 +211,7 @@ class _WriteTrackingSensor(SensorEntity):
             live_context_id = state.context.id if state is not None else None
             confirmed = record.get("confirmed")
             pending = record.get("pending")
+            claim_owner = None
             if state is None or state.state in ("unavailable", "unknown"):
                 # No live state to classify at all - override_protection.classify()
                 # has no equivalent of this case (it only ever sees a real
@@ -226,7 +227,7 @@ class _WriteTrackingSensor(SensorEntity):
                 # externally_set() correctly saying "not excluded" for
                 # the same light. See override_protection.py's module
                 # docstring.
-                raw_status, _claim_owner = classify(
+                raw_status, claim_owner = classify(
                     state.state == "on",
                     confirmed,
                     pending,
@@ -244,6 +245,13 @@ class _WriteTrackingSensor(SensorEntity):
                 status = "controlled" if raw_status == "unclaimed" else raw_status
             entities[entity_id] = {
                 "status": status,
+                # Whichever claim actually matched right now (None for
+                # off/unavailable/unclaimed/overridden, where there's
+                # nothing to attribute) - classify()'s own second return
+                # value, surfaced directly so a viewer doesn't have to
+                # cross-reference confirmed/pending themselves to answer
+                # "who owns this light right now".
+                "owner_id": claim_owner,
                 "live_context_id": live_context_id,
                 "confirmed": confirmed,
                 "pending": pending,
