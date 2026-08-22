@@ -130,6 +130,7 @@
           entities: {
             'light.living_room_pendant_1': {
               status: 'controlled',
+              owner_id: 'automation.living_room_lights_new',
               live_context_id: '01M0FGWR11K8K1KDE56JJRJ94C',
               confirmed: {
                 context_id: '01M0FGWR11K8K1KDE56JJRJ94C',
@@ -141,6 +142,7 @@
             },
             'light.kitchen_pendant_1': {
               status: 'pending',
+              owner_id: 'automation.kitchen_lights',
               live_context_id: '01M0FTMHAJTQH94ZKP6DRSN2MK',
               confirmed: {
                 context_id: '01M0FTHVWMJ0DRSNB5RT92ZXVC',
@@ -163,6 +165,7 @@
               // reports exactly what pending asked for. See
               // grouping.py's externally_set() docstring.
               status: 'controlled',
+              owner_id: 'automation.kitchen_lights',
               live_context_id: '01M0DEVICEECHO000000001',
               confirmed: {
                 context_id: '01M0EARLIERCONFIRMED00001',
@@ -179,6 +182,7 @@
             },
             'light.study_pendant': {
               status: 'overridden',
+              owner_id: null,
               live_context_id: '01M0EXTERNALCHANGE0000001',
               confirmed: {
                 context_id: '01M0F1953BZB75V27GJNXH3ABW',
@@ -190,6 +194,7 @@
             },
             'light.ensuite_spots': {
               status: 'unavailable',
+              owner_id: null,
               live_context_id: null,
               confirmed: {
                 context_id: '01M00S8AVPV6BDQEJ22A04R3NM',
@@ -206,6 +211,7 @@
               // protection is entirely moot for a light that isn't on -
               // see override_protection.classify()'s own "off" case.
               status: 'off',
+              owner_id: null,
               live_context_id: '01M0MOTIONOFF00000000001',
               confirmed: {
                 context_id: '01M0FGWR22K8K1KDE56JJRJ95D',
@@ -250,6 +256,24 @@
                 },
               ]);
             }, 400);
+          }),
+        // Mocked clear_ownership - the real service call round-trips to
+        // write_tracking.py's async_clear (see the card's own _clear()
+        // method); this just deletes the entity from the synthetic
+        // entities object and pushes a fresh state, matching how the
+        // real sensor pushes via SIGNAL_WRITE_TRACKING_UPDATED after a
+        // real clear.
+        callService: (domain, service, data) =>
+          new Promise((resolve) => {
+            setTimeout(() => {
+              if (domain === 'adaptive_lighting_helpers' && service === 'clear_ownership') {
+                for (const entityId of data.entities || []) {
+                  delete writeTrackingStates['sensor.adaptive_lighting_write_tracking'].attributes.entities[entityId];
+                }
+                writeTrackingCard.hass = { ...writeTrackingCard._hass, states: { ...writeTrackingStates } };
+              }
+              resolve();
+            }, 500);
           }),
       };
       const wtSpacer = document.createElement('div');

@@ -126,6 +126,45 @@ async def test_status_overridden_when_live_context_and_value_both_mismatch(
     assert record["status"] == "overridden"
 
 
+async def test_owner_id_surfaces_whichever_claim_currently_matches(
+    hass: HomeAssistant, write_tracker: LastWriteTracker, sensor_entity: _WriteTrackingSensor
+):
+    """classify()'s second return value - whichever claim's owner
+    matched right now - is exposed at the top level of each entity's
+    dict, not just buried inside confirmed/pending, so a viewer doesn't
+    have to cross-reference the two claims themselves to answer "who
+    owns this light right now"."""
+    _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
+    await write_tracker.async_record(["light.a"], {"light.a": None}, "ctx-1", "automation.room_a")
+    _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], context=Context(id="ctx-1"))
+
+    record = sensor_entity.extra_state_attributes["entities"]["light.a"]
+    assert record["status"] == "pending"
+    assert record["owner_id"] == "automation.room_a"
+
+
+async def test_owner_id_is_none_when_nothing_currently_matches(
+    hass: HomeAssistant, write_tracker: LastWriteTracker, sensor_entity: _WriteTrackingSensor
+):
+    _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
+    await write_tracker.async_record(["light.a"], {"light.a": None}, "ctx-1", "automation.room_a")
+    _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], context=Context(id="ctx-1"))
+    await write_tracker.async_record(
+        ["light.a"],
+        {"light.a": "ctx-1"},
+        "ctx-2",
+        "automation.room_a",
+        targets={"light.a": {"brightness": 200, "color_temp_kelvin": 3000}},
+    )
+    _set_light(
+        hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=42, context=Context(id="ctx-3")
+    )
+
+    record = sensor_entity.extra_state_attributes["entities"]["light.a"]
+    assert record["status"] == "overridden"
+    assert record["owner_id"] is None
+
+
 async def test_status_off_when_the_light_is_legitimately_off(
     hass: HomeAssistant, write_tracker: LastWriteTracker, sensor_entity: _WriteTrackingSensor
 ):

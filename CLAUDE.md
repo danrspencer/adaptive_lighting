@@ -3483,6 +3483,142 @@ update+restart runs; the dashboard-YAML half (section width, grid
   `record_ownership` integration tests, all mutation-verified where the
   change was behavioural rather than a pure relocation).
 
+- **A genuinely new, self-reinforcing lockout found live the same day
+  PR #79 shipped, 2026-08-22 - "overridden" is a dead end once
+  `build_groups()` starts excluding an entity, not just a transient
+  misclassification.** User report, right after confirming PR #79 fixed
+  the off-light bug: "there's still some uncontrolled lights though
+  that I think should be." Diagnosed via the same live-forensics
+  method used throughout this project (read `sensor.adaptive_lighting_write_tracking`,
+  cross-reference against real light state, don't guess) - seven
+  kitchen lights (`light.kitchen_1`/`_3`/`_4`/`_6`, `light.kitchen_pendant_2`,
+  `light.kitchen_strip_back`, `light.extension_right_3`) all showed
+  `overridden` while genuinely, correctly lit (brightness 255,
+  color_temp_kelvin 5347 - matching every sibling light in the same
+  room, same tick). Their `pending` claims all shared one target
+  (255/5336, recorded at a single timestamp) while siblings' `pending`
+  claims kept advancing every tick - the tell that these seven had
+  simply stopped receiving writes altogether, not that they were being
+  written and rejected.
+
+  Root cause, confirmed by reading `grouping.py`'s `build_groups()`
+  directly rather than assumed: every one of `needing_off`/`combined`/
+  `combined_rgb`/`two_step`/`two_step_rgb` filters through `not
+  lookup.externally_set(...)` - once `classify()` returns `overridden`
+  for an entity, it's excluded from every group `apply_lighting`
+  dispatches, which means `write_tracker.async_record()` (only ever
+  called for entities actually written - see `__init__.py`'s
+  `apply_lighting`) never runs for it again either. The value-rescue
+  mechanism PR #78 added (comparing current values against `pending`'s
+  own recorded `target`) depends on that target staying roughly current
+  - but once excluded, `pending` is frozen at whatever it was the
+  instant exclusion began, while a ramping curve (Day's Kelvin ramp, in
+  this case) keeps moving the real target further away every tick. The
+  seven kitchen lights' shared `pending.target` (5336K, recorded at
+  12:59:40) drifted a single Kelvin outside `color_temp_tolerance`
+  (default 10) by the time they were checked (live 5347K, 11K off) -
+  once that happened, exclusion became permanent: nothing left could
+  ever record a fresher target for them again, on a curve that only
+  moves in one direction for the rest of Day. Genuinely worse than the
+  PR #78 bug it built on top of: that one was a transient window (fixed
+  by the rescue); this one is the rescue's own precondition rotting the
+  instant the light it's meant to protect gets excluded, with no
+  self-healing path except the light turning off, going through a
+  genuine unavailable/recovery cycle, or a `force` call - none of which
+  happen on their own during continuous, correct, uneventful operation.
+
+  **Not fixed structurally this session** - flagged to the user
+  alongside the two features requested in the same message, which
+  together happen to be the practical mitigation: a manual escape
+  hatch rather than a deeper redesign of when `pending` gets refreshed
+  for an excluded entity. Revisit if this keeps recurring - the
+  underlying rot (excluded entities never get a fresh `pending`) is
+  still there and will keep producing new lockouts on every ramping
+  phase, just currently patched over by making the lockout *recoverable*
+  rather than *permanent*.
+
+- **`clear_ownership` service + a "Clear" button/column on the
+  write-tracking dashboard card, plus a top-level `owner_id` field on
+  the sensor's per-entity dict - 2026-08-22, the user's own explicit
+  ask, landing in the same turn as the lockout diagnosis above** ("maybe
+  we should add a 'clear ownership' to the dashboard - oh and can we
+  see the owner id that owns it too?").
+
+  `write_tracking.py`'s `LastWriteTracker` gained `async_clear(entity_ids)`
+  - pops each entity's record entirely (a no-op for one with no record),
+  persists, and fires `SIGNAL_WRITE_TRACKING_UPDATED` the same way every
+  other mutating method does. `__init__.py` wraps it as
+  `adaptive_lighting_helpers.clear_ownership` (`entities` required, no
+  other fields - there's nothing to configure about discarding a
+  record), following the same registration/schema pattern as
+  `check_ownership`/`record_ownership`. **Caught and fixed in passing
+  while touching this area**: `async_unload_entry` never removed
+  `check_ownership`/`record_ownership` on unload (a gap present since
+  PR #79 shipped, never exercised since nothing in the test suite
+  reloads the entry after adding them) - fixed alongside registering
+  `clear_ownership`'s own removal, all three added to the existing
+  `hass.services.async_remove(...)` block.
+
+  `sensor.py`'s `_WriteTrackingSensor.extra_state_attributes` now
+  captures `classify()`'s second return value (previously discarded as
+  `_claim_owner`) and surfaces it as a top-level `owner_id` per entity -
+  whichever claim's owner actually produced the current `status`
+  (`null` for `off`/`unavailable`/`overridden`/an unclaimed
+  `controlled`, matching `check_ownership`'s own `owner_id` semantics
+  for the identical entity). This was a real, if minor, gap: previously
+  a viewer had to manually check which of `confirmed`/`pending` matched
+  the live context to answer "who owns this light right now" - now it's
+  answered directly.
+
+  `www/adaptive-lighting-write-tracking-card.js` gained an "Owner"
+  column (between Status and Confirmed, using the existing
+  `friendlyOwner()` helper) and an "Actions" column with a per-row
+  "Clear" button - `window.confirm()`-gated (the action briefly removes
+  override protection for that light, unlike the existing zero-friction
+  "Trace" button, which is read-only), calling `clear_ownership` via
+  `hass.callService` and relying on the resulting `SIGNAL_WRITE_TRACKING_UPDATED`
+  push to refresh the row rather than a manual re-render on success. A
+  failed call surfaces inline in that row (`_clearErrors`, a
+  `Map<entity_id, message>`) rather than through the existing
+  `_renderError` path, which replaces the *entire* card - appropriate
+  for "the one entity this sensor represents is missing" (its only
+  existing caller), wrong for "one row's service call failed" (would
+  wipe every other row's live data along with it). The filter box's
+  existing haystack search gained `record.owner_id` alongside the two
+  claims' own owner fields, so filtering by automation name still finds
+  a light via its currently-winning owner even when that happens to be
+  the rescue case (context mismatch, value match) rather than a direct
+  claim match.
+
+  `dashboard/preview.html`'s six synthetic entities all gained an
+  `owner_id` field matching what `classify()` would actually compute
+  for their given `status`/claims, plus a mocked `callService` for
+  `clear_ownership` (deletes the entity from the synthetic
+  `entities` object and pushes a fresh state, mirroring the real
+  sensor's own push-on-clear behaviour). Verified in-browser via
+  `dashboard/preview.html` (served over HTTP - `.claude/launch.json`'s
+  `dashboard-preview` config - not `file://`, same established
+  requirement): confirmed the Owner column renders the right friendly
+  name per row (or `—` when `null`) via direct shadow-DOM inspection,
+  and exercised the full clear flow end-to-end by scripting a click
+  with `window.confirm` stubbed to auto-accept - button read
+  "Clearing…" and was disabled mid-call, and `light.study_pendant`
+  (the `overridden` row) was gone from the rendered table after the
+  mocked service call resolved, matching what a real `clear_ownership`
+  round trip does.
+
+  Two new integration tests
+  (`test_clear_ownership_frees_a_light_stuck_overridden`,
+  `test_clear_ownership_is_a_noop_for_an_untracked_entity`) plus two
+  sensor tests (`test_owner_id_surfaces_whichever_claim_currently_matches`,
+  `test_owner_id_is_none_when_nothing_currently_matches`), both new
+  behavioural pieces mutation-verified: a no-op `async_clear` fails
+  exactly the "frees a light" test; discarding `classify()`'s owner
+  return value in `sensor.py` fails exactly the "surfaces" test, not
+  the "is none" one (expected - a mutation that always returns `None`
+  is indistinguishable from correct behaviour on a case that's already
+  `None`). Full suite: 185/185.
+
 ## Testing
 
 `pip install pytest pytest-homeassistant-custom-component && pytest`

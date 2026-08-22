@@ -4,7 +4,7 @@
 > (in particular, [why the schedule has four named phases](../README.md#why-four-phases-not-a-continuous-curve)
 > rather than a single continuous curve) and how to install it.
 
-Six services, each documented in full in `services.yaml` (visible in Home Assistant's Developer Tools → Actions
+Seven services, each documented in full in `services.yaml` (visible in Home Assistant's Developer Tools → Actions
 once installed) — call them directly from your own automations or scripts, no blueprint required.
 
 ## Bring your own sensor
@@ -204,12 +204,32 @@ call, not a service-to-service round trip) - `check_ownership`'s `status` values
 `sensor.adaptive_lighting_write_tracking` shows (see below), and `targets` is the same shape `apply_lighting`
 itself records automatically on every write it makes.
 
+A third service, `clear_ownership`, is the manual escape hatch for a light stuck reporting `overridden` with no
+other way back - possible because `apply_lighting`/`compute_lighting_groups` never call `record_ownership`
+internally for anything already excluded, so an overridden light's own `pending` claim can go permanently stale
+(most concretely: during a ramping curve, once its recorded target drifts more than a tick or two away from
+where the curve has since moved on to):
+
+```yaml
+action: adaptive_lighting_helpers.clear_ownership
+data:
+  entities: [light.kitchen_1]
+```
+
+The next write to a cleared entity, from anyone, is treated exactly like a brand-new entity's first write - no
+owner-conflict check is possible until a fresh claim exists to compare against. The **Adaptive Lighting Write
+Tracking** dashboard card exposes this as a "Clear" button on every row (with a confirmation prompt, since it
+does briefly remove override protection for that light).
+
 ### Inspecting write-tracking state
 
 `sensor.adaptive_lighting_write_tracking` makes the mechanism above inspectable directly, rather than only
 indirectly through `compute_lighting_groups`'s `combined`/`needing_off` output (which tells you *whether* a
 light is currently excluded, never *why*). Its state is the number of lights currently tracked; its `entities`
-attribute holds, per light, the raw `confirmed`/`pending` claims plus a computed `status`:
+attribute holds, per light, the raw `confirmed`/`pending` claims plus a computed `status` and `owner_id` -
+whichever claim's owner actually matched to produce that `status` (`null` for `off`/`unavailable`/`overridden`/a
+claimless `controlled`, since there's nothing to attribute in those cases - the same value `check_ownership`
+returns for a given entity, surfaced here without needing to ask on anyone's behalf).
 
 - `controlled` — the light's live `context.id` matches the `confirmed` claim, settled; or it matches neither
   claim's `context.id` but its current value still matches what `pending`'s own `target` asked for - almost

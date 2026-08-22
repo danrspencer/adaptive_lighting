@@ -108,6 +108,13 @@ class AdaptiveLightingWriteTrackingCard extends HTMLElement {
     // own context_id changes, so a stale trace from a previous claim on
     // the same light can never be shown as if it were current.
     this._traces = new Map();
+    // Per-entity state for the "Clear" action - a Set of entity_ids
+    // currently mid-call (disables/relabels that row's button) and a
+    // Map of entity_id -> error message for a call that failed, shown
+    // inline in that row rather than displacing the whole card the way
+    // _renderError does (see _clear's own docstring-equivalent comment).
+    this._clearing = new Set();
+    this._clearErrors = new Map();
     if (!this.shadowRoot) {
       this.attachShadow({ mode: 'open' });
     }
@@ -147,6 +154,30 @@ class AdaptiveLightingWriteTrackingCard extends HTMLElement {
       if (!claim || cached.contextId !== claim.context_id) {
         this._traces.delete(key);
       }
+    }
+  }
+
+  async _clear(entityId) {
+    if (!window.confirm(`Clear tracked ownership for ${entityId}? This removes its confirmed/pending record entirely - override protection is off for it until the next write, from anyone.`)) {
+      return;
+    }
+    this._clearing.add(entityId);
+    this._clearErrors.delete(entityId);
+    this._render();
+    try {
+      await this._hass.callService('adaptive_lighting_helpers', 'clear_ownership', { entities: [entityId] });
+      // No manual re-render needed on success - clear_ownership fires
+      // SIGNAL_WRITE_TRACKING_UPDATED server-side, which pushes a fresh
+      // sensor state and re-enters `set hass` normally, same as every
+      // other change this card reacts to. The entity may vanish from
+      // `entities` entirely on that next push if it had no live state -
+      // _clearing/_clearErrors keyed by entity_id just go unused then,
+      // not stale-referenced.
+    } catch (err) {
+      this._clearErrors.set(entityId, err && err.message ? err.message : String(err));
+    } finally {
+      this._clearing.delete(entityId);
+      this._render();
     }
   }
 
@@ -233,7 +264,7 @@ class AdaptiveLightingWriteTrackingCard extends HTMLElement {
     const rows = Object.entries(entities)
       .filter(([entityId, record]) => {
         if (!filter) return true;
-        const haystack = `${entityId} ${(record.confirmed && record.confirmed.owner_id) || ''} ${(record.pending && record.pending.owner_id) || ''}`.toLowerCase();
+        const haystack = `${entityId} ${record.owner_id || ''} ${(record.confirmed && record.confirmed.owner_id) || ''} ${(record.pending && record.pending.owner_id) || ''}`.toLowerCase();
         return haystack.includes(filter);
       })
       .sort(([aId, a], [bId, b]) => {
@@ -244,6 +275,9 @@ class AdaptiveLightingWriteTrackingCard extends HTMLElement {
     const bodyRows = rows
       .map(([entityId, record]) => {
         const friendly = (this._hass.states[entityId] && this._hass.states[entityId].attributes.friendly_name) || entityId;
+        const owner = friendlyOwner(record.owner_id);
+        const clearing = this._clearing.has(entityId);
+        const clearError = this._clearErrors.get(entityId);
         return `
           <tr>
             <td class="light-cell" data-entity="${entityId}">
@@ -251,8 +285,13 @@ class AdaptiveLightingWriteTrackingCard extends HTMLElement {
               <div class="light-id muted">${entityId}</div>
             </td>
             <td><span class="status-badge status-${record.status}" title="${STATUS_TOOLTIP[record.status] || ''}">${STATUS_LABEL[record.status] || record.status}</span></td>
+            <td>${owner ? `<span class="owner-cell">${owner}</span>` : '<span class="muted">—</span>'}</td>
             <td>${this._claimCell(entityId, 'confirmed', record.confirmed)}</td>
             <td>${this._claimCell(entityId, 'pending', record.pending)}</td>
+            <td>
+              <button class="clear-btn" data-entity="${entityId}" ${clearing ? 'disabled' : ''}>${clearing ? 'Clearing…' : 'Clear'}</button>
+              ${clearError ? `<div class="trace-error">${clearError}</div>` : ''}
+            </td>
           </tr>
         `;
       })
@@ -328,8 +367,22 @@ class AdaptiveLightingWriteTrackingCard extends HTMLElement {
           cursor: pointer;
         }
         .trace-btn:hover { background: var(--secondary-background-color, rgba(127,127,127,0.1)); }
-        .trace-error { color: var(--error-color, red); }
+        .trace-error { color: var(--error-color, red); font-size: 0.85em; margin-top: 4px; max-width: 160px; }
         .trace-entry { padding: 2px 0; }
+        .owner-cell { font-weight: 500; }
+        .clear-btn {
+          background: none;
+          border: 1px solid var(--error-color, #e53935);
+          border-radius: 6px;
+          color: var(--error-color, #e53935);
+          padding: 2px 8px;
+          font-size: 0.85em;
+          cursor: pointer;
+          white-space: nowrap;
+        }
+        .clear-btn:hover { background: var(--error-color, #e53935); color: white; }
+        .clear-btn:disabled { opacity: 0.6; cursor: default; }
+        .clear-btn:disabled:hover { background: none; color: var(--error-color, #e53935); }
         .empty { padding: 24px 8px; text-align: center; color: var(--secondary-text-color); }
       </style>
       <ha-card header="${this._config.title || 'Adaptive Lighting Write Tracking'}">
@@ -347,8 +400,10 @@ class AdaptiveLightingWriteTrackingCard extends HTMLElement {
                 <tr>
                   <th>Light</th>
                   <th title="Whether this light is currently under adaptive control - see each status badge for what it means.">Status</th>
+                  <th title="Whichever claim (confirmed or pending) currently matches this light - who's in control of it right now. Blank when nothing currently matches (off/unavailable/unclaimed/overridden).">Owner</th>
                   <th title="The last write to this light that a later tick actually observed landing.">Confirmed</th>
                   <th title="The most recent write attempted for this light, not yet reconfirmed by a later tick.">Pending</th>
+                  <th title="Manually discard this light's tracked record entirely - the escape hatch for a light stuck Overridden with no other way back.">Actions</th>
                 </tr>
               </thead>
               <tbody>${bodyRows}</tbody>
@@ -378,6 +433,13 @@ class AdaptiveLightingWriteTrackingCard extends HTMLElement {
         const slot = btn.dataset.slot;
         const claim = this._entities[entityId][slot];
         this._trace(entityId, slot, claim);
+      });
+    });
+
+    this.shadowRoot.querySelectorAll('.clear-btn').forEach((btn) => {
+      btn.addEventListener('click', (ev) => {
+        ev.stopPropagation(); // don't also trigger the row's light-cell -> hass-more-info click
+        this._clear(btn.dataset.entity);
       });
     });
 
