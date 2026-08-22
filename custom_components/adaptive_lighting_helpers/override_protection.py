@@ -2,10 +2,20 @@
 Decides, for a given entity and caller (`owner_id`), whether a write
 should be allowed through or blocked because something else has
 touched the entity since this caller's own last write - the "override
-protection" mechanism. Pure logic, no Home Assistant dependency, same
+protection" mechanism. Pure logic - no `hass` instance needed, same
 pattern as curve.py/scenes.py/grouping.py: HA access (live state,
 Store-backed persistence, the unavailable/recovery listener) stays in
 write_tracking.py, which is the thing that actually calls this module.
+Does import `homeassistant.util.color` directly (for the Kelvin/mired
+rounding `_color_temp_matches` needs) - a deliberate exception to
+"zero `homeassistant.*` imports", not an oversight: that import is
+cheap (no core/event-loop machinery), it's the actual function HA
+itself uses (no risk of drifting from real device behaviour), and the
+"these tests run without HA installed" property this was nominally
+protecting doesn't hold in practice anyway - pytest's own `testpaths`
+config already pulls in `tests/integration/conftest.py`, which
+requires `pytest-homeassistant-custom-component`, regardless of which
+test file is targeted.
 
 Genuinely generic, not specific to adaptive lighting or even to
 lights - the only light-flavoured piece is `target_matches_values`'s
@@ -36,6 +46,16 @@ from __future__ import annotations
 
 from typing import Optional, TypedDict
 
+# The real function Home Assistant itself uses (homeassistant/util/color.py) -
+# imported directly rather than reimplemented. Cheap to import on its own
+# (no core/config_entries/event-loop machinery pulled in - confirmed before
+# relying on it), and this module's "no HA dependency" property was already
+# not buying a HA-free test run in practice: pytest's own testpaths config
+# collects tests/integration/conftest.py (which requires
+# pytest-homeassistant-custom-component) regardless of which test file is
+# targeted, so the whole suite already needs HA installed either way.
+from homeassistant.util.color import color_temperature_kelvin_to_mired as _kelvin_to_mired
+
 
 class _ContextClaim(TypedDict):
     context_id: str
@@ -60,6 +80,27 @@ def _as_int(value, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _color_temp_matches(current_kelvin: int, target_kelvin: int, tolerance_kelvin: int) -> bool:
+    """True if within the ordinary Kelvin tolerance (unchanged, user-
+    tunable), OR if both values would floor to the identical mired
+    integer - not a heuristic in that second case, a hard equivalence:
+    a Zigbee bulb communicates colour temperature in mireds
+    (1,000,000/kelvin, always a whole number), so two Kelvin values
+    that round-trip to the same mired reading are indistinguishable to
+    the device - it genuinely cannot have done anything other than
+    exactly what it was told. A flat Kelvin tolerance alone doesn't
+    reliably cover this: a single mired step is worth ~5K near 2700K
+    but ~20K+ near 4500K, so the same tolerance number is far too loose
+    at one end of the range and far too tight at the other. Confirmed
+    against a live incident: asked for 4373K, HA's own
+    color_temperature_kelvin_to_mired floors that to mired 228, and
+    flooring 228 back gives 4385K - exactly what the bulb reported,
+    with zero drift and nothing external having touched it."""
+    if abs(current_kelvin - target_kelvin) <= tolerance_kelvin:
+        return True
+    return _kelvin_to_mired(current_kelvin) == _kelvin_to_mired(target_kelvin)
 
 
 def target_matches_values(
@@ -96,7 +137,7 @@ def target_matches_values(
     target_color_temp = target.get("color_temp_kelvin")
     if target_color_temp is None:
         return False
-    return abs(_as_int(current_color_temp_kelvin, -999) - target_color_temp) <= color_temp_tolerance
+    return _color_temp_matches(_as_int(current_color_temp_kelvin, -999), target_color_temp, color_temp_tolerance)
 
 
 def classify(
@@ -110,9 +151,9 @@ def classify(
     brightness_tolerance: int = 2,
     color_temp_tolerance: int = 10,
     rgb_color_tolerance: int = 10,
-) -> tuple[str, Optional[str]]:
+) -> tuple[str, Optional[str], Optional[str]]:
     """The actual decision logic - given everything known about one
-    entity right now, returns `(status, claim_owner_id)`:
+    entity right now, returns `(status, claim_owner_id, matched_via)`:
 
     - `"off"` - not currently on. Override protection is entirely moot
       for a light that isn't on - checked first, before any claim.
@@ -157,6 +198,18 @@ def classify(
     sensor.py's diagnostic status, which shows every claim's owner
     directly regardless of who's asking).
 
+    `matched_via` says *how* a `"pending"`/`"controlled"` status was
+    reached - `"context"` (the live context.id equalled the claim's
+    own recorded context.id directly) or `"value"` (context.id didn't
+    match anything, but the entity's current value still matched what
+    `pending` asked for - the delayed-echo/mired rescue). `None` for
+    every other status, where there's nothing to explain. This is
+    genuinely new information `status` alone doesn't carry - both
+    context-matched and value-rescued cases report `"controlled"`
+    identically otherwise - and exists purely for a diagnostic
+    consumer (the write-tracking sensor/dashboard card) to show *why*,
+    not for any decision logic here or in `is_blocked()`.
+
     Note this is a real behaviour change from an earlier version of
     this check, not just a move: the value-rescue case used to return
     "not externally set" unconditionally, with no owner comparison at
@@ -168,15 +221,15 @@ def classify(
     three matched cases go through the identical caller-side owner
     check uniformly."""
     if not is_on:
-        return "off", None
+        return "off", None, None
     if confirmed is None and pending is None:
-        return "unclaimed", None
+        return "unclaimed", None, None
     if pending is not None and current_context == pending["context_id"]:
-        return "pending", pending.get("owner_id")
+        return "pending", pending.get("owner_id"), "context"
     if confirmed is not None and current_context == confirmed["context_id"]:
-        return "controlled", confirmed.get("owner_id")
+        return "controlled", confirmed.get("owner_id"), "context"
     if confirmed is None:
-        return "unclaimed", None
+        return "unclaimed", None, None
     if pending is not None and target_matches_values(
         pending.get("target"),
         current_brightness,
@@ -186,8 +239,8 @@ def classify(
         color_temp_tolerance,
         rgb_color_tolerance,
     ):
-        return "controlled", pending.get("owner_id")
-    return "overridden", None
+        return "controlled", pending.get("owner_id"), "value"
+    return "overridden", None, None
 
 
 def is_blocked(status: str, claim_owner_id: Optional[str], owner_id: Optional[str], force: bool = False) -> bool:

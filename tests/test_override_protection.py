@@ -6,9 +6,13 @@ adapter over classify(), see grouping.py's own docstring).
 
 No EntityLookup, no fakes beyond plain values - classify() takes exactly
 the confirmed/pending claim dicts and live values it needs, nothing else.
+
+Requires a real Home Assistant install (override_protection.py imports
+homeassistant.util.color directly - see its own module docstring for why
+that's a deliberate exception to "no HA dependency", not an oversight).
 """
 
-from override_protection import classify, is_blocked, target_matches_values
+from override_protection import _color_temp_matches, classify, is_blocked, target_matches_values
 
 
 def test_off_light_is_never_protected_regardless_of_claims():
@@ -17,57 +21,57 @@ def test_off_light_is_never_protected_regardless_of_claims():
     # classification used to fail to mirror (a real, live-found bug: a
     # light turned off by a code path outside apply_lighting fell
     # through to "overridden" despite this precondition).
-    status, owner = classify(
+    status, owner, matched_via = classify(
         is_on=False,
         confirmed={"context_id": "ctx-confirmed", "owner_id": "automation.a"},
         pending={"context_id": "ctx-pending", "owner_id": "automation.a"},
         current_context="ctx-something-else-entirely",
     )
-    assert (status, owner) == ("off", None)
+    assert (status, owner, matched_via) == ("off", None, None)
 
 
 def test_no_claim_at_all_is_unclaimed():
-    status, owner = classify(is_on=True, confirmed=None, pending=None, current_context="ctx-anything")
-    assert (status, owner) == ("unclaimed", None)
+    status, owner, matched_via = classify(is_on=True, confirmed=None, pending=None, current_context="ctx-anything")
+    assert (status, owner, matched_via) == ("unclaimed", None, None)
 
 
 def test_a_single_unconfirmed_pending_that_does_not_match_is_unclaimed():
     # The one gap the two-claim design doesn't close: a light's very
     # first tracked write, if dropped, is indistinguishable from a
     # genuinely external change until a confirmed baseline exists.
-    status, owner = classify(
+    status, owner, matched_via = classify(
         is_on=True,
         confirmed=None,
         pending={"context_id": "ctx-first-attempt", "owner_id": "automation.a"},
         current_context="ctx-whatever-this-light-had-before",
     )
-    assert (status, owner) == ("unclaimed", None)
+    assert (status, owner, matched_via) == ("unclaimed", None, None)
 
 
 def test_context_matches_pending():
-    status, owner = classify(
+    status, owner, matched_via = classify(
         is_on=True,
         confirmed={"context_id": "ctx-confirmed", "owner_id": "automation.a"},
         pending={"context_id": "ctx-pending", "owner_id": "automation.b"},
         current_context="ctx-pending",
     )
-    assert (status, owner) == ("pending", "automation.b")
+    assert (status, owner, matched_via) == ("pending", "automation.b", "context")
 
 
 def test_context_matches_confirmed():
-    status, owner = classify(
+    status, owner, matched_via = classify(
         is_on=True,
         confirmed={"context_id": "ctx-confirmed", "owner_id": "automation.a"},
         pending={"context_id": "ctx-pending", "owner_id": "automation.a"},
         current_context="ctx-confirmed",
     )
-    assert (status, owner) == ("controlled", "automation.a")
+    assert (status, owner, matched_via) == ("controlled", "automation.a", "context")
 
 
 def test_context_matches_neither_but_value_matches_pendings_target():
     # The delayed-echo rescue - see classify()'s own docstring for why
     # a context mismatch alone doesn't prove an external touch.
-    status, owner = classify(
+    status, owner, matched_via = classify(
         is_on=True,
         confirmed={"context_id": "ctx-confirmed", "owner_id": "automation.a"},
         pending={"context_id": "ctx-pending", "owner_id": "automation.b", "target": {"brightness": 200, "color_temp_kelvin": 3000}},
@@ -77,12 +81,13 @@ def test_context_matches_neither_but_value_matches_pendings_target():
     )
     # Rescued back to "controlled", attributed to pending's own owner -
     # the bundled correctness fix: this used to skip the owner check
-    # entirely for the rescue case.
-    assert (status, owner) == ("controlled", "automation.b")
+    # entirely for the rescue case. matched_via distinguishes this from
+    # the context-matched "controlled" case above.
+    assert (status, owner, matched_via) == ("controlled", "automation.b", "value")
 
 
 def test_rescue_does_not_apply_when_values_dont_match():
-    status, owner = classify(
+    status, owner, matched_via = classify(
         is_on=True,
         confirmed={"context_id": "ctx-confirmed", "owner_id": "automation.a"},
         pending={"context_id": "ctx-pending", "owner_id": "automation.a", "target": {"brightness": 200, "color_temp_kelvin": 3000}},
@@ -90,11 +95,11 @@ def test_rescue_does_not_apply_when_values_dont_match():
         current_brightness=40,
         current_color_temp_kelvin=6000,
     )
-    assert (status, owner) == ("overridden", None)
+    assert (status, owner, matched_via) == ("overridden", None, None)
 
 
 def test_rescue_does_not_apply_when_pending_has_no_recorded_target():
-    status, owner = classify(
+    status, owner, matched_via = classify(
         is_on=True,
         confirmed={"context_id": "ctx-confirmed", "owner_id": "automation.a"},
         pending={"context_id": "ctx-pending", "owner_id": "automation.a", "target": None},
@@ -102,17 +107,17 @@ def test_rescue_does_not_apply_when_pending_has_no_recorded_target():
         current_brightness=200,
         current_color_temp_kelvin=3000,
     )
-    assert (status, owner) == ("overridden", None)
+    assert (status, owner, matched_via) == ("overridden", None, None)
 
 
 def test_genuinely_overridden_when_confirmed_exists_and_nothing_matches():
-    status, owner = classify(
+    status, owner, matched_via = classify(
         is_on=True,
         confirmed={"context_id": "ctx-confirmed", "owner_id": "automation.a"},
         pending=None,
         current_context="ctx-someone-else",
     )
-    assert (status, owner) == ("overridden", None)
+    assert (status, owner, matched_via) == ("overridden", None, None)
 
 
 def test_target_matches_values_rgb_variant():
@@ -133,6 +138,20 @@ def test_target_matches_values_rgb_variant():
 def test_target_matches_values_no_target_never_matches():
     assert not target_matches_values(None, 200, 3000, None)
     assert not target_matches_values({}, 200, 3000, None)
+
+
+def test_target_matches_values_recognises_a_mired_equivalent_color_temp():
+    # The live incident this fix closes: 4373K asked for, 4385K reported
+    # back - both floor to mired 228 via HA's own
+    # color_temperature_kelvin_to_mired, so they're the same colour as
+    # far as the device is concerned, even though the Kelvin gap (12)
+    # exceeds the default color_temp_tolerance (10).
+    assert target_matches_values(
+        {"brightness": 255, "color_temp_kelvin": 4373},
+        current_brightness=255,
+        current_color_temp_kelvin=4385,
+        current_rgb_color=None,
+    )
 
 
 def test_is_blocked_force_bypasses_regardless_of_status():
@@ -156,3 +175,23 @@ def test_is_blocked_matched_claim_blocks_only_for_a_different_owner():
     assert is_blocked("controlled", "ours", "ours") is False
     assert is_blocked("controlled", "theirs", "ours") is True
     assert is_blocked("pending", None, "ours") is False  # unowned claim blocks nobody
+
+
+def test_color_temp_matches_within_flat_kelvin_tolerance():
+    # The pre-existing behaviour, unchanged: close enough in plain
+    # Kelvin terms matches regardless of mireds.
+    assert _color_temp_matches(3005, 3000, tolerance_kelvin=10)
+    assert not _color_temp_matches(3050, 3000, tolerance_kelvin=10)
+
+
+def test_color_temp_matches_the_real_live_incident_exactly():
+    # 4373K -> floor(1000000/4373) = mired 228 -> floor(1000000/228) = 4385K.
+    # Confirmed live: HA's own conversion, not a guess.
+    assert _color_temp_matches(4385, 4373, tolerance_kelvin=10)
+
+
+def test_color_temp_matches_rejects_a_genuinely_different_mired_value():
+    # A gap large enough that it's not explained by mired rounding at
+    # all - e.g. brightness 40/color 6000 vs target 3000 from the
+    # override tests above. Neither within tolerance nor mired-equal.
+    assert not _color_temp_matches(6000, 3000, tolerance_kelvin=10)

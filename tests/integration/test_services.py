@@ -189,7 +189,7 @@ async def test_check_ownership_reports_unclaimed_for_a_brand_new_entity(setup_in
         return_response=True,
     )
 
-    assert result["results"]["light.a"] == {"blocked": False, "status": "unclaimed", "owner_id": None}
+    assert result["results"]["light.a"] == {"blocked": False, "status": "unclaimed", "owner_id": None, "matched_via": None}
 
 
 async def test_check_ownership_and_record_ownership_round_trip(setup_integration: HomeAssistant):
@@ -221,7 +221,12 @@ async def test_check_ownership_and_record_ownership_round_trip(setup_integration
         blocking=True,
         return_response=True,
     )
-    assert result["results"]["light.a"] == {"blocked": False, "status": "pending", "owner_id": "automation.test_room"}
+    assert result["results"]["light.a"] == {
+        "blocked": False,
+        "status": "pending",
+        "owner_id": "automation.test_room",
+        "matched_via": "context",
+    }
 
     # Someone else changes it - a different context, different values.
     _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=40, color_temp_kelvin=6000)
@@ -233,7 +238,7 @@ async def test_check_ownership_and_record_ownership_round_trip(setup_integration
         blocking=True,
         return_response=True,
     )
-    assert result["results"]["light.a"] == {"blocked": True, "status": "overridden", "owner_id": None}
+    assert result["results"]["light.a"] == {"blocked": True, "status": "overridden", "owner_id": None, "matched_via": None}
 
     # A *different* owner_id asking about the same still-matching claim
     # correctly sees it as blocked too (it's not theirs, even though
@@ -246,7 +251,12 @@ async def test_check_ownership_and_record_ownership_round_trip(setup_integration
         blocking=True,
         return_response=True,
     )
-    assert result["results"]["light.a"] == {"blocked": True, "status": "pending", "owner_id": "automation.test_room"}
+    assert result["results"]["light.a"] == {
+        "blocked": True,
+        "status": "pending",
+        "owner_id": "automation.test_room",
+        "matched_via": "context",
+    }
 
 
 async def test_check_ownership_force_bypasses_regardless_of_claims(setup_integration: HomeAssistant):
@@ -295,7 +305,7 @@ async def test_check_ownership_off_light_is_never_blocked(setup_integration: Hom
         blocking=True,
         return_response=True,
     )
-    assert result["results"]["light.a"] == {"blocked": False, "status": "off", "owner_id": None}
+    assert result["results"]["light.a"] == {"blocked": False, "status": "off", "owner_id": None, "matched_via": None}
 
 
 async def test_clear_ownership_frees_a_light_stuck_overridden(setup_integration: HomeAssistant):
@@ -339,7 +349,7 @@ async def test_clear_ownership_frees_a_light_stuck_overridden(setup_integration:
         blocking=True,
         return_response=True,
     )
-    assert result["results"]["light.a"] == {"blocked": False, "status": "unclaimed", "owner_id": None}
+    assert result["results"]["light.a"] == {"blocked": False, "status": "unclaimed", "owner_id": None, "matched_via": None}
 
 
 async def test_clear_ownership_is_a_noop_for_an_untracked_entity(setup_integration: HomeAssistant):

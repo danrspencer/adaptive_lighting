@@ -83,6 +83,7 @@ async def test_status_controlled_when_live_context_matches_confirmed_claim(
     record = sensor_entity.extra_state_attributes["entities"]["light.a"]
     assert record["status"] == "controlled"
     assert record["confirmed"]["context_id"] == "ctx-1"
+    assert record["matched_via"] == "context"
 
 
 async def test_status_pending_when_live_context_matches_pending_only(
@@ -95,6 +96,7 @@ async def test_status_pending_when_live_context_matches_pending_only(
     record = sensor_entity.extra_state_attributes["entities"]["light.a"]
     assert record["status"] == "pending"
     assert record["live_context_id"] == "ctx-1"
+    assert record["matched_via"] == "context"
 
 
 async def test_status_overridden_when_live_context_and_value_both_mismatch(
@@ -243,6 +245,7 @@ async def test_status_controlled_when_context_mismatches_but_value_matches_pendi
 
     record = sensor_entity.extra_state_attributes["entities"]["light.a"]
     assert record["status"] == "controlled"
+    assert record["matched_via"] == "value"
 
 
 async def test_status_unavailable_when_the_entity_has_no_live_state(

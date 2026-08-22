@@ -3619,6 +3619,177 @@ update+restart runs; the dashboard-YAML half (section width, grid
   is indistinguishable from correct behaviour on a case that's already
   `None`). Full suite: 185/185.
 
+- **Root cause of the recurring "overridden but genuinely fine" reports
+  finally found - Kelvin/mired unit-conversion rounding, not curve
+  drift - 2026-08-22, same day as `clear_ownership` shipped.** User
+  spotted `light.dining_room_1` showing `overridden` minutes after
+  restart and pushed back hard, correctly, on the first two
+  explanations offered: a "the curve moved on since the frozen
+  `pending` target was recorded" theory didn't survive scrutiny once
+  the user asked the obvious question - a light that isn't being
+  rewritten can't be tracking a moving curve, its value should stay
+  frozen at exactly what it was last told, not drift. That pushback is
+  what led to the real answer, not the first two attempts.
+
+  Traced `light.kitchen_2` through HA's actual logbook
+  (`logbook/get_events` by context_id, the same mechanism the
+  write-tracking card's own "Trace" button uses) rather than continuing
+  to theorise: its `pending` write was a real, logbook-attributed
+  `automation.kitchen_lights` command (target `4373K`); the light's own
+  live context appeared 7 seconds later with **zero logbook
+  attribution** - no automation, no service call, nothing - the
+  signature of the device's own asynchronous confirmation, not a human
+  touch. Root-caused precisely by reading HA core's actual, pinned
+  source (`.venv-integration`), not guessed:
+
+  ```python
+  # homeassistant/util/color.py
+  def color_temperature_kelvin_to_mired(kelvin_temperature): return math.floor(1000000 / kelvin_temperature)
+  def color_temperature_mired_to_kelvin(mired_temperature): return math.floor(1000000 / mired_temperature)
+  ```
+
+  Zigbee bulbs communicate colour temperature in **mireds**
+  (`1,000,000/kelvin`, always a whole number), not Kelvin. HA converts
+  a Kelvin ask to mireds before sending it to the device (lossy
+  `floor`), and converts the device's own reported mireds back to
+  Kelvin for display (lossy again). Ran the real numbers:
+  `floor(1000000/4373) = 228` mireds → `floor(1000000/228) = 4385K` -
+  **exactly** the value observed live, not close, not a coincidence.
+  The bulb did precisely what it was told; `4373` and `4385` are two
+  different Kelvin-space labels for the identical underlying mired
+  value, the way "12 inches" and "1 foot" are the same length. The
+  existing flat `abs(current - target) <= color_temp_tolerance`
+  comparison (10K default) has no notion of this seam, and in this
+  colour range a single mired step is worth ~20K+ - comfortably enough
+  to blow through the tolerance from device rounding alone, with zero
+  drift and zero external touch involved. (`light.dining_room_1`'s own
+  exact numbers didn't cleanly reconstruct against the specific writes
+  visible in its history - plausibly an earlier write outside that
+  visibility window - but the *mechanism*, proven exactly for
+  `kitchen_2`, is more than large enough to explain gaps of this size
+  on its own.)
+
+  Confirmed via direct follow-up questions from the user before any
+  code changed, not assumed: `confirmed`'s own claim already carries
+  `target` (brightness/colour) from whenever it was written -
+  `write_tracking.py`'s promotion logic (`confirmed = old_pending`)
+  carries the whole claim object forward, target included, nothing to
+  fix there. RGB is unaffected by this specific bug - RGB values are
+  sent directly with no lossy Kelvin-style conversion in the middle.
+  The blueprint already passes a fully-qualified `owner_id` (`{{
+  this.entity_id }}`, e.g. `automation.dining_room_lighting`) -
+  confirmed by reading the blueprint file directly, no blueprint change
+  needed for the clickable-owner card feature below.
+
+  Also surfaced, independently, while investigating: `sensor.py`'s
+  status-across-the-house snapshot showed `controlled: 0` out of 57
+  tracked lights at one point, which read as alarming until worked
+  through with the user - `pending` status is *by definition* "the
+  light's live context currently matches exactly what we last wrote",
+  so every `pending` light is already direct proof the context-id match
+  is working correctly; during a continuously-ramping Day phase nearly
+  every light gets rewritten nearly every tick, so there's rarely a
+  quiet window long enough to observe the "independently reconfirmed"
+  `controlled` label before the next write happens. `pending` and
+  `controlled` are both "not blocked" functionally - only `overridden`
+  actually means something went wrong. Not a bug, just a genuinely
+  confusing number to see without this context - worth remembering
+  before treating a low `controlled` count as a symptom on its own.
+
+  **Fix, in two places that both compare a live Kelvin value against a
+  target with a flat tolerance** - `override_protection.target_matches_values()`
+  (the delayed-echo rescue) and `grouping._already_set()` (the "does
+  this light even need a new command this tick" check, run for *every*
+  light, *every* tick - the one that matters more day-to-day, since a
+  light whose rounded value doesn't happen to land within tolerance of
+  a freshly-computed target would get needlessly re-commanded
+  indefinitely, plausibly contributing to the "too many firings"/Zigbee
+  traffic concerns raised earlier this session, not just the
+  override-protection false-positive specifically):
+
+  ```python
+  def _color_temp_matches(current_kelvin, target_kelvin, tolerance_kelvin):
+      if abs(current_kelvin - target_kelvin) <= tolerance_kelvin:
+          return True
+      return _kelvin_to_mired(current_kelvin) == _kelvin_to_mired(target_kelvin)
+  ```
+
+  Deliberately additive, not a replacement - `color_temp_tolerance`
+  keeps its existing meaning and default (10K) unchanged; this just
+  also recognises the device-rounding-identical case as a match, which
+  a bigger flat tolerance couldn't reliably do on its own (a single
+  mired step is ~5K near 2700K but ~20K+ near 4500K - wildly
+  inconsistent across the range this project's curve actually spans).
+
+  **Real design correction, mid-implementation, user-caught**: the
+  first draft *reimplemented* the two-line mired conversion inline
+  rather than importing `homeassistant.util.color`, matching
+  `curve.py`'s own precedent (`kelvin_to_rgb`, independently
+  implemented) and the stated "grouping.py/override_protection.py have
+  no Home Assistant dependency" principle. User pushed back directly:
+  "this code is designed to live in HA, we should use their libraries
+  if available" - and offered the fallback of mocking the function for
+  tests, or just accepting HA as a test dependency, if that's what was
+  blocking it. Verified before deciding, not assumed either way:
+  `homeassistant.util.color` alone is cheap to import (144 modules,
+  ~38ms, nothing from `core`/`config_entries`/`aiohttp` - none of the
+  event-loop/component-loading machinery), and the "these tests run
+  without Home Assistant installed" property the reimplementation was
+  nominally protecting turns out to already be false today regardless -
+  confirmed live by running `pytest tests/test_grouping.py
+  tests/test_override_protection.py` directly and watching it still
+  fail with `No module named 'pytest_homeassistant_custom_component'`,
+  because `pytest`'s own `testpaths = ["tests"]` config collects every
+  `conftest.py` under `tests/` - including `tests/integration/conftest.py`,
+  which requires the real HA test plugin - regardless of which specific
+  file was targeted. So the "no HA dependency" bare-module design for
+  these two files was already not buying the thing it was believed to
+  buy; importing `homeassistant.util.color` directly costs nothing
+  practical in exchange for using the exact, single-source-of-truth
+  conversion HA itself relies on (impossible to drift from real device
+  behaviour if HA's own rounding ever changes). `curve.py`'s
+  `kelvin_to_rgb` precedent doesn't actually generalise here either -
+  it likely has no direct HA equivalent to import in the first place,
+  so it isn't evidence this codebase has a blanket "avoid HA imports"
+  rule.
+
+  `classify()` also gained a third return value, `matched_via` (`"context"`
+  when the live context.id matched a claim directly, `"value"` when the
+  delayed-echo/mired rescue is what actually produced a `pending`/
+  `controlled` status, `null` for every other status) - genuinely new
+  information `status` alone didn't carry, both matched cases reported
+  `"controlled"` identically otherwise. Threaded through every caller:
+  `grouping.py`'s `externally_set()` (unpacks the 3-tuple, doesn't
+  change its own `bool` return), `check_ownership`'s response (`{...,
+  "matched_via": ...}`), and `sensor.py`'s per-entity dict. The
+  **Adaptive Lighting Write Tracking** dashboard card shows this as a
+  small annotation under each status badge ("context matched" /
+  "colour/brightness matched"), with its own tooltip explaining what
+  each means - the user's own ask: "can we update the card so that it
+  shows why we think it's in that state." The Owner column also became
+  a clickable link (reusing the same `hass-more-info` dispatch the
+  light-cell already used) whenever `owner_id` resolves to a real, live
+  entity - falls back to today's plain text otherwise, since
+  `check_ownership`/`record_ownership` accept an arbitrary free-text
+  `owner_id` from callers other than the blueprint.
+
+  Mutation-verified both new behavioural pieces: reverting
+  `_already_set`'s mired-aware comparison back to the plain `abs(...)
+  <= tolerance` check fails exactly `test_a_mired_equivalent_color_temp_is_treated_as_already_set`
+  and no other `test_grouping.py` test; swapping `classify()`'s
+  rescue-branch `matched_via` literal from `"value"` to `"context"`
+  fails exactly the two tests asserting that specific value
+  (`test_context_matches_neither_but_value_matches_pendings_target`,
+  `test_status_controlled_when_context_mismatches_but_value_matches_pendings_target`)
+  and nothing else. Verified the new card behaviour directly in-browser
+  against `dashboard/preview.html` (served over HTTP): the matched-via
+  annotation text/tooltip render correctly per status, the owner cell
+  correctly distinguishes a resolvable entity (clickable, dispatches
+  `hass-more-info` with exactly that entity_id, no double-firing
+  alongside the row's own light-cell click) from an unresolvable
+  free-text owner (plain text, both cases deliberately present in the
+  same preview render). Full suite: 190/190.
+
 ## Testing
 
 `pip install pytest pytest-homeassistant-custom-component && pytest`

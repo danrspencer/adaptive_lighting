@@ -103,6 +103,27 @@ def test_tolerance_is_not_exact_match():
     assert groups2[0].combined == ["light.a"]
 
 
+def test_a_mired_equivalent_color_temp_is_treated_as_already_set():
+    # Real live incident: asked for 4373K, the bulb reports 4385K back -
+    # a 12K gap, past the default 10K color_temp_tolerance, but both
+    # values floor to the identical mired 228 via HA's own
+    # color_temperature_kelvin_to_mired (the bulb's real native unit).
+    # Without accounting for this, the light would get needlessly
+    # re-commanded on every single tick forever, even though it's
+    # already exactly correct.
+    lookup = make_lookup(
+        states={"light.a": {"state": "on", "attributes": {"brightness": 255, "color_temp_kelvin": 4385}}},
+    )
+    groups = build_groups(
+        entities=["light.a"],
+        brightness_multipliers={},
+        sensor_brightness=255,
+        sensor_color_temp_kelvin=4373,
+        lookup=lookup,
+    )
+    assert groups[0].combined == []
+
+
 def test_multiplier_zero_only_targets_reachable_lights_not_already_off():
     lookup = make_lookup(
         states={
