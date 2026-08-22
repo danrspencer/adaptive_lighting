@@ -199,6 +199,27 @@
               },
               pending: null,
             },
+            'light.dining_room_1': {
+              // Legitimately off - turned off by the blueprint's own
+              // motion_off action, a code path outside apply_lighting
+              // whose context write_tracking.py never records. Override
+              // protection is entirely moot for a light that isn't on -
+              // see override_protection.classify()'s own "off" case.
+              status: 'off',
+              live_context_id: '01M0MOTIONOFF00000000001',
+              confirmed: {
+                context_id: '01M0FGWR22K8K1KDE56JJRJ95D',
+                owner_id: 'automation.dining_room_lighting',
+                recorded_at: minutesAgo(18),
+                target: { brightness: 255, color_temp_kelvin: 6153 },
+              },
+              pending: {
+                context_id: '01M0FGWR33K8K1KDE56JJRJ96E',
+                owner_id: 'automation.dining_room_lighting',
+                recorded_at: minutesAgo(13),
+                target: { brightness: 255, color_temp_kelvin: 6134 },
+              },
+            },
           },
         }),
       };

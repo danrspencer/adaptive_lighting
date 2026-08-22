@@ -631,6 +631,42 @@ def test_context_mismatch_is_forgiven_when_live_values_match_pendings_target():
     # next test).
 
 
+def test_context_mismatch_rescue_still_checks_owner_id():
+    # Bundled correctness fix in override_protection.classify(): the
+    # value-rescue used to skip the owner check entirely, so a light
+    # whose live value happened to match a *different* owner's pending
+    # target would incorrectly read as free-to-manage for anyone.
+    # Deliberately asks for a target the light is NOT already at
+    # (unlike the same-target rescue test above) - if the bug were
+    # present, the owner-check-skipping rescue would incorrectly clear
+    # this light for writing; with the fix, it correctly stays
+    # protected (excluded from combined) despite genuinely needing an
+    # update, because that pending claim belongs to a different owner.
+    lookup = make_lookup(
+        states={
+            "light.a": {
+                "state": "on",
+                "attributes": {"brightness": 200, "color_temp_kelvin": 3000},
+                "context_id": "ctx-device-echo-unrelated",
+            }
+        },
+        confirmed_context_ids={"light.a": "ctx-confirmed-stale"},
+        confirmed_owner_ids={"light.a": "ours"},
+        pending_context_ids={"light.a": "ctx-pending-stale"},
+        pending_owner_ids={"light.a": "theirs"},
+        pending_targets={"light.a": {"brightness": 200, "color_temp_kelvin": 3000}},
+    )
+    groups = build_groups(
+        entities=["light.a"],
+        brightness_multipliers={},
+        sensor_brightness=100,
+        sensor_color_temp_kelvin=4500,
+        lookup=lookup,
+        owner_id="ours",
+    )
+    assert groups[0].combined == []
+
+
 def test_context_mismatch_with_stale_target_still_updates_once_the_curve_moves():
     # Same stale-context situation as above, but the current tick wants
     # a genuinely different value than what pending's target recorded -

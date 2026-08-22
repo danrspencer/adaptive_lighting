@@ -4,7 +4,7 @@
 > (in particular, [why the schedule has four named phases](../README.md#why-four-phases-not-a-continuous-curve)
 > rather than a single continuous curve) and how to install it.
 
-Four services, each documented in full in `services.yaml` (visible in Home Assistant's Developer Tools → Actions
+Six services, each documented in full in `services.yaml` (visible in Home Assistant's Developer Tools → Actions
 once installed) — call them directly from your own automations or scripts, no blueprint required.
 
 ## Bring your own sensor
@@ -174,6 +174,36 @@ unavailable/unknown to a real state, it gets the identical snapshot treatment, l
 stuck until whatever caught it at startup happens again. Either way, a plain, non-forced call manages the
 light normally on the very next tick instead of treating the restart itself as an override.
 
+### Using override protection standalone
+
+Everything above is also its own pair of services - `check_ownership` (read-only) and `record_ownership`
+(records a write) - not specific to lights, or to this integration's own `apply_lighting`. Any automation can
+use them directly on its own entities:
+
+```yaml
+action: adaptive_lighting_helpers.check_ownership
+data:
+  entities: [light.kitchen_1]
+  owner_id: "{{ this.entity_id }}"
+response_variable: ownership
+# ownership.results["light.kitchen_1"] -> {"blocked": false, "status": "controlled", "owner_id": "..."}
+```
+
+```yaml
+# After actually issuing your own light.turn_on, so a later check_ownership call recognises it as yours:
+action: adaptive_lighting_helpers.record_ownership
+data:
+  entities: [light.kitchen_1]
+  owner_id: "{{ this.entity_id }}"
+  targets:
+    light.kitchen_1: { brightness: 200, color_temp_kelvin: 3000 }
+```
+
+`apply_lighting`/`compute_lighting_groups` use the exact same underlying logic internally (a direct Python
+call, not a service-to-service round trip) - `check_ownership`'s `status` values are the same ones
+`sensor.adaptive_lighting_write_tracking` shows (see below), and `targets` is the same shape `apply_lighting`
+itself records automatically on every write it makes.
+
 ### Inspecting write-tracking state
 
 `sensor.adaptive_lighting_write_tracking` makes the mechanism above inspectable directly, rather than only
@@ -192,6 +222,10 @@ attribute holds, per light, the raw `confirmed`/`pending` claims plus a computed
   "externally set" for a given caller also depends on `owner_id` (see the numbered check above), which this
   sensor can't evaluate without knowing which `owner_id` would be asking.
 - `unavailable` — the entity currently has no live state to compare against.
+- `off` — the light's live state is `off` (not `unavailable`/`unknown`). Override protection is moot for a
+  light that isn't on (see the `is_state(entity_id, "on")` precondition at the very top of the numbered check
+  above) - it will be freely managed the next time it's turned on, regardless of any `confirmed`/`pending`
+  claim recorded while it was last on.
 
 This entity is entry-scoped, not tied to any one schedule instance (it exists even with zero "Add Sensor"
 instances configured), and deliberately has no device of its own - the write-tracking data it shows isn't

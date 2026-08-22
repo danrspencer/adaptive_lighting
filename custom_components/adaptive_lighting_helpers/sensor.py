@@ -57,7 +57,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DOMAIN
 from .coordinator import ScheduleCoordinator, ScheduleInstance, schedule_instances
-from .grouping import target_matches_values
+from .override_protection import classify
 from .write_tracking import SIGNAL_WRITE_TRACKING_UPDATED, LastWriteTracker
 
 
@@ -212,41 +212,36 @@ class _WriteTrackingSensor(SensorEntity):
             confirmed = record.get("confirmed")
             pending = record.get("pending")
             if state is None or state.state in ("unavailable", "unknown"):
+                # No live state to classify at all - override_protection.classify()
+                # has no equivalent of this case (it only ever sees a real
+                # is_on/off), so it stays this sensor's own first check.
                 status = "unavailable"
-            elif pending is not None and pending["context_id"] == live_context_id:
-                # Our most recent attempt landed - not yet reconfirmed by
-                # a later tick, but not stale either.
-                status = "pending"
-            elif confirmed is not None and confirmed["context_id"] == live_context_id:
-                # Settled: matches the last write some earlier call
-                # actually observed landing.
-                status = "controlled"
-            elif pending is not None and target_matches_values(
-                pending.get("target"),
-                state.attributes.get("brightness"),
-                state.attributes.get("color_temp_kelvin"),
-                state.attributes.get("rgb_color"),
-            ):
-                # Same rescue grouping.py's externally_set() applies:
-                # neither claim's context.id matches, but the light's
-                # current value still matches what our own last attempt
-                # asked for - almost certainly that write's own delayed
-                # confirmation landing under an unrelated context (HA's
-                # Entity._context expires 5s after the service call that
-                # set it), not a genuine external change. Also
-                # "controlled", not a separate status - this light is
-                # not excluded from the next tick either way.
-                status = "controlled"
             else:
-                # Live context matches neither claim, and the value
-                # doesn't match what we last asked for either - something
-                # else has genuinely touched this light. Whether that
-                # counts as "externally set" for a given caller also
-                # depends on owner_id (see grouping.py's externally_set()),
-                # which this view can't show without knowing which
-                # owner_id is asking - shown here as the raw signal
-                # instead.
-                status = "overridden"
+                # Delegates to the exact same classifier grouping.py's
+                # externally_set() uses, rather than a second,
+                # separately-maintained copy of this comparison - that
+                # drift is exactly what let a merely-off light (never
+                # actually protected - see classify()'s own "off" case)
+                # fall through to "overridden" here despite
+                # externally_set() correctly saying "not excluded" for
+                # the same light. See override_protection.py's module
+                # docstring.
+                raw_status, _claim_owner = classify(
+                    state.state == "on",
+                    confirmed,
+                    pending,
+                    live_context_id,
+                    state.attributes.get("brightness"),
+                    state.attributes.get("color_temp_kelvin"),
+                    state.attributes.get("rgb_color"),
+                )
+                # "unclaimed" (no confirmed/pending at all, or only an
+                # unconfirmed first attempt) displays the same as
+                # "controlled" - both mean "nothing to worry about, this
+                # entity isn't excluded from the next tick" from a
+                # diagnostic viewer's perspective; the distinction only
+                # matters to externally_set()'s own owner-conflict logic.
+                status = "controlled" if raw_status == "unclaimed" else raw_status
             entities[entity_id] = {
                 "status": status,
                 "live_context_id": live_context_id,

@@ -175,6 +175,129 @@ async def test_apply_lighting_unknown_sensor_raises(setup_integration: HomeAssis
         )
 
 
+async def test_check_ownership_reports_unclaimed_for_a_brand_new_entity(setup_integration: HomeAssistant):
+    """check_ownership is genuinely standalone - no apply_lighting call,
+    no sensor, just a light and the write-tracking mechanism."""
+    hass = setup_integration
+    _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=100, color_temp_kelvin=3000)
+
+    result = await hass.services.async_call(
+        DOMAIN,
+        "check_ownership",
+        {"entities": ["light.a"], "owner_id": "automation.test_room"},
+        blocking=True,
+        return_response=True,
+    )
+
+    assert result["results"]["light.a"] == {"blocked": False, "status": "unclaimed", "owner_id": None}
+
+
+async def test_check_ownership_and_record_ownership_round_trip(setup_integration: HomeAssistant):
+    """The two services used together, standalone - no apply_lighting
+    involved at all, matching how an independent automation would use
+    this mechanism on its own light.turn_on calls."""
+    hass = setup_integration
+    our_context = Context()
+    _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=100, color_temp_kelvin=3000, context=our_context)
+
+    await hass.services.async_call(
+        DOMAIN,
+        "record_ownership",
+        {"entities": ["light.a"], "owner_id": "automation.test_room", "targets": {"light.a": {"brightness": 100, "color_temp_kelvin": 3000}}},
+        blocking=True,
+        context=our_context,
+    )
+
+    # Immediately after, still under the same context - not blocked, and
+    # attributed to us. "pending" (not "controlled") because this is the
+    # entity's first-ever tracked write: the synthetic first-write
+    # baseline records the pre-write context as `confirmed` too, so both
+    # claims happen to share the same context.id here - pending is
+    # checked first, matching classify()'s own precedence.
+    result = await hass.services.async_call(
+        DOMAIN,
+        "check_ownership",
+        {"entities": ["light.a"], "owner_id": "automation.test_room"},
+        blocking=True,
+        return_response=True,
+    )
+    assert result["results"]["light.a"] == {"blocked": False, "status": "pending", "owner_id": "automation.test_room"}
+
+    # Someone else changes it - a different context, different values.
+    _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=40, color_temp_kelvin=6000)
+
+    result = await hass.services.async_call(
+        DOMAIN,
+        "check_ownership",
+        {"entities": ["light.a"], "owner_id": "automation.test_room"},
+        blocking=True,
+        return_response=True,
+    )
+    assert result["results"]["light.a"] == {"blocked": True, "status": "overridden", "owner_id": None}
+
+    # A *different* owner_id asking about the same still-matching claim
+    # correctly sees it as blocked too (it's not theirs, even though
+    # nothing about the light's context has changed since our own write).
+    _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=100, color_temp_kelvin=3000, context=our_context)
+    result = await hass.services.async_call(
+        DOMAIN,
+        "check_ownership",
+        {"entities": ["light.a"], "owner_id": "automation.other_room"},
+        blocking=True,
+        return_response=True,
+    )
+    assert result["results"]["light.a"] == {"blocked": True, "status": "pending", "owner_id": "automation.test_room"}
+
+
+async def test_check_ownership_force_bypasses_regardless_of_claims(setup_integration: HomeAssistant):
+    hass = setup_integration
+    our_context = Context()
+    _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=100, color_temp_kelvin=3000, context=our_context)
+    await hass.services.async_call(
+        DOMAIN,
+        "record_ownership",
+        {"entities": ["light.a"], "owner_id": "automation.test_room"},
+        blocking=True,
+        context=our_context,
+    )
+    _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=40, color_temp_kelvin=6000)
+
+    result = await hass.services.async_call(
+        DOMAIN,
+        "check_ownership",
+        {"entities": ["light.a"], "owner_id": "automation.other_room", "force": True},
+        blocking=True,
+        return_response=True,
+    )
+    assert result["results"]["light.a"]["blocked"] is False
+
+
+async def test_check_ownership_off_light_is_never_blocked(setup_integration: HomeAssistant):
+    hass = setup_integration
+    our_context = Context()
+    _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=100, color_temp_kelvin=3000, context=our_context)
+    await hass.services.async_call(
+        DOMAIN,
+        "record_ownership",
+        {"entities": ["light.a"], "owner_id": "automation.test_room"},
+        blocking=True,
+        context=our_context,
+    )
+    # Off under a completely different, unrecorded context - exactly the
+    # off-light misclassification found live and fixed structurally via
+    # override_protection.classify()'s own "off" precondition.
+    _set_light(hass, "light.a", "off", context=Context(id="ctx-motion-off"))
+
+    result = await hass.services.async_call(
+        DOMAIN,
+        "check_ownership",
+        {"entities": ["light.a"], "owner_id": "automation.other_room"},
+        blocking=True,
+        return_response=True,
+    )
+    assert result["results"]["light.a"] == {"blocked": False, "status": "off", "owner_id": None}
+
+
 async def test_override_protection_survives_a_real_write_tracking_round_trip(setup_integration: HomeAssistant):
     """End-to-end version of what tests/test_grouping.py already proves
     at the pure-function level - this time through the real

@@ -18,6 +18,19 @@ namespace-loop Jinja.
 from dataclasses import dataclass, field
 from typing import Callable, Optional
 
+try:
+    # Real package context (production HA, tests/integration/) - grouping.py
+    # is imported as custom_components.adaptive_lighting_helpers.grouping.
+    from .override_protection import classify, is_blocked, target_matches_values  # noqa: F401 (re-exported for sensor.py)
+except ImportError:
+    # Bare top-level module context (tests/test_grouping.py, via
+    # tests/conftest.py putting this directory straight on sys.path -
+    # see its own comment for why: fast, HA-independent pure-logic
+    # tests). override_protection.py sits alongside this file, so a
+    # plain top-level import resolves the same way curve.py/scenes.py
+    # already do for their own bare-module test usage.
+    from override_protection import classify, is_blocked, target_matches_values  # noqa: F401
+
 _RGB_COLOR_MODES = {"rgb", "rgbw", "rgbww", "hs", "xy"}
 
 # Home Assistant's own brightness scale. light.turn_on validates with
@@ -176,36 +189,41 @@ class EntityLookup:
         the whole record (both claims) the moment the entity is observed
         going unavailable - by the time it reconnects there's nothing
         left here to compare against at all, so it falls into "no
-        remembered write," not into the lenient-pending case above."""
-        if not self.is_state(entity_id, "on"):
-            return False
-        if force:
-            return False
-        if owner_id is None:
-            return False
+        remembered write," not into the lenient-pending case above.
 
-        confirmed_context = self.confirmed_context_id(entity_id)
-        pending_context = self.pending_context_id(entity_id)
-        if confirmed_context is None and pending_context is None:
-            return False
+        This method is now a thin adapter: the actual decision table
+        lives in override_protection.classify()/is_blocked(), shared
+        with sensor.py's diagnostic status classification (previously a
+        second, separately-maintained copy of this same logic that had
+        quietly drifted - see classify()'s own module for the full
+        story) and with the standalone check_ownership/record_ownership
+        services this same mechanism is also exposed as."""
+        confirmed_ctx = self.confirmed_context_id(entity_id)
+        confirmed = {"context_id": confirmed_ctx, "owner_id": self.confirmed_owner_id(entity_id)} if confirmed_ctx is not None else None
+        pending_ctx = self.pending_context_id(entity_id)
+        pending = (
+            {
+                "context_id": pending_ctx,
+                "owner_id": self.pending_owner_id(entity_id),
+                "target": self.pending_target(entity_id),
+            }
+            if pending_ctx is not None
+            else None
+        )
 
-        current_context = self.context_id(entity_id)
-
-        if pending_context is not None and current_context == pending_context:
-            claim_owner = self.pending_owner_id(entity_id)
-            return claim_owner is not None and claim_owner != owner_id
-
-        if confirmed_context is not None and current_context == confirmed_context:
-            claim_owner = self.confirmed_owner_id(entity_id)
-            return claim_owner is not None and claim_owner != owner_id
-
-        if confirmed_context is None:
-            return False
-
-        if _matches_pending_target(entity_id, self, brightness_tolerance, color_temp_tolerance, rgb_color_tolerance):
-            return False
-
-        return True
+        status, claim_owner = classify(
+            self.is_state(entity_id, "on"),
+            confirmed,
+            pending,
+            self.context_id(entity_id),
+            self.state_attr(entity_id, "brightness"),
+            self.state_attr(entity_id, "color_temp_kelvin"),
+            self.state_attr(entity_id, "rgb_color"),
+            brightness_tolerance,
+            color_temp_tolerance,
+            rgb_color_tolerance,
+        )
+        return is_blocked(status, claim_owner, owner_id, force)
 
     def supports_rgb(self, entity_id: str) -> bool:
         """True if the entity's supported_color_modes includes any mode
@@ -345,68 +363,6 @@ def _brightness_close(entity_id: str, target_brightness: int, lookup: EntityLook
     only one copy of the "how close counts as close enough" check for it."""
     current_brightness = _as_int(lookup.state_attr(entity_id, "brightness"), -999)
     return abs(current_brightness - target_brightness) <= brightness_tolerance
-
-
-def target_matches_values(
-    target: Optional[dict],
-    current_brightness,
-    current_color_temp_kelvin,
-    current_rgb_color,
-    brightness_tolerance: int = 2,
-    color_temp_tolerance: int = 10,
-    rgb_color_tolerance: int = 10,
-) -> bool:
-    """Pure comparison (plain values in, no EntityLookup/entity_id) -
-    shared by externally_set()'s own context-mismatch fallback below and
-    sensor.py's diagnostic status classification, so both agree on what
-    counts as "still matches what we asked for" even though a
-    context.id says otherwise. `target` is a claim's recorded
-    {"brightness": ..., "color_temp_kelvin": ...} or {"brightness": ...,
-    "rgb_color": [...]} - falsy (None, or an entity missing from a
-    targets dict) never matches, same as no claim at all."""
-    if not target:
-        return False
-    target_brightness = target.get("brightness")
-    if target_brightness is None:
-        return False
-    if abs(_as_int(current_brightness, -999) - target_brightness) > brightness_tolerance:
-        return False
-    target_rgb = target.get("rgb_color")
-    if target_rgb is not None:
-        return (
-            isinstance(current_rgb_color, (list, tuple))
-            and len(current_rgb_color) == 3
-            and all(abs(a - b) <= rgb_color_tolerance for a, b in zip(current_rgb_color, target_rgb))
-        )
-    target_color_temp = target.get("color_temp_kelvin")
-    if target_color_temp is None:
-        return False
-    return abs(_as_int(current_color_temp_kelvin, -999) - target_color_temp) <= color_temp_tolerance
-
-
-def _matches_pending_target(
-    entity_id: str,
-    lookup: EntityLookup,
-    brightness_tolerance: int,
-    color_temp_tolerance: int,
-    rgb_color_tolerance: int,
-) -> bool:
-    """True if the entity's current reported values still match what the
-    *pending* claim was actually trying to write - see externally_set()'s
-    own docstring for why this rescues a context-mismatched light rather
-    than treating it as external. A pending claim with no target at all
-    (None - an off-command, or a claim write_tracking only ever
-    *observed* rather than issued, e.g. after a restart or recovery) has
-    nothing to compare against and never matches here."""
-    return target_matches_values(
-        lookup.pending_target(entity_id),
-        lookup.state_attr(entity_id, "brightness"),
-        lookup.state_attr(entity_id, "color_temp_kelvin"),
-        lookup.state_attr(entity_id, "rgb_color"),
-        brightness_tolerance,
-        color_temp_tolerance,
-        rgb_color_tolerance,
-    )
 
 
 def _already_set(

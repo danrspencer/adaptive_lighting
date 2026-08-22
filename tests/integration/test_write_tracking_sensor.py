@@ -126,6 +126,53 @@ async def test_status_overridden_when_live_context_and_value_both_mismatch(
     assert record["status"] == "overridden"
 
 
+async def test_status_off_when_the_light_is_legitimately_off(
+    hass: HomeAssistant, write_tracker: LastWriteTracker, sensor_entity: _WriteTrackingSensor
+):
+    """Mirrors override_protection.classify()'s own precedence - its
+    very first check is is_on, before any context/value comparison, so
+    a light turned off by a code path outside apply_lighting (e.g. the
+    blueprint's own motion_off action, whose context write_tracking.py
+    never records) must never fall through to "overridden" just
+    because that context matches neither claim. Found live, 2026-08-22:
+    a whole room's worth of lights, switched off together under one
+    shared motion_off context, all showed "overridden" while genuinely,
+    correctly off."""
+    _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
+    await write_tracker.async_record(["light.a"], {"light.a": None}, "ctx-1", "automation.room")
+    _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], context=Context(id="ctx-1"))
+    await write_tracker.async_record(
+        ["light.a"],
+        {"light.a": "ctx-1"},
+        "ctx-2",
+        "automation.room",
+        targets={"light.a": {"brightness": 200, "color_temp_kelvin": 3000}},
+    )
+    # A separate code path (not apply_lighting/write_tracker) turns the
+    # light off under its own, never-recorded context - exactly what
+    # the blueprint's motion_off action does.
+    _set_light(hass, "light.a", "off", context=Context(id="ctx-motion-off"))
+
+    record = sensor_entity.extra_state_attributes["entities"]["light.a"]
+    assert record["status"] == "off"
+
+
+async def test_status_off_takes_precedence_over_a_stale_context_match(
+    hass: HomeAssistant, write_tracker: LastWriteTracker, sensor_entity: _WriteTrackingSensor
+):
+    """Branch order, not just presence: a light going off under a
+    context.id that happens to equal a stale claim's own context_id
+    must still read "off", not "pending"/"controlled"."""
+    _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
+    await write_tracker.async_record(["light.a"], {"light.a": None}, "ctx-1", "automation.room")
+    # Off again, deliberately reusing ctx-1 as the off-transition's own
+    # context id.
+    _set_light(hass, "light.a", "off", context=Context(id="ctx-1"))
+
+    record = sensor_entity.extra_state_attributes["entities"]["light.a"]
+    assert record["status"] == "off"
+
+
 async def test_status_controlled_when_context_mismatches_but_value_matches_pendings_target(
     hass: HomeAssistant, write_tracker: LastWriteTracker, sensor_entity: _WriteTrackingSensor
 ):
