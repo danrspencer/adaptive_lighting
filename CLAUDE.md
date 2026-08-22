@@ -3790,6 +3790,20 @@ update+restart runs; the dashboard-YAML half (section width, grid
   free-text owner (plain text, both cases deliberately present in the
   same preview render). Full suite: 190/190.
 
+- **The write-tracking card's "Clear" button lost its confirmation
+  prompt, 2026-08-22, the same day it shipped.** User's own call,
+  verbatim: "we're not performing some horrible unrecoverable action
+  we're letting a light get updated." Correct reframe of what clearing
+  actually is - it discards a diagnostic bookkeeping record, not the
+  light itself, and a fresh claim re-establishes automatically the
+  moment anything next writes to that entity (the very next regular
+  tick, in practice). Unlike this project's other confirmation-worthy
+  actions (none currently exist on this card), there's no real
+  "oops" scenario clearing creates that regular operation wouldn't
+  already fix on its own. Docs updated to match
+  (`docs/HELPERS.md`'s "Using override protection standalone"
+  section).
+
 ## Testing
 
 `pip install pytest pytest-homeassistant-custom-component && pytest`

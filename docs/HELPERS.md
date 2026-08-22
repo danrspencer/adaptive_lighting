@@ -232,8 +232,9 @@ data:
 
 The next write to a cleared entity, from anyone, is treated exactly like a brand-new entity's first write - no
 owner-conflict check is possible until a fresh claim exists to compare against. The **Adaptive Lighting Write
-Tracking** dashboard card exposes this as a "Clear" button on every row (with a confirmation prompt, since it
-does briefly remove override protection for that light).
+Tracking** dashboard card exposes this as a "Clear" button on every row, no confirmation prompt - it's a
+diagnostic bookkeeping entry, not the light itself, and a fresh claim gets re-established the moment anything
+next writes to that entity.
 
 ### Inspecting write-tracking state
 
