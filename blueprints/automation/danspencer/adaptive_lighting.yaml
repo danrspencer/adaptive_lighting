@@ -944,27 +944,50 @@ action:
       # (computed above, from adaptive_sensor's own attributes) are
       # passed as plain values - apply_lighting itself doesn't read any
       # sensor entity, matching compute_lighting_groups exactly.
-      - alias: "Apply adaptive lighting (Adaptive Lighting Helpers)"
-        action: adaptive_lighting_helpers.apply_lighting
-        data:
-          entities: "{{ adaptive_target_entities }}"
-          brightness_multipliers: "{{ brightness_multipliers }}"
-          brightness: "{{ brightness }}"
-          color_temp_kelvin: "{{ color_temp_kelvin }}"
-          rgb_color: "{{ rgb_color }}"
-          transition: "{{ script_transition }}"
-          prefer_rgb_color: "{{ prefer_rgb_color }}"
-          # Identifies this room's automation as the owner of its own
-          # writes (see docs/HELPERS.md's apply_lighting reference) -
-          # without this, every call here would count as the explicit
-          # force/override case and never leave an externally-changed
-          # light alone. `this` is this automation's own state object,
-          # so this.entity_id is stable per room and needs no input.
-          owner_id: "{{ this.entity_id }}"
-          # A manual run (someone hit "Run" on this automation, or
-          # called automation.trigger directly) forces the whole tick
-          # through regardless of override protection - owner_id is
-          # still passed above, so the write is properly attributed and
-          # a later, non-forced tick still recognises it as this
-          # automation's own rather than finding an orphaned record.
-          force: "{{ manual_run }}"
+      # Guarded because brightness/color_temp_kelvin above are plain
+      # state_attr() reads: when Adaptive Lighting Sensor is unavailable
+      # (mid-startup before its first refresh, a failed refresh) or points
+      # at an entity that no longer exists (renamed, deleted), they render
+      # as null - and apply_lighting's own schema requires both, so the
+      # action would fail validation on every single tick, once a minute,
+      # indefinitely. That's the same shape as a real incident where one
+      # room logged 1,900+ identical template errors over 36 hours before
+      # anyone noticed.
+      #
+      # Deliberately guarding this one step rather than condition:, which
+      # would gate the whole tick: motion_off and the self-heal branch
+      # above turn lights *off* and need nothing from the sensor, so
+      # gating the automation would stop a room switching off just
+      # because its sensor was briefly unavailable. Skipping is the right
+      # response here - with no target there is nothing to apply, and
+      # substituting a default would silently drive lights to a made-up
+      # value.
+      - alias: "Apply adaptive lighting, unless the sensor has no target to apply"
+        if:
+          - condition: template
+            value_template: "{{ brightness is not none and color_temp_kelvin is not none }}"
+        then:
+        - alias: "Apply adaptive lighting (Adaptive Lighting Helpers)"
+          action: adaptive_lighting_helpers.apply_lighting
+          data:
+            entities: "{{ adaptive_target_entities }}"
+            brightness_multipliers: "{{ brightness_multipliers }}"
+            brightness: "{{ brightness }}"
+            color_temp_kelvin: "{{ color_temp_kelvin }}"
+            rgb_color: "{{ rgb_color }}"
+            transition: "{{ script_transition }}"
+            prefer_rgb_color: "{{ prefer_rgb_color }}"
+            # Identifies this room's automation as the owner of its own
+            # writes (see docs/HELPERS.md's apply_lighting reference) -
+            # without this, every call here would count as the explicit
+            # force/override case and never leave an externally-changed
+            # light alone. `this` is this automation's own state object,
+            # so this.entity_id is stable per room and needs no input.
+            owner_id: "{{ this.entity_id }}"
+            # A manual run (someone hit "Run" on this automation, or
+            # called automation.trigger directly) forces the whole tick
+            # through regardless of override protection - owner_id is
+            # still passed above, so the write is properly attributed and
+            # a later, non-forced tick still recognises it as this
+            # automation's own rather than finding an orphaned record.
+            force: "{{ manual_run }}"

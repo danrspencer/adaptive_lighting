@@ -186,6 +186,38 @@ def expected_lingering_timers():
 class TestAdaptiveScheduleAndTransitions:
     """docs/BLUEPRINT.md#brightness--colour-temperature-schedule"""
 
+    async def test_an_unavailable_sensor_skips_the_tick_instead_of_erroring(self, hass, apply_lighting_calls):
+        """brightness/color_temp_kelvin are plain state_attr() reads, and
+        apply_lighting requires both - so an unavailable sensor (mid-startup,
+        a failed refresh) or one pointed at a renamed/deleted entity used to
+        fail schema validation on every single tick, once a minute,
+        indefinitely. Same shape as the live incident where one room logged
+        1,900+ identical template errors over 36 hours unnoticed. Skipping is
+        correct: with no target there is nothing to apply."""
+        _light(hass, "light.a", "on", brightness=190, color_temp_kelvin=4000)
+        hass.states.async_set("sensor.test_adaptive", "unavailable", {})
+        await hass.async_block_till_done()
+        await _setup_room_automation(hass, room_target={"entity_id": "light.a"})
+
+        async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=1))
+        await hass.async_block_till_done()
+
+        assert apply_lighting_calls == []
+
+    async def test_a_sensor_pointed_at_a_nonexistent_entity_skips_the_tick(self, hass, apply_lighting_calls):
+        """The renamed/deleted-entity half of the same guard - state_attr()
+        on an entity that isn't there returns None just the same."""
+        _light(hass, "light.a", "on", brightness=190, color_temp_kelvin=4000)
+        await hass.async_block_till_done()
+        await _setup_room_automation(
+            hass, room_target={"entity_id": "light.a"}, adaptive_sensor="sensor.does_not_exist"
+        )
+
+        async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=1))
+        await hass.async_block_till_done()
+
+        assert apply_lighting_calls == []
+
     async def test_periodic_adaptive_tick_updates_an_already_on_light(self, hass, apply_lighting_calls):
         _light(hass, "light.a", "on", brightness=190, color_temp_kelvin=4000)
         await hass.async_block_till_done()
