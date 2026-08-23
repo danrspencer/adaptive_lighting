@@ -232,30 +232,6 @@
                 target: { brightness: 255, color_temp_kelvin: 6134 },
               },
             },
-            'light.extension_right_3': {
-              // The grace-period rescue, 2026-08-23: a mass simultaneous
-              // phase-transition write (a whole room at once) means some
-              // devices' real round-trip confirmations genuinely haven't
-              // landed by the next tick - neither context nor value match
-              // yet, but the write is too recent to conclude "overridden".
-              // See override_protection.PENDING_GRACE_SECONDS.
-              status: 'pending',
-              owner_id: 'automation.kitchen_lights',
-              matched_via: 'grace',
-              live_context_id: '01M0STALEHEARTBEAT000001',
-              confirmed: {
-                context_id: '01M0OLDNIGHTPHASE0000001',
-                owner_id: 'automation.kitchen_lights',
-                recorded_at: minutesAgo(320),
-                target: { brightness: 50, color_temp_kelvin: 2700 },
-              },
-              pending: {
-                context_id: '01M0DAYPHASETRANSITION01',
-                owner_id: 'automation.kitchen_lights',
-                recorded_at: minutesAgo(1),
-                target: { brightness: 255, color_temp_kelvin: 6667 },
-              },
-            },
           },
         }),
       };

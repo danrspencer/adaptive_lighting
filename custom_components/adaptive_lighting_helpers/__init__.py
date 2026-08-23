@@ -64,7 +64,6 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
 from homeassistant.helpers.typing import ConfigType
-from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
 from .coordinator import CURVE_KEYS, ScheduleCoordinator, schedule_instances
@@ -215,8 +214,6 @@ def _build_lookup(hass: HomeAssistant, tracker: LastWriteTracker) -> EntityLooku
         pending_context_id=tracker.pending_context_id,
         pending_owner_id=tracker.pending_owner_id,
         pending_target=tracker.pending_target,
-        pending_recorded_at=tracker.pending_recorded_at,
-        now=dt_util.utcnow,
     )
 
 
@@ -580,9 +577,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "status" is one of "off", "unclaimed", "pending", "controlled",
         "overridden" (see override_protection.classify()'s own
         docstring); "owner_id" is whichever claim's owner matched, or
-        null if none did; "matched_via" is "context", "value", or
-        "grace" for a "pending"/"controlled" status (null otherwise) -
-        see services.yaml for field docs.
+        null if none did; "matched_via" is "context" or "value" for a
+        "pending"/"controlled" status (null otherwise) - see
+        services.yaml for field docs.
         """
         owner_id = call.data.get("owner_id")
         force = call.data["force"]
@@ -604,7 +601,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                     "context_id": pending_ctx,
                     "owner_id": write_tracker.pending_owner_id(entity_id),
                     "target": write_tracker.pending_target(entity_id),
-                    "recorded_at": write_tracker.pending_recorded_at(entity_id),
                 }
                 if pending_ctx is not None
                 else None
@@ -620,7 +616,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 brightness_tolerance,
                 color_temp_tolerance,
                 rgb_color_tolerance,
-                now=dt_util.utcnow(),
             )
             results[entity_id] = {
                 "blocked": is_blocked(status, claim_owner, owner_id, force),

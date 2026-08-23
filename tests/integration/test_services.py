@@ -29,7 +29,6 @@ from homeassistant.util import dt as dt_util
 
 from custom_components.adaptive_lighting_helpers import _build_lookup, async_setup_entry
 from custom_components.adaptive_lighting_helpers.grouping import build_groups
-from custom_components.adaptive_lighting_helpers.override_protection import PENDING_GRACE_SECONDS
 from custom_components.adaptive_lighting_helpers.write_tracking import STALE_RECORD_MAX_AGE_DAYS, LastWriteTracker
 
 DOMAIN = "adaptive_lighting_helpers"
@@ -250,70 +249,63 @@ async def test_check_ownership_and_record_ownership_round_trip(setup_integration
     our_context = Context()
     _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=100, color_temp_kelvin=3000, context=our_context)
 
-    with freeze_time(dt_util.utcnow()) as frozen:
-        await hass.services.async_call(
-            DOMAIN,
-            "record_ownership",
-            {"entities": ["light.a"], "owner_id": "automation.test_room", "targets": {"light.a": {"brightness": 100, "color_temp_kelvin": 3000}}},
-            blocking=True,
-            context=our_context,
-        )
+    await hass.services.async_call(
+        DOMAIN,
+        "record_ownership",
+        {"entities": ["light.a"], "owner_id": "automation.test_room", "targets": {"light.a": {"brightness": 100, "color_temp_kelvin": 3000}}},
+        blocking=True,
+        context=our_context,
+    )
 
-        # Immediately after, still under the same context - not blocked, and
-        # attributed to us. "pending" (not "controlled") because this is the
-        # entity's first-ever tracked write: the synthetic first-write
-        # baseline records the pre-write context as `confirmed` too, so both
-        # claims happen to share the same context.id here - pending is
-        # checked first, matching classify()'s own precedence.
-        result = await hass.services.async_call(
-            DOMAIN,
-            "check_ownership",
-            {"entities": ["light.a"], "owner_id": "automation.test_room"},
-            blocking=True,
-            return_response=True,
-        )
-        assert result["results"]["light.a"] == {
-            "blocked": False,
-            "status": "pending",
-            "owner_id": "automation.test_room",
-            "matched_via": "context",
-        }
+    # Immediately after, still under the same context - not blocked, and
+    # attributed to us. "pending" (not "controlled") because this is the
+    # entity's first-ever tracked write: the synthetic first-write
+    # baseline records the pre-write context as `confirmed` too, so both
+    # claims happen to share the same context.id here - pending is
+    # checked first, matching classify()'s own precedence.
+    result = await hass.services.async_call(
+        DOMAIN,
+        "check_ownership",
+        {"entities": ["light.a"], "owner_id": "automation.test_room"},
+        blocking=True,
+        return_response=True,
+    )
+    assert result["results"]["light.a"] == {
+        "blocked": False,
+        "status": "pending",
+        "owner_id": "automation.test_room",
+        "matched_via": "context",
+    }
 
-        # Someone else changes it - a different context, different values.
-        _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=40, color_temp_kelvin=6000)
+    # Someone else changes it - a different context, different values.
+    _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=40, color_temp_kelvin=6000)
 
-        # Past the pending-grace-period window (see override_protection.py's
-        # PENDING_GRACE_SECONDS) - otherwise this mismatch reads as "still
-        # in flight" rather than "overridden", exactly like a genuine
-        # device round-trip would for the first couple of minutes.
-        frozen.move_to(dt_util.utcnow() + timedelta(seconds=PENDING_GRACE_SECONDS + 1))
+    result = await hass.services.async_call(
+        DOMAIN,
+        "check_ownership",
+        {"entities": ["light.a"], "owner_id": "automation.test_room"},
+        blocking=True,
+        return_response=True,
+    )
+    assert result["results"]["light.a"] == {"blocked": True, "status": "overridden", "owner_id": None, "matched_via": None}
 
-        result = await hass.services.async_call(
-            DOMAIN,
-            "check_ownership",
-            {"entities": ["light.a"], "owner_id": "automation.test_room"},
-            blocking=True,
-            return_response=True,
-        )
-        assert result["results"]["light.a"] == {"blocked": True, "status": "overridden", "owner_id": None, "matched_via": None}
-
-        # A *different* owner_id asking about the same still-matching claim
-        # correctly sees it as blocked too (it's not theirs, even though
-        # nothing about the light's context has changed since our own write).
-        _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=100, color_temp_kelvin=3000, context=our_context)
-        result = await hass.services.async_call(
-            DOMAIN,
-            "check_ownership",
-            {"entities": ["light.a"], "owner_id": "automation.other_room"},
-            blocking=True,
-            return_response=True,
-        )
-        assert result["results"]["light.a"] == {
-            "blocked": True,
-            "status": "pending",
-            "owner_id": "automation.test_room",
-            "matched_via": "context",
-        }
+    # A *different* owner_id asking about the same still-matching claim
+    # correctly sees it as blocked too (it's not theirs, even though
+    # nothing about the light's context has changed since our own write).
+    _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=100, color_temp_kelvin=3000, context=our_context)
+    result = await hass.services.async_call(
+        DOMAIN,
+        "check_ownership",
+        {"entities": ["light.a"], "owner_id": "automation.other_room"},
+        blocking=True,
+        return_response=True,
+    )
+    assert result["results"]["light.a"] == {
+        "blocked": True,
+        "status": "pending",
+        "owner_id": "automation.test_room",
+        "matched_via": "context",
+    }
 
 
 async def test_check_ownership_force_bypasses_regardless_of_claims(setup_integration: HomeAssistant):
@@ -377,39 +369,36 @@ async def test_clear_ownership_frees_a_light_stuck_overridden(setup_integration:
     hass = setup_integration
     our_context = Context()
     _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=100, color_temp_kelvin=3000, context=our_context)
-    with freeze_time(dt_util.utcnow()) as frozen:
-        await hass.services.async_call(
-            DOMAIN,
-            "record_ownership",
-            {"entities": ["light.a"], "owner_id": "automation.test_room"},
-            blocking=True,
-            context=our_context,
-        )
-        # A genuinely different value under a genuinely different context -
-        # the delayed-echo rescue can't save this one either, so it reads as
-        # overridden and would stay excluded from every future write.
-        _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=40, color_temp_kelvin=6000)
-        # Past the pending-grace-period window - see PENDING_GRACE_SECONDS.
-        frozen.move_to(dt_util.utcnow() + timedelta(seconds=PENDING_GRACE_SECONDS + 1))
-        result = await hass.services.async_call(
-            DOMAIN,
-            "check_ownership",
-            {"entities": ["light.a"], "owner_id": "automation.test_room"},
-            blocking=True,
-            return_response=True,
-        )
-        assert result["results"]["light.a"]["status"] == "overridden"
+    await hass.services.async_call(
+        DOMAIN,
+        "record_ownership",
+        {"entities": ["light.a"], "owner_id": "automation.test_room"},
+        blocking=True,
+        context=our_context,
+    )
+    # A genuinely different value under a genuinely different context -
+    # the delayed-echo rescue can't save this one either, so it reads as
+    # overridden and would stay excluded from every future write.
+    _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=40, color_temp_kelvin=6000)
+    result = await hass.services.async_call(
+        DOMAIN,
+        "check_ownership",
+        {"entities": ["light.a"], "owner_id": "automation.test_room"},
+        blocking=True,
+        return_response=True,
+    )
+    assert result["results"]["light.a"]["status"] == "overridden"
 
-        await hass.services.async_call(DOMAIN, "clear_ownership", {"entities": ["light.a"]}, blocking=True)
+    await hass.services.async_call(DOMAIN, "clear_ownership", {"entities": ["light.a"]}, blocking=True)
 
-        result = await hass.services.async_call(
-            DOMAIN,
-            "check_ownership",
-            {"entities": ["light.a"], "owner_id": "automation.test_room"},
-            blocking=True,
-            return_response=True,
-        )
-        assert result["results"]["light.a"] == {"blocked": False, "status": "unclaimed", "owner_id": None, "matched_via": None}
+    result = await hass.services.async_call(
+        DOMAIN,
+        "check_ownership",
+        {"entities": ["light.a"], "owner_id": "automation.test_room"},
+        blocking=True,
+        return_response=True,
+    )
+    assert result["results"]["light.a"] == {"blocked": False, "status": "unclaimed", "owner_id": None, "matched_via": None}
 
 
 async def test_clear_ownership_is_a_noop_for_an_untracked_entity(setup_integration: HomeAssistant):
@@ -441,66 +430,62 @@ async def test_override_protection_survives_a_real_write_tracking_round_trip(set
     turn_on_calls = async_mock_service(hass, "light", "turn_on")
     _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
 
-    with freeze_time(dt_util.utcnow()) as frozen:
-        our_context = Context()
-        await hass.services.async_call(
-            DOMAIN,
-            "apply_lighting",
-            {
-                "entities": ["light.a"],
-                "brightness": 180,
-                "color_temp_kelvin": 3200,
-                "transition": 2,
-                "owner_id": "automation.test_room",
-            },
-            blocking=True,
-            context=our_context,
-        )
-        assert len(turn_on_calls) == 1
+    our_context = Context()
+    await hass.services.async_call(
+        DOMAIN,
+        "apply_lighting",
+        {
+            "entities": ["light.a"],
+            "brightness": 180,
+            "color_temp_kelvin": 3200,
+            "transition": 2,
+            "owner_id": "automation.test_room",
+        },
+        blocking=True,
+        context=our_context,
+    )
+    assert len(turn_on_calls) == 1
 
-        # Reflect our own write back into state (async_mock_service doesn't
-        # do this for us) with the exact context apply_lighting issued it
-        # under - matching what write_tracker.async_record just persisted.
-        _set_light(
-            hass,
-            "light.a",
-            "on",
-            supported_color_modes=["color_temp"],
-            brightness=180,
-            color_temp_kelvin=3200,
-            context=our_context,
-        )
+    # Reflect our own write back into state (async_mock_service doesn't
+    # do this for us) with the exact context apply_lighting issued it
+    # under - matching what write_tracker.async_record just persisted.
+    _set_light(
+        hass,
+        "light.a",
+        "on",
+        supported_color_modes=["color_temp"],
+        brightness=180,
+        color_temp_kelvin=3200,
+        context=our_context,
+    )
 
-        # Someone else changes it - a different context, simulating a wall
-        # switch or another automation.
-        _set_light(
-            hass,
-            "light.a",
-            "on",
-            supported_color_modes=["color_temp"],
-            brightness=90,
-            color_temp_kelvin=3200,
-        )
+    # Someone else changes it - a different context, simulating a wall
+    # switch or another automation.
+    _set_light(
+        hass,
+        "light.a",
+        "on",
+        supported_color_modes=["color_temp"],
+        brightness=90,
+        color_temp_kelvin=3200,
+    )
 
-        # Past the pending-grace-period window - see PENDING_GRACE_SECONDS.
-        frozen.move_to(dt_util.utcnow() + timedelta(seconds=PENDING_GRACE_SECONDS + 1))
+    await hass.services.async_call(
+        DOMAIN,
+        "apply_lighting",
+        {
+            "entities": ["light.a"],
+            "brightness": 180,
+            "color_temp_kelvin": 3200,
+            "transition": 2,
+            "owner_id": "automation.test_room",
+        },
+        blocking=True,
+    )
 
-        await hass.services.async_call(
-            DOMAIN,
-            "apply_lighting",
-            {
-                "entities": ["light.a"],
-                "brightness": 180,
-                "color_temp_kelvin": 3200,
-                "transition": 2,
-                "owner_id": "automation.test_room",
-            },
-            blocking=True,
-        )
-
-        # Still just the one call from before - the second, non-forced call
-        # correctly left the externally-changed light alone.
-        assert len(turn_on_calls) == 1
+    # Still just the one call from before - the second, non-forced call
+    # correctly left the externally-changed light alone.
+    assert len(turn_on_calls) == 1
 
 
 async def test_a_devices_own_delayed_echo_does_not_permanently_lock_the_light_out(setup_integration: HomeAssistant):
@@ -625,107 +610,6 @@ async def test_a_devices_own_delayed_echo_does_not_permanently_lock_the_light_ou
         blocking=True,
     )
     assert len(turn_on_calls) == 3
-
-
-async def test_a_still_in_flight_write_is_retried_within_grace_but_excluded_once_stale(
-    setup_integration: HomeAssistant,
-):
-    """Live incident, 2026-08-23: a Night->Day phase transition writes a
-    whole room's lights at once. On the very next tick, before every
-    device's real round-trip has landed, some report back under a fresh
-    context (their own periodic/heartbeat report, or a partial update -
-    something genuinely new happened, just not confirmation of *this*
-    write) whose *values* also don't yet match what was just asked for -
-    so the existing delayed-echo value-rescue (matched_via="value") can't
-    save it either. Before this fix, that read as "overridden" one tick
-    too early, and because an excluded entity is never written again
-    (see write_tracking.py's async_record docstring), a single early
-    misjudgment turned into a permanent lockout. This proves the fix
-    end-to-end through the real service and the real _build_lookup()
-    wiring (not just classify() in isolation, already covered by
-    tests/test_override_protection.py) - and that the leniency is
-    correctly time-bounded, not unconditional."""
-    hass = setup_integration
-    turn_on_calls = async_mock_service(hass, "light", "turn_on")
-    _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
-
-    # A settled prior write, so a real `confirmed` baseline exists to
-    # promote from - matching a light that's been correctly, stably lit
-    # for a while before the transition (see the delayed-echo test above
-    # for why a single first-write baseline wouldn't isolate this case).
-    first_context = Context()
-    await hass.services.async_call(
-        DOMAIN,
-        "apply_lighting",
-        {
-            "entities": ["light.a"],
-            "brightness": 50,
-            "color_temp_kelvin": 2700,
-            "transition": 1,
-            "owner_id": "automation.room",
-        },
-        blocking=True,
-        context=first_context,
-    )
-    _set_light(
-        hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=50, color_temp_kelvin=2700,
-        context=first_context,
-    )
-
-    with freeze_time(dt_util.utcnow()) as frozen:
-        # The phase transition - a genuinely different target.
-        await hass.services.async_call(
-            DOMAIN,
-            "apply_lighting",
-            {
-                "entities": ["light.a"],
-                "brightness": 255,
-                "color_temp_kelvin": 6667,
-                "transition": 1,
-                "owner_id": "automation.room",
-            },
-            blocking=True,
-        )
-        assert len(turn_on_calls) == 2
-
-        # A fresh context arrives (something genuinely happened - not our
-        # write's own echo), but the reported values are neither the old
-        # settled ones nor the new target - a partial/in-progress report,
-        # not yet confirming anything either way.
-        _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=150, color_temp_kelvin=4000)
-
-        # Within the grace period: still retried (owner_id="automation.room"
-        # matches, not blocked), not excluded as "overridden".
-        result = await hass.services.async_call(
-            DOMAIN,
-            "compute_lighting_groups",
-            {
-                "entities": ["light.a"],
-                "brightness": 255,
-                "color_temp_kelvin": 6667,
-                "owner_id": "automation.room",
-            },
-            blocking=True,
-            return_response=True,
-        )
-        assert "light.a" in result["groups"][0]["combined"]
-
-        # Past the grace period, with still no genuine confirmation of
-        # either the old or the new target - now correctly excluded.
-        frozen.move_to(dt_util.utcnow() + timedelta(seconds=PENDING_GRACE_SECONDS + 1))
-        result = await hass.services.async_call(
-            DOMAIN,
-            "compute_lighting_groups",
-            {
-                "entities": ["light.a"],
-                "brightness": 255,
-                "color_temp_kelvin": 6667,
-                "owner_id": "automation.room",
-            },
-            blocking=True,
-            return_response=True,
-        )
-        assert "light.a" not in result["groups"][0]["combined"]
 
 
 async def test_a_dropped_first_write_self_heals_on_the_next_tick_with_no_interference(
@@ -1264,73 +1148,65 @@ async def test_recovered_light_is_freed_while_an_unrelated_override_stays_protec
     for entity_id in ("light.recovering", "light.sibling"):
         _set_light(hass, entity_id, "off", supported_color_modes=["color_temp"])
 
-    with freeze_time(dt_util.utcnow()) as frozen:
-        our_context = Context()
-        await hass.services.async_call(
-            DOMAIN,
-            "apply_lighting",
-            {
-                "entities": ["light.recovering", "light.sibling"],
-                "brightness": 180,
-                "color_temp_kelvin": 3200,
-                "transition": 2,
-                "owner_id": "automation.room",
-            },
-            blocking=True,
+    our_context = Context()
+    await hass.services.async_call(
+        DOMAIN,
+        "apply_lighting",
+        {
+            "entities": ["light.recovering", "light.sibling"],
+            "brightness": 180,
+            "color_temp_kelvin": 3200,
+            "transition": 2,
+            "owner_id": "automation.room",
+        },
+        blocking=True,
+        context=our_context,
+    )
+    assert len(turn_on_calls) == 1
+
+    # Reflect the write into state under our own context, matching what
+    # write_tracker just recorded for both lights.
+    for entity_id in ("light.recovering", "light.sibling"):
+        _set_light(
+            hass,
+            entity_id,
+            "on",
+            supported_color_modes=["color_temp"],
+            brightness=180,
+            color_temp_kelvin=3200,
             context=our_context,
         )
-        assert len(turn_on_calls) == 1
 
-        # Reflect the write into state under our own context, matching what
-        # write_tracker just recorded for both lights.
-        for entity_id in ("light.recovering", "light.sibling"):
-            _set_light(
-                hass,
-                entity_id,
-                "on",
-                supported_color_modes=["color_temp"],
-                brightness=180,
-                color_temp_kelvin=3200,
-                context=our_context,
-            )
+    # light.recovering drops off the network and reconnects - its own
+    # state report, an unrelated fresh context.
+    _set_light(hass, "light.recovering", "unavailable", supported_color_modes=["color_temp"])
+    await hass.async_block_till_done()
+    _set_light(
+        hass, "light.recovering", "on", supported_color_modes=["color_temp"], brightness=90, color_temp_kelvin=3200
+    )
 
-        # light.recovering drops off the network and reconnects - its own
-        # state report, an unrelated fresh context.
-        _set_light(hass, "light.recovering", "unavailable", supported_color_modes=["color_temp"])
-        await hass.async_block_till_done()
-        _set_light(
-            hass, "light.recovering", "on", supported_color_modes=["color_temp"], brightness=90, color_temp_kelvin=3200
-        )
+    # light.sibling never went unavailable - someone just changed it
+    # directly (a wall switch, another automation).
+    _set_light(
+        hass, "light.sibling", "on", supported_color_modes=["color_temp"], brightness=90, color_temp_kelvin=3200
+    )
+    await hass.async_block_till_done()
 
-        # light.sibling never went unavailable - someone just changed it
-        # directly (a wall switch, another automation).
-        _set_light(
-            hass, "light.sibling", "on", supported_color_modes=["color_temp"], brightness=90, color_temp_kelvin=3200
-        )
-        await hass.async_block_till_done()
-
-        # Past the pending-grace-period window - see PENDING_GRACE_SECONDS.
-        # Doesn't affect light.recovering: its record was wiped outright by
-        # the clear-on-unavailable listener, so it's "unclaimed" regardless
-        # of timing - only light.sibling's mismatch depends on the grace
-        # period having elapsed.
-        frozen.move_to(dt_util.utcnow() + timedelta(seconds=PENDING_GRACE_SECONDS + 1))
-
-        result = await hass.services.async_call(
-            DOMAIN,
-            "compute_lighting_groups",
-            {
-                "entities": ["light.recovering", "light.sibling"],
-                "brightness": 180,
-                "color_temp_kelvin": 3200,
-                "owner_id": "automation.room",
-            },
-            blocking=True,
-            return_response=True,
-        )
-        combined = result["groups"][0]["combined"]
-        assert "light.recovering" in combined
-        assert "light.sibling" not in combined
+    result = await hass.services.async_call(
+        DOMAIN,
+        "compute_lighting_groups",
+        {
+            "entities": ["light.recovering", "light.sibling"],
+            "brightness": 180,
+            "color_temp_kelvin": 3200,
+            "owner_id": "automation.room",
+        },
+        blocking=True,
+        return_response=True,
+    )
+    combined = result["groups"][0]["combined"]
+    assert "light.recovering" in combined
+    assert "light.sibling" not in combined
 
 
 async def test_a_restart_style_unavailable_blip_does_not_clear_an_existing_record(
@@ -1355,60 +1231,56 @@ async def test_a_restart_style_unavailable_blip_does_not_clear_an_existing_recor
     turn_on_calls = async_mock_service(hass, "light", "turn_on")
 
     _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
-    with freeze_time(dt_util.utcnow()) as frozen:
-        our_context = Context()
-        await hass.services.async_call(
-            DOMAIN,
-            "apply_lighting",
-            {
-                "entities": ["light.a"],
-                "brightness": 180,
-                "color_temp_kelvin": 3200,
-                "transition": 2,
-                "owner_id": "automation.room",
-            },
-            blocking=True,
-            context=our_context,
-        )
-        assert len(turn_on_calls) == 1
-        _set_light(
-            hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=180, color_temp_kelvin=3200,
-            context=our_context,
-        )
-        await hass.async_block_till_done()
+    our_context = Context()
+    await hass.services.async_call(
+        DOMAIN,
+        "apply_lighting",
+        {
+            "entities": ["light.a"],
+            "brightness": 180,
+            "color_temp_kelvin": 3200,
+            "transition": 2,
+            "owner_id": "automation.room",
+        },
+        blocking=True,
+        context=our_context,
+    )
+    assert len(turn_on_calls) == 1
+    _set_light(
+        hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=180, color_temp_kelvin=3200,
+        context=our_context,
+    )
+    await hass.async_block_till_done()
 
-        # Simulate the entity's in-memory state vanishing and reappearing
-        # the way it does across a real HA restart - the write_tracker's
-        # own record survives (Store-persisted, untouched by hass.states),
-        # but the state machine has no history for this entity in the new
-        # process, so its first event has old_state=None, same as this.
-        hass.states.async_remove("light.a")
-        await hass.async_block_till_done()
-        _set_light(hass, "light.a", "unavailable", supported_color_modes=["color_temp"])
-        await hass.async_block_till_done()
-        _set_light(
-            hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=180, color_temp_kelvin=3200,
-            context=our_context,
-        )
-        await hass.async_block_till_done()
+    # Simulate the entity's in-memory state vanishing and reappearing
+    # the way it does across a real HA restart - the write_tracker's
+    # own record survives (Store-persisted, untouched by hass.states),
+    # but the state machine has no history for this entity in the new
+    # process, so its first event has old_state=None, same as this.
+    hass.states.async_remove("light.a")
+    await hass.async_block_till_done()
+    _set_light(hass, "light.a", "unavailable", supported_color_modes=["color_temp"])
+    await hass.async_block_till_done()
+    _set_light(
+        hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=180, color_temp_kelvin=3200,
+        context=our_context,
+    )
+    await hass.async_block_till_done()
 
-        # Someone changes it by hand - a genuinely different context.
-        _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=90, color_temp_kelvin=3200)
-        await hass.async_block_till_done()
+    # Someone changes it by hand - a genuinely different context.
+    _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=90, color_temp_kelvin=3200)
+    await hass.async_block_till_done()
 
-        # Past the pending-grace-period window - see PENDING_GRACE_SECONDS.
-        frozen.move_to(dt_util.utcnow() + timedelta(seconds=PENDING_GRACE_SECONDS + 1))
-
-        result = await hass.services.async_call(
-            DOMAIN,
-            "compute_lighting_groups",
-            {
-                "entities": ["light.a"],
-                "brightness": 180,
-                "color_temp_kelvin": 3200,
-                "owner_id": "automation.room",
-            },
-            blocking=True,
-            return_response=True,
-        )
-        assert "light.a" not in result["groups"][0]["combined"]
+    result = await hass.services.async_call(
+        DOMAIN,
+        "compute_lighting_groups",
+        {
+            "entities": ["light.a"],
+            "brightness": 180,
+            "color_temp_kelvin": 3200,
+            "owner_id": "automation.room",
+        },
+        blocking=True,
+        return_response=True,
+    )
+    assert "light.a" not in result["groups"][0]["combined"]

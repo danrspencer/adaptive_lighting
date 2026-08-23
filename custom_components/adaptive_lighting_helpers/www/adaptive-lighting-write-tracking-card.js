@@ -61,7 +61,6 @@ const STATUS_TOOLTIP = {
 const MATCHED_VIA_LABEL = {
   context: 'context matched',
   value: 'colour/brightness matched',
-  grace: 'recent write, not yet confirmed',
 };
 
 const MATCHED_VIA_TOOLTIP = {
@@ -69,9 +68,6 @@ const MATCHED_VIA_TOOLTIP = {
   value: "The light's reported context.id doesn't match anything we recorded, but its current brightness/colour " +
     'still matches exactly what we last asked for - almost certainly the device\'s own delayed confirmation ' +
     "landing under a new context (Home Assistant only reuses our context.id for up to 5 seconds), not a real touch.",
-  grace: "Neither the context nor the brightness/colour match yet, but this write was only issued moments ago - " +
-    "a real device round-trip (especially during a big simultaneous batch, like a phase transition) can " +
-    "plausibly still be in flight. Treated as still ours for a couple of minutes before concluding overridden.",
 };
 
 // Kept in the same rough "most interesting first" order a user
