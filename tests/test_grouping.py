@@ -5,6 +5,8 @@ groupings) - the Python and the Jinja it replaced agree on every case
 here.
 """
 
+import pytest
+
 from grouping import MAX_BRIGHTNESS, build_groups
 from fakes import make_lookup
 
@@ -176,30 +178,29 @@ def test_distinct_multipliers_form_separate_groups():
     assert by_multiplier[0.1].combined == ["light.b"]
 
 
-def test_multiplier_floors_at_one_never_accidentally_off():
-    lookup = make_lookup(states={"light.dim": {"state": "off", "attributes": {}}})
+@pytest.mark.parametrize(
+    ("multiplier", "sensor_brightness", "expected"),
+    [(0.001, 10, 1), (1.5, 200, MAX_BRIGHTNESS), (0.5, 200, 100)],
+    ids=[
+        # Floored at 1 so a tiny multiplier dims rather than silently
+        # switching the light off - 0 is how you say "off", explicitly.
+        "floors at 1, never accidentally off",
+        # Capped so a template can just say 1.5 without knowing what the
+        # curve is currently at.
+        "caps at MAX_BRIGHTNESS",
+        "scales in between",
+    ],
+)
+def test_multiplier_arithmetic(multiplier, sensor_brightness, expected):
+    lookup = make_lookup(states={"light.a": {"state": "off", "attributes": {}}})
     groups = build_groups(
-        entities=["light.dim"],
-        brightness_multipliers={"light.dim": 0.001},
-        sensor_brightness=10,
+        entities=["light.a"],
+        brightness_multipliers={"light.a": multiplier},
+        sensor_brightness=sensor_brightness,
         sensor_color_temp_kelvin=3000,
         lookup=lookup,
     )
-    assert groups[0].brightness == 1
-
-
-def test_multiplier_caps_at_max_brightness():
-    """A multiplier above 1 means "as bright as it goes", so a template
-    can just say 1.5 without knowing what the curve is currently at."""
-    lookup = make_lookup(states={"light.bright": {"state": "off", "attributes": {}}})
-    groups = build_groups(
-        entities=["light.bright"],
-        brightness_multipliers={"light.bright": 1.5},
-        sensor_brightness=200,
-        sensor_color_temp_kelvin=3000,
-        lookup=lookup,
-    )
-    assert groups[0].brightness == MAX_BRIGHTNESS
+    assert groups[0].brightness == expected
 
 
 def test_a_light_already_at_max_is_not_recommanded_when_the_multiplier_overshoots():
@@ -248,7 +249,23 @@ def test_a_light_already_at_max_is_not_recommanded_when_the_multiplier_overshoot
 # right after this section for that.
 
 
-def test_externally_set_light_is_not_recommanded_even_when_mismatched():
+# --- EntityLookup.externally_set(): the adapter, not the decision table ---
+#
+# The decision table itself lives in override_protection.classify()/
+# is_blocked() and is exercised directly in tests/test_override_protection.py,
+# which is where cases about *what a claim means* belong. Re-walking that
+# table through build_groups() costs ~25 lines per case to assert one
+# boolean and proves nothing extra.
+#
+# What can only be tested here is the wiring: that externally_set() builds
+# both claim dicts with every field classify() reads, and that build_groups()
+# then drops an excluded entity from every bucket. That wiring has its own
+# failure mode - it shipped once with the `confirmed` dict missing `target`
+# and `secondary_context_id`, which left two correct fixes silently inert in
+# production while every pure test still passed.
+
+
+def test_an_externally_set_light_is_excluded_from_the_update_group():
     lookup = make_lookup(
         states={
             "light.a": {
@@ -269,13 +286,11 @@ def test_externally_set_light_is_not_recommanded_even_when_mismatched():
         owner_id="ours",
     )
     assert groups[0].combined == []
-    assert groups[0].two_step == []
 
 
-def test_externally_set_light_is_protected_from_being_turned_off_too():
-    # brightness_multiplier says this light should be off, but something
-    # else set it on since our last write - that choice wins, it isn't
-    # forced off
+def test_an_externally_set_light_is_excluded_from_the_off_group_too():
+    # The multiplier says this light should be off, but something else set
+    # it on since our last write - that choice wins, it isn't forced off.
     lookup = make_lookup(
         states={"light.a": {"state": "on", "attributes": {}, "context_id": "ctx-someone-else"}},
         confirmed_context_ids={"light.a": "ctx-ours"},
@@ -292,407 +307,136 @@ def test_externally_set_light_is_protected_from_being_turned_off_too():
     assert groups[0].needing_off == []
 
 
-def test_no_write_record_is_not_treated_as_externally_set():
-    # Same mismatched state as the protected case above, but we've never
-    # recorded a write for this entity at all (a brand new entity, or
-    # the very first tick before anything's been recorded - also what a
-    # HA restart looks like before write_tracking.py's persisted store
-    # reloads) - this light gets corrected normally rather than getting
-    # stuck unmanaged forever, even though a real owner_id was given.
-    lookup = make_lookup(
-        states={
-            "light.a": {
-                "state": "on",
-                "attributes": {"brightness": 40, "color_temp_kelvin": 6000},
-                "context_id": "ctx-whatever",
-            }
-        }
-    )
-    groups = build_groups(
-        entities=["light.a"],
-        brightness_multipliers={},
-        sensor_brightness=200,
-        sensor_color_temp_kelvin=3000,
-        lookup=lookup,
-        owner_id="ours",
-    )
-    assert groups[0].combined == ["light.a"]
+# Every field classify() reads off a claim, checked once per claim, via a
+# case whose outcome flips if that field never makes it out of the adapter.
+# The light sits at 200/3000 while the target is 100/5000, so it always
+# needs a write unless override protection excludes it.
+_CLAIM_FIELD_CASES = [
+    (
+        "confirmed.target",
+        dict(
+            confirmed_context_ids={"light.a": "ctx-c"},
+            confirmed_owner_ids={"light.a": "ours"},
+            confirmed_targets={"light.a": {"brightness": 200, "color_temp_kelvin": 3000}},
+        ),
+        "ctx-unrelated",
+        ["light.a"],
+    ),
+    (
+        "pending.target",
+        dict(
+            confirmed_context_ids={"light.a": "ctx-c"},
+            confirmed_owner_ids={"light.a": "ours"},
+            pending_context_ids={"light.a": "ctx-p"},
+            pending_owner_ids={"light.a": "ours"},
+            pending_targets={"light.a": {"brightness": 200, "color_temp_kelvin": 3000}},
+        ),
+        "ctx-unrelated",
+        ["light.a"],
+    ),
+    (
+        "confirmed.secondary_context_id",
+        dict(
+            confirmed_context_ids={"light.a": "ctx-c"},
+            confirmed_owner_ids={"light.a": "ours"},
+            confirmed_secondary_context_ids={"light.a": "ctx-c-brightness-step"},
+        ),
+        "ctx-c-brightness-step",
+        ["light.a"],
+    ),
+    (
+        "pending.secondary_context_id",
+        dict(
+            confirmed_context_ids={"light.a": "ctx-c"},
+            confirmed_owner_ids={"light.a": "ours"},
+            pending_context_ids={"light.a": "ctx-p"},
+            pending_owner_ids={"light.a": "ours"},
+            pending_secondary_context_ids={"light.a": "ctx-p-brightness-step"},
+        ),
+        "ctx-p-brightness-step",
+        ["light.a"],
+    ),
+    (
+        "confirmed.owner_id",
+        dict(
+            confirmed_context_ids={"light.a": "ctx-c"},
+            confirmed_owner_ids={"light.a": "someone-else"},
+        ),
+        "ctx-c",
+        [],
+    ),
+    (
+        "pending.owner_id",
+        dict(
+            confirmed_context_ids={"light.a": "ctx-c"},
+            confirmed_owner_ids={"light.a": "ours"},
+            pending_context_ids={"light.a": "ctx-p"},
+            pending_owner_ids={"light.a": "someone-else"},
+        ),
+        "ctx-p",
+        [],
+    ),
+]
 
 
-def test_our_own_last_write_is_not_treated_as_externally_set():
-    # The light's current context.id matches what we last wrote it with,
-    # under the same owner_id we're calling with now - nothing has
-    # touched it since our own last apply_lighting call, so it's still
-    # ours to manage normally.
-    lookup = make_lookup(
-        states={
-            "light.a": {
-                "state": "on",
-                "attributes": {"brightness": 40, "color_temp_kelvin": 6000},
-                "context_id": "ctx-ours",
-            }
-        },
-        confirmed_context_ids={"light.a": "ctx-ours"},
-        confirmed_owner_ids={"light.a": "ours"},
-    )
-    groups = build_groups(
-        entities=["light.a"],
-        brightness_multipliers={},
-        sensor_brightness=200,
-        sensor_color_temp_kelvin=3000,
-        lookup=lookup,
-        owner_id="ours",
-    )
-    assert groups[0].combined == ["light.a"]
-
-
-def test_different_owner_id_is_treated_as_externally_set_even_with_matching_context():
-    # Nothing has touched the light since the recorded write (context.id
-    # still matches), but that write was made under a *different*
-    # owner_id (e.g. a different room's automation) - from this caller's
-    # perspective that's still someone else's write, not mine.
-    lookup = make_lookup(
-        states={
-            "light.a": {
-                "state": "on",
-                "attributes": {"brightness": 40, "color_temp_kelvin": 6000},
-                "context_id": "ctx-shared",
-            }
-        },
-        confirmed_context_ids={"light.a": "ctx-shared"},
-        confirmed_owner_ids={"light.a": "other_automation"},
-    )
-    groups = build_groups(
-        entities=["light.a"],
-        brightness_multipliers={},
-        sensor_brightness=200,
-        sensor_color_temp_kelvin=3000,
-        lookup=lookup,
-        owner_id="ours",
-    )
-    assert groups[0].combined == []
-
-
-def test_no_owner_id_forces_past_the_check():
-    # Omitting owner_id entirely is the explicit force/override path -
-    # the light is written regardless of what last touched it, even
-    # though there's a recorded write from a mismatched context under a
-    # different owner_id right here.
-    lookup = make_lookup(
-        states={
-            "light.a": {
-                "state": "on",
-                "attributes": {"brightness": 40, "color_temp_kelvin": 6000},
-                "context_id": "ctx-someone-else",
-            }
-        },
-        confirmed_context_ids={"light.a": "ctx-ours"},
-        confirmed_owner_ids={"light.a": "ours"},
-    )
-    groups = build_groups(
-        entities=["light.a"],
-        brightness_multipliers={},
-        sensor_brightness=200,
-        sensor_color_temp_kelvin=3000,
-        lookup=lookup,
-    )
-    assert groups[0].combined == ["light.a"]
-
-
-def test_force_true_bypasses_the_check_even_with_a_matching_owner_id_given():
-    # force=True bypasses the check outright, regardless of owner_id and
-    # regardless of how mismatched the recorded context/owner are.
-    lookup = make_lookup(
-        states={
-            "light.a": {
-                "state": "on",
-                "attributes": {"brightness": 40, "color_temp_kelvin": 6000},
-                "context_id": "ctx-someone-else",
-            }
-        },
-        confirmed_context_ids={"light.a": "ctx-ours"},
-        confirmed_owner_ids={"light.a": "someone_else"},
-    )
-    groups = build_groups(
-        entities=["light.a"],
-        brightness_multipliers={},
-        sensor_brightness=200,
-        sensor_color_temp_kelvin=3000,
-        lookup=lookup,
-        owner_id="ours",
-        force=True,
-    )
-    assert groups[0].combined == ["light.a"]
-
-
-def test_a_write_recorded_with_no_owner_id_does_not_block_a_later_owner_id_check():
-    # A write recorded with no owner_id at all (the caller omitted it, or
-    # used force without passing one) doesn't count against anyone later
-    # - there was no claim to conflict with. This is what makes force
-    # actually useful: force a write through *with* an owner_id, and a
-    # later non-forced call under that same owner_id still needs this
-    # fallback for the case where an *earlier* write (before force
-    # existed, or from an anonymous caller) left no owner on record.
-    lookup = make_lookup(
-        states={
-            "light.a": {
-                "state": "on",
-                "attributes": {"brightness": 40, "color_temp_kelvin": 6000},
-                "context_id": "ctx-forced",
-            }
-        },
-        confirmed_context_ids={"light.a": "ctx-forced"},
-        # No confirmed_owner_ids entry for light.a - the earlier write
-        # that produced ctx-forced was made with no owner_id at all.
-    )
-    groups = build_groups(
-        entities=["light.a"],
-        brightness_multipliers={},
-        sensor_brightness=200,
-        sensor_color_temp_kelvin=3000,
-        lookup=lookup,
-        owner_id="ours",
-    )
-    assert groups[0].combined == ["light.a"]
-
-
-def test_force_write_is_recognised_by_a_later_non_forced_call_with_the_same_owner_id():
-    # The actual bug this design fixes: force a write through *with* an
-    # owner_id, and a later, non-forced call under that same owner_id
-    # (context unchanged since) must still recognise it as its own -
-    # not find an orphaned record and treat it as external.
+@pytest.mark.parametrize(
+    ("claim_kwargs", "live_context", "expected"),
+    [case[1:] for case in _CLAIM_FIELD_CASES],
+    ids=[case[0] for case in _CLAIM_FIELD_CASES],
+)
+def test_the_adapter_passes_every_claim_field_classify_reads(claim_kwargs, live_context, expected):
     lookup = make_lookup(
         states={
             "light.a": {
                 "state": "on",
                 "attributes": {"brightness": 200, "color_temp_kelvin": 3000},
-                "context_id": "ctx-forced-write",
+                "context_id": live_context,
             }
         },
-        confirmed_context_ids={"light.a": "ctx-forced-write"},
-        confirmed_owner_ids={"light.a": "ours"},
-    )
-    groups = build_groups(
-        entities=["light.a"],
-        brightness_multipliers={},
-        sensor_brightness=200,
-        sensor_color_temp_kelvin=3000,
-        lookup=lookup,
-        owner_id="ours",
-    )
-    # Already at target and recognised as our own write - correctly
-    # left alone by the *tolerance* check, not the override check.
-    assert groups[0].combined == []
-    lookup_mismatched = make_lookup(
-        states={
-            "light.a": {
-                "state": "on",
-                "attributes": {"brightness": 40, "color_temp_kelvin": 6000},
-                "context_id": "ctx-forced-write",
-            }
-        },
-        confirmed_context_ids={"light.a": "ctx-forced-write"},
-        confirmed_owner_ids={"light.a": "ours"},
-    )
-    groups_mismatched = build_groups(
-        entities=["light.a"],
-        brightness_multipliers={},
-        sensor_brightness=200,
-        sensor_color_temp_kelvin=3000,
-        lookup=lookup_mismatched,
-        owner_id="ours",
-    )
-    assert groups_mismatched[0].combined == ["light.a"]
-
-
-def test_turning_the_light_off_ends_the_protection():
-    # Same mismatched context.id as the protected case, but the light is
-    # now off - there's nothing to protect, and a later "on" is a fresh
-    # decision
-    lookup = make_lookup(
-        states={"light.a": {"state": "off", "attributes": {}, "context_id": "ctx-someone-else"}},
-        confirmed_context_ids={"light.a": "ctx-ours"},
-        confirmed_owner_ids={"light.a": "ours"},
-    )
-    groups = build_groups(
-        entities=["light.a"],
-        brightness_multipliers={},
-        sensor_brightness=200,
-        sensor_color_temp_kelvin=3000,
-        lookup=lookup,
-        owner_id="ours",
-    )
-    assert groups[0].combined == ["light.a"]
-
-
-# Confirmed vs pending: which of the two claims the live context.id
-# matches, and what that implies, given a specific {confirmed, pending}
-# snapshot. The *dynamic* promotion behaviour (how a snapshot like this
-# actually comes to exist over a sequence of real writes) is exercised
-# separately in tests/integration/test_services.py against a real Store.
-
-
-def test_matching_pending_is_recognised_as_ours_even_with_a_different_confirmed():
-    # The most recent write landed (context matches pending) - ours,
-    # regardless of what confirmed still says from before it.
-    lookup = make_lookup(
-        states={
-            "light.a": {
-                "state": "on",
-                "attributes": {"brightness": 40, "color_temp_kelvin": 6000},
-                "context_id": "ctx-pending",
-            }
-        },
-        confirmed_context_ids={"light.a": "ctx-confirmed"},
-        confirmed_owner_ids={"light.a": "ours"},
-        pending_context_ids={"light.a": "ctx-pending"},
-        pending_owner_ids={"light.a": "ours"},
-    )
-    groups = build_groups(
-        entities=["light.a"],
-        brightness_multipliers={},
-        sensor_brightness=200,
-        sensor_color_temp_kelvin=3000,
-        lookup=lookup,
-        owner_id="ours",
-    )
-    assert groups[0].combined == ["light.a"]
-
-
-def test_matching_confirmed_survives_any_number_of_stale_pending_attempts():
-    # Live context is still the OLD confirmed value - pending never
-    # landed (could be one dropped attempt or a dozen; the check itself
-    # can't tell the difference, and doesn't need to). Still ours.
-    lookup = make_lookup(
-        states={
-            "light.a": {
-                "state": "on",
-                "attributes": {"brightness": 40, "color_temp_kelvin": 6000},
-                "context_id": "ctx-confirmed",
-            }
-        },
-        confirmed_context_ids={"light.a": "ctx-confirmed"},
-        confirmed_owner_ids={"light.a": "ours"},
-        pending_context_ids={"light.a": "ctx-pending-attempt-47"},
-        pending_owner_ids={"light.a": "ours"},
-    )
-    groups = build_groups(
-        entities=["light.a"],
-        brightness_multipliers={},
-        sensor_brightness=200,
-        sensor_color_temp_kelvin=3000,
-        lookup=lookup,
-        owner_id="ours",
-    )
-    assert groups[0].combined == ["light.a"]
-
-
-def test_matching_neither_confirmed_nor_pending_is_externally_set():
-    # A confirmed baseline exists, but live context matches neither it
-    # nor the outstanding pending attempt - something genuinely
-    # different has touched this light.
-    lookup = make_lookup(
-        states={
-            "light.a": {
-                "state": "on",
-                "attributes": {"brightness": 40, "color_temp_kelvin": 6000},
-                "context_id": "ctx-someone-else",
-            }
-        },
-        confirmed_context_ids={"light.a": "ctx-confirmed"},
-        confirmed_owner_ids={"light.a": "ours"},
-        pending_context_ids={"light.a": "ctx-pending"},
-        pending_owner_ids={"light.a": "ours"},
-    )
-    groups = build_groups(
-        entities=["light.a"],
-        brightness_multipliers={},
-        sensor_brightness=200,
-        sensor_color_temp_kelvin=3000,
-        lookup=lookup,
-        owner_id="ours",
-    )
-    assert groups[0].combined == []
-
-
-def test_context_mismatch_is_forgiven_when_live_values_match_pendings_target():
-    # Neither confirmed nor pending's context.id matches live - but the
-    # light's current brightness/color_temp are exactly what pending's
-    # own recorded target asked for. This is what a device's real
-    # confirmation looks like when it lands more than 5 seconds after
-    # the service call (HA's own Entity._context expiry) rather than a
-    # genuine external touch - see externally_set()'s docstring.
-    lookup = make_lookup(
-        states={
-            "light.a": {
-                "state": "on",
-                "attributes": {"brightness": 200, "color_temp_kelvin": 3000},
-                "context_id": "ctx-device-echo-unrelated",
-            }
-        },
-        confirmed_context_ids={"light.a": "ctx-confirmed-stale"},
-        confirmed_owner_ids={"light.a": "ours"},
-        pending_context_ids={"light.a": "ctx-pending-stale"},
-        pending_owner_ids={"light.a": "ours"},
-        pending_targets={"light.a": {"brightness": 200, "color_temp_kelvin": 3000}},
-    )
-    groups = build_groups(
-        entities=["light.a"],
-        brightness_multipliers={},
-        sensor_brightness=200,
-        sensor_color_temp_kelvin=3000,
-        lookup=lookup,
-        owner_id="ours",
-    )
-    assert groups[0].combined == []
-    assert groups[0].needing_off == []
-    # Not externally set, but already at target - no write needed either
-    # way. Confirmed via a *different* target: if the curve had moved on
-    # since, the light would come back into combined normally (see the
-    # next test).
-
-
-def test_context_mismatch_rescue_still_checks_owner_id():
-    # Bundled correctness fix in override_protection.classify(): the
-    # value-rescue used to skip the owner check entirely, so a light
-    # whose live value happened to match a *different* owner's pending
-    # target would incorrectly read as free-to-manage for anyone.
-    # Deliberately asks for a target the light is NOT already at
-    # (unlike the same-target rescue test above) - if the bug were
-    # present, the owner-check-skipping rescue would incorrectly clear
-    # this light for writing; with the fix, it correctly stays
-    # protected (excluded from combined) despite genuinely needing an
-    # update, because that pending claim belongs to a different owner.
-    lookup = make_lookup(
-        states={
-            "light.a": {
-                "state": "on",
-                "attributes": {"brightness": 200, "color_temp_kelvin": 3000},
-                "context_id": "ctx-device-echo-unrelated",
-            }
-        },
-        confirmed_context_ids={"light.a": "ctx-confirmed-stale"},
-        confirmed_owner_ids={"light.a": "ours"},
-        pending_context_ids={"light.a": "ctx-pending-stale"},
-        pending_owner_ids={"light.a": "theirs"},
-        pending_targets={"light.a": {"brightness": 200, "color_temp_kelvin": 3000}},
+        **claim_kwargs,
     )
     groups = build_groups(
         entities=["light.a"],
         brightness_multipliers={},
         sensor_brightness=100,
-        sensor_color_temp_kelvin=4500,
+        sensor_color_temp_kelvin=5000,
         lookup=lookup,
         owner_id="ours",
     )
-    assert groups[0].combined == []
+    assert groups[0].combined == expected
+
+
+@pytest.mark.parametrize(("owner_id", "force"), [(None, False), ("ours", True)], ids=["no owner_id", "force"])
+def test_the_adapter_passes_the_bypasses_through(owner_id, force):
+    lookup = make_lookup(
+        states={
+            "light.a": {
+                "state": "on",
+                "attributes": {"brightness": 40, "color_temp_kelvin": 6000},
+                "context_id": "ctx-someone-else",
+            }
+        },
+        confirmed_context_ids={"light.a": "ctx-ours"},
+        confirmed_owner_ids={"light.a": "someone-else"},
+    )
+    groups = build_groups(
+        entities=["light.a"],
+        brightness_multipliers={},
+        sensor_brightness=200,
+        sensor_color_temp_kelvin=3000,
+        lookup=lookup,
+        owner_id=owner_id,
+        force=force,
+    )
+    assert groups[0].combined == ["light.a"]
 
 
 def test_context_mismatch_with_stale_target_still_updates_once_the_curve_moves():
-    # Same stale-context situation as above, but the current tick wants
-    # a genuinely different value than what pending's target recorded -
-    # proving the self-heal only rescues the light from being marked
-    # external, it doesn't also freeze it at a stale value forever.
+    # The value-rescue must not become a permanent free pass: once the
+    # curve has moved past what the claim recorded, the light needs a
+    # write again. Reverting the rescue to an unconditional "external"
+    # is invisible without this - the light is excluded either way when
+    # it is still sitting on the recorded target.
     lookup = make_lookup(
         states={
             "light.a": {
@@ -710,193 +454,13 @@ def test_context_mismatch_with_stale_target_still_updates_once_the_curve_moves()
     groups = build_groups(
         entities=["light.a"],
         brightness_multipliers={},
-        sensor_brightness=100,  # the curve has moved on since that echo
-        sensor_color_temp_kelvin=4500,
+        sensor_brightness=120,
+        sensor_color_temp_kelvin=4200,
         lookup=lookup,
         owner_id="ours",
     )
     assert groups[0].combined == ["light.a"]
 
-
-def test_context_mismatch_is_still_external_when_live_values_dont_match_pendings_target():
-    # Same stale-context shape, but the light's current values don't
-    # match what pending asked for either - a real external change, not
-    # an echo of our own write. Must stay excluded.
-    lookup = make_lookup(
-        states={
-            "light.a": {
-                "state": "on",
-                "attributes": {"brightness": 40, "color_temp_kelvin": 6000},
-                "context_id": "ctx-someone-else",
-            }
-        },
-        confirmed_context_ids={"light.a": "ctx-confirmed-stale"},
-        confirmed_owner_ids={"light.a": "ours"},
-        pending_context_ids={"light.a": "ctx-pending-stale"},
-        pending_owner_ids={"light.a": "ours"},
-        pending_targets={"light.a": {"brightness": 200, "color_temp_kelvin": 3000}},
-    )
-    groups = build_groups(
-        entities=["light.a"],
-        brightness_multipliers={},
-        sensor_brightness=200,
-        sensor_color_temp_kelvin=3000,
-        lookup=lookup,
-        owner_id="ours",
-    )
-    assert groups[0].combined == []
-    assert groups[0].needing_off == []
-
-
-def test_context_mismatch_with_no_recorded_target_is_still_external():
-    # A pending claim exists but carries no target at all (None) - e.g.
-    # data from before this field existed, or a claim written_tracking
-    # only ever observed rather than issued (a restart/recovery
-    # snapshot). Nothing to compare against, so this must fall through
-    # to genuinely external rather than being silently forgiven.
-    lookup = make_lookup(
-        states={
-            "light.a": {
-                "state": "on",
-                "attributes": {"brightness": 200, "color_temp_kelvin": 3000},
-                "context_id": "ctx-someone-else",
-            }
-        },
-        confirmed_context_ids={"light.a": "ctx-confirmed-stale"},
-        confirmed_owner_ids={"light.a": "ours"},
-        pending_context_ids={"light.a": "ctx-pending-stale"},
-        pending_owner_ids={"light.a": "ours"},
-        # No pending_targets entry for light.a.
-    )
-    groups = build_groups(
-        entities=["light.a"],
-        brightness_multipliers={},
-        sensor_brightness=200,
-        sensor_color_temp_kelvin=3000,
-        lookup=lookup,
-        owner_id="ours",
-    )
-    assert groups[0].combined == []
-
-
-def test_context_mismatch_is_forgiven_when_live_rgb_matches_pendings_target():
-    # RGB equivalent of test_context_mismatch_is_forgiven_when_live_values_match_pendings_target.
-    lookup = make_lookup(
-        states={
-            "light.a": {
-                "state": "on",
-                "attributes": {
-                    "brightness": 200,
-                    "rgb_color": [255, 120, 10],
-                    "supported_color_modes": ["rgb"],
-                },
-                "context_id": "ctx-device-echo-unrelated",
-            }
-        },
-        confirmed_context_ids={"light.a": "ctx-confirmed-stale"},
-        confirmed_owner_ids={"light.a": "ours"},
-        pending_context_ids={"light.a": "ctx-pending-stale"},
-        pending_owner_ids={"light.a": "ours"},
-        pending_targets={"light.a": {"brightness": 200, "rgb_color": [255, 120, 10]}},
-    )
-    groups = build_groups(
-        entities=["light.a"],
-        brightness_multipliers={},
-        sensor_brightness=200,
-        sensor_color_temp_kelvin=3000,
-        lookup=lookup,
-        owner_id="ours",
-        prefer_rgb_color=True,
-        rgb_color=(255, 120, 10),
-    )
-    assert groups[0].combined_rgb == []
-
-
-def test_an_unconfirmed_first_attempt_that_does_not_match_is_not_yet_external():
-    # No confirmed claim has ever been established for this light - only
-    # a single pending attempt, which doesn't match live state either
-    # (it may have landed after we last checked, or may never land at
-    # all; there's no way to tell yet). Deliberately lenient rather than
-    # locking this light out over one write of unknown fate - the one
-    # gap the two-claim design doesn't close, documented on
-    # externally_set() and write_tracking.py's module docstring.
-    lookup = make_lookup(
-        states={
-            "light.a": {
-                "state": "on",
-                "attributes": {"brightness": 40, "color_temp_kelvin": 6000},
-                "context_id": "ctx-whatever-this-light-had-before",
-            }
-        },
-        pending_context_ids={"light.a": "ctx-first-attempt"},
-        pending_owner_ids={"light.a": "ours"},
-    )
-    groups = build_groups(
-        entities=["light.a"],
-        brightness_multipliers={},
-        sensor_brightness=200,
-        sensor_color_temp_kelvin=3000,
-        lookup=lookup,
-        owner_id="ours",
-    )
-    assert groups[0].combined == ["light.a"]
-
-
-def test_a_different_owners_pending_write_is_still_externally_set():
-    # The owner check applies on a pending match exactly as it does on a
-    # confirmed one - a different caller's in-flight write is still not
-    # mine, even though nothing about the light's context is stale.
-    lookup = make_lookup(
-        states={
-            "light.a": {
-                "state": "on",
-                "attributes": {"brightness": 40, "color_temp_kelvin": 6000},
-                "context_id": "ctx-pending",
-            }
-        },
-        pending_context_ids={"light.a": "ctx-pending"},
-        pending_owner_ids={"light.a": "other_automation"},
-    )
-    groups = build_groups(
-        entities=["light.a"],
-        brightness_multipliers={},
-        sensor_brightness=200,
-        sensor_color_temp_kelvin=3000,
-        lookup=lookup,
-        owner_id="ours",
-    )
-    assert groups[0].combined == []
-
-
-def test_a_pending_write_with_no_owner_id_does_not_block_a_later_owner_id_check():
-    # Mirrors test_a_write_recorded_with_no_owner_id_does_not_block_a_later_owner_id_check
-    # above, but for a match on pending rather than confirmed.
-    lookup = make_lookup(
-        states={
-            "light.a": {
-                "state": "on",
-                "attributes": {"brightness": 40, "color_temp_kelvin": 6000},
-                "context_id": "ctx-pending",
-            }
-        },
-        pending_context_ids={"light.a": "ctx-pending"},
-        # No pending_owner_ids entry - that attempt was made with no owner_id at all.
-    )
-    groups = build_groups(
-        entities=["light.a"],
-        brightness_multipliers={},
-        sensor_brightness=200,
-        sensor_color_temp_kelvin=3000,
-        lookup=lookup,
-        owner_id="ours",
-    )
-    assert groups[0].combined == ["light.a"]
-
-
-# RGB colour mode: prefer_rgb_color + rgb_color route RGB-capable
-# entities into combined_rgb/two_step_rgb instead of combined/two_step,
-# targeting rgb_color instead of sensor_color_temp_kelvin. Entities
-# without RGB support are unaffected either way.
 
 
 def test_supports_rgb_checks_supported_color_modes():
@@ -1085,134 +649,46 @@ def test_rgb_external_override_and_reachability_still_apply():
     assert groups[0].two_step_rgb == []
 
 
-def test_a_bulb_at_its_own_ceiling_is_already_set_for_a_higher_target():
-    """Live incident: light.dining_room_1/light.kitchen_1 report
-    max_color_temp_kelvin 6535 while the default Morning target is 6667,
-    held flat for the whole phase. HA does not clamp color_temp_kelvin for
-    a natively COLOR_TEMP light (confirmed against light/__init__.py) - the
-    device does - so the bulb sits at 6535 forever while the un-clamped
-    comparison never matches: 132K apart, and not mired-equivalent either
-    (floor(1e6/6535)=153 vs floor(1e6/6667)=149). Result was a re-command
-    on every single tick, indefinitely, for the whole phase."""
-    lookup = make_lookup(
-        states={
-            "light.a": {
-                "state": "on",
-                "attributes": {
-                    "brightness": 255,
-                    "color_temp_kelvin": 6535,
-                    "min_color_temp_kelvin": 2000,
-                    "max_color_temp_kelvin": 6535,
-                },
-            }
-        },
-    )
+# Colour-temperature targets are compared against the raw target OR the
+# target narrowed to the bulb's own advertised range - never only the
+# narrowed one. Both halves matter and each has a live incident behind it:
+#
+#  - Un-narrowed only: light.dining_room_1/kitchen_1 advertise max 6535 K
+#    against a flat 6667 K Morning target. 132 K apart and not
+#    mired-equivalent (floor(1e6/6535)=153 vs floor(1e6/6667)=149), so the
+#    bulb sat at its ceiling and was re-commanded every tick, all phase.
+#    HA does not clamp color_temp_kelvin for a natively COLOR_TEMP light -
+#    the device does (confirmed against light/__init__.py).
+#  - Narrowed only: light.utility_spot_1 advertises max 4000 K while
+#    happily reporting 5813 K. Its advertised range simply isn't honest,
+#    and comparing against 4000 would re-command it every tick instead.
+_COLOUR_RANGE_CASES = [
+    ("at its ceiling, target above it", 255, 6535, 2000, 6535, 255, 6667, []),
+    ("at its floor, target below it", 80, 2202, 2202, 4000, 80, 1708, []),
+    ("reachable target it hasn't met yet", 255, 6535, 2000, 6535, 255, 4000, ["light.a"]),
+    ("publishes no range at all", 255, 6535, None, None, 255, 6667, ["light.a"]),
+    ("reports outside its advertised range", 255, 5813, 2202, 4000, 255, 5813, []),
+]
+
+
+@pytest.mark.parametrize(
+    ("brightness", "current_kelvin", "min_kelvin", "max_kelvin", "target_brightness", "target_kelvin", "expected"),
+    [case[1:] for case in _COLOUR_RANGE_CASES],
+    ids=[case[0] for case in _COLOUR_RANGE_CASES],
+)
+def test_colour_target_is_compared_against_both_the_raw_and_range_narrowed_value(
+    brightness, current_kelvin, min_kelvin, max_kelvin, target_brightness, target_kelvin, expected
+):
+    attributes = {"brightness": brightness, "color_temp_kelvin": current_kelvin}
+    if min_kelvin is not None:
+        attributes["min_color_temp_kelvin"] = min_kelvin
+        attributes["max_color_temp_kelvin"] = max_kelvin
+    lookup = make_lookup(states={"light.a": {"state": "on", "attributes": attributes}})
     groups = build_groups(
         entities=["light.a"],
         brightness_multipliers={},
-        sensor_brightness=255,
-        sensor_color_temp_kelvin=6667,
+        sensor_brightness=target_brightness,
+        sensor_color_temp_kelvin=target_kelvin,
         lookup=lookup,
     )
-    assert groups[0].combined == []
-
-
-def test_a_bulb_below_its_own_floor_is_already_set_for_a_lower_target():
-    """The other end of the same clamp - a warm target under the bulb's
-    min_color_temp_kelvin. Reachable via curve.py's Evening fade under a
-    pinned phase override, and via any deliberately-warm night_kelvin."""
-    lookup = make_lookup(
-        states={
-            "light.a": {
-                "state": "on",
-                "attributes": {
-                    "brightness": 80,
-                    "color_temp_kelvin": 2202,
-                    "min_color_temp_kelvin": 2202,
-                    "max_color_temp_kelvin": 4000,
-                },
-            }
-        },
-    )
-    groups = build_groups(
-        entities=["light.a"],
-        brightness_multipliers={},
-        sensor_brightness=80,
-        sensor_color_temp_kelvin=1708,
-        lookup=lookup,
-    )
-    assert groups[0].combined == []
-
-
-def test_a_reachable_target_still_updates_a_bulb_that_is_not_there_yet():
-    """The clamp must not make everything look already-set: a target well
-    inside the bulb's own range that it genuinely hasn't reached still
-    needs a write."""
-    lookup = make_lookup(
-        states={
-            "light.a": {
-                "state": "on",
-                "attributes": {
-                    "brightness": 255,
-                    "color_temp_kelvin": 6535,
-                    "min_color_temp_kelvin": 2000,
-                    "max_color_temp_kelvin": 6535,
-                },
-            }
-        },
-    )
-    groups = build_groups(
-        entities=["light.a"],
-        brightness_multipliers={},
-        sensor_brightness=255,
-        sensor_color_temp_kelvin=4000,
-        lookup=lookup,
-    )
-    assert groups[0].combined == ["light.a"]
-
-
-def test_a_bulb_publishing_no_range_is_compared_against_the_raw_target():
-    """A light that doesn't report min/max_color_temp_kelvin behaves
-    exactly as it did before the clamp existed - no bounds, no narrowing."""
-    lookup = make_lookup(
-        states={"light.a": {"state": "on", "attributes": {"brightness": 255, "color_temp_kelvin": 6535}}},
-    )
-    groups = build_groups(
-        entities=["light.a"],
-        brightness_multipliers={},
-        sensor_brightness=255,
-        sensor_color_temp_kelvin=6667,
-        lookup=lookup,
-    )
-    assert groups[0].combined == ["light.a"]
-
-
-def test_a_bulb_reporting_outside_its_advertised_range_is_not_recommanded():
-    """Live counter-example that shapes the clamp: light.utility_spot_1
-    advertises max_color_temp_kelvin 4000 while actually reporting 5813 and
-    tracking the curve correctly. Its advertised range is simply not honest.
-    Clamping the comparison target unconditionally would compare 5813 against
-    4000, never match, and re-command it on every tick - the same endless
-    churn the clamp exists to prevent, just inverted. So the clamped target is
-    an *additional* way to match, never a replacement for the raw one."""
-    lookup = make_lookup(
-        states={
-            "light.a": {
-                "state": "on",
-                "attributes": {
-                    "brightness": 255,
-                    "color_temp_kelvin": 5813,
-                    "min_color_temp_kelvin": 2202,
-                    "max_color_temp_kelvin": 4000,
-                },
-            }
-        },
-    )
-    groups = build_groups(
-        entities=["light.a"],
-        brightness_multipliers={},
-        sensor_brightness=255,
-        sensor_color_temp_kelvin=5813,
-        lookup=lookup,
-    )
-    assert groups[0].combined == []
+    assert groups[0].combined == expected

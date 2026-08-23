@@ -68,184 +68,38 @@ async def test_native_value_counts_tracked_entities(
     assert sensor_entity.native_value == 1
 
 
-async def test_status_controlled_when_live_context_matches_confirmed_claim(
+# The status/owner_id values themselves are override_protection.classify()'s
+# output, and every branch of that table is exercised directly in
+# tests/test_override_protection.py. What matters here is that the sensor
+# hands classify() the live state it needs and surfaces all three of its
+# return values - not that the table is right, which is settled elsewhere.
+# `unavailable` below is the one status classify() has no equivalent of, so
+# it stays a full test of its own.
+async def test_the_sensor_surfaces_classifys_three_return_values(
     hass: HomeAssistant, write_tracker: LastWriteTracker, sensor_entity: _WriteTrackingSensor
 ):
-    _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
-    # First write: promotes the pre-write context to `confirmed` on the
-    # *next* record call that observes it landing.
-    await write_tracker.async_record(["light.a"], {"light.a": None}, "ctx-1", "automation.room")
-    _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], context=Context(id="ctx-1"))
-    await write_tracker.async_record(["light.a"], {"light.a": "ctx-1"}, "ctx-2", "automation.room")
-    # Live context still "ctx-1" (never reflected the second write) -
-    # matches the now-confirmed first write.
-
-    record = sensor_entity.extra_state_attributes["entities"]["light.a"]
-    assert record["status"] == "controlled"
-    assert record["confirmed"]["context_id"] == "ctx-1"
-    assert record["matched_via"] == "context"
-
-
-async def test_status_pending_when_live_context_matches_pending_only(
-    hass: HomeAssistant, write_tracker: LastWriteTracker, sensor_entity: _WriteTrackingSensor
-):
-    _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
-    await write_tracker.async_record(["light.a"], {"light.a": None}, "ctx-1", "automation.room")
-    _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], context=Context(id="ctx-1"))
+    our_context = Context()
+    _set_light(hass, "light.a", "on", brightness=200, color_temp_kelvin=3000, context=our_context)
+    await write_tracker.async_record(["light.a"], {"light.a": None}, our_context.id, "automation.room")
 
     record = sensor_entity.extra_state_attributes["entities"]["light.a"]
     assert record["status"] == "pending"
-    assert record["live_context_id"] == "ctx-1"
+    assert record["owner_id"] == "automation.room"
     assert record["matched_via"] == "context"
+    assert record["live_context_id"] == our_context.id
 
 
-async def test_status_overridden_when_live_context_and_value_both_mismatch(
+async def test_the_sensor_reads_live_state_not_just_the_stored_claim(
     hass: HomeAssistant, write_tracker: LastWriteTracker, sensor_entity: _WriteTrackingSensor
 ):
-    _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
-    await write_tracker.async_record(["light.a"], {"light.a": None}, "ctx-1", "automation.room")
-    _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], context=Context(id="ctx-1"))
-    await write_tracker.async_record(
-        ["light.a"],
-        {"light.a": "ctx-1"},
-        "ctx-2",
-        "automation.room",
-        targets={"light.a": {"brightness": 200, "color_temp_kelvin": 3000}},
-    )
-    # An external change - a fresh context matching neither confirmed
-    # (ctx-1) nor pending (ctx-2), and a value nowhere near pending's own
-    # recorded target either, so the value-match rescue doesn't apply.
-    # Brightness deliberately differs from the prior _set_light calls: HA
-    # only replaces an entity's context on a genuine state change, not a
-    # same-state "state_reported" re-set - confirmed live and already
-    # documented in this repo's own
-    # test_force_bypasses_protection_and_reclaims_ownership.
-    _set_light(
-        hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=42, context=Context(id="ctx-3")
-    )
+    # An off light classifies as "off" whatever claim is recorded - only
+    # reachable if the sensor passes live state through to classify().
+    our_context = Context()
+    _set_light(hass, "light.a", "on", brightness=200, color_temp_kelvin=3000, context=our_context)
+    await write_tracker.async_record(["light.a"], {"light.a": None}, our_context.id, "automation.room")
+    _set_light(hass, "light.a", "off", context=our_context)
 
-    record = sensor_entity.extra_state_attributes["entities"]["light.a"]
-    assert record["status"] == "overridden"
-
-
-async def test_owner_id_surfaces_whichever_claim_currently_matches(
-    hass: HomeAssistant, write_tracker: LastWriteTracker, sensor_entity: _WriteTrackingSensor
-):
-    """classify()'s second return value - whichever claim's owner
-    matched right now - is exposed at the top level of each entity's
-    dict, not just buried inside confirmed/pending, so a viewer doesn't
-    have to cross-reference the two claims themselves to answer "who
-    owns this light right now"."""
-    _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
-    await write_tracker.async_record(["light.a"], {"light.a": None}, "ctx-1", "automation.room_a")
-    _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], context=Context(id="ctx-1"))
-
-    record = sensor_entity.extra_state_attributes["entities"]["light.a"]
-    assert record["status"] == "pending"
-    assert record["owner_id"] == "automation.room_a"
-
-
-async def test_owner_id_is_none_when_nothing_currently_matches(
-    hass: HomeAssistant, write_tracker: LastWriteTracker, sensor_entity: _WriteTrackingSensor
-):
-    _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
-    await write_tracker.async_record(["light.a"], {"light.a": None}, "ctx-1", "automation.room_a")
-    _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], context=Context(id="ctx-1"))
-    await write_tracker.async_record(
-        ["light.a"],
-        {"light.a": "ctx-1"},
-        "ctx-2",
-        "automation.room_a",
-        targets={"light.a": {"brightness": 200, "color_temp_kelvin": 3000}},
-    )
-    _set_light(
-        hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=42, context=Context(id="ctx-3")
-    )
-
-    record = sensor_entity.extra_state_attributes["entities"]["light.a"]
-    assert record["status"] == "overridden"
-    assert record["owner_id"] is None
-
-
-async def test_status_off_when_the_light_is_legitimately_off(
-    hass: HomeAssistant, write_tracker: LastWriteTracker, sensor_entity: _WriteTrackingSensor
-):
-    """Mirrors override_protection.classify()'s own precedence - its
-    very first check is is_on, before any context/value comparison, so
-    a light turned off by a code path outside apply_lighting (e.g. the
-    blueprint's own motion_off action, whose context write_tracking.py
-    never records) must never fall through to "overridden" just
-    because that context matches neither claim. Found live, 2026-08-22:
-    a whole room's worth of lights, switched off together under one
-    shared motion_off context, all showed "overridden" while genuinely,
-    correctly off."""
-    _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
-    await write_tracker.async_record(["light.a"], {"light.a": None}, "ctx-1", "automation.room")
-    _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], context=Context(id="ctx-1"))
-    await write_tracker.async_record(
-        ["light.a"],
-        {"light.a": "ctx-1"},
-        "ctx-2",
-        "automation.room",
-        targets={"light.a": {"brightness": 200, "color_temp_kelvin": 3000}},
-    )
-    # A separate code path (not apply_lighting/write_tracker) turns the
-    # light off under its own, never-recorded context - exactly what
-    # the blueprint's motion_off action does.
-    _set_light(hass, "light.a", "off", context=Context(id="ctx-motion-off"))
-
-    record = sensor_entity.extra_state_attributes["entities"]["light.a"]
-    assert record["status"] == "off"
-
-
-async def test_status_off_takes_precedence_over_a_stale_context_match(
-    hass: HomeAssistant, write_tracker: LastWriteTracker, sensor_entity: _WriteTrackingSensor
-):
-    """Branch order, not just presence: a light going off under a
-    context.id that happens to equal a stale claim's own context_id
-    must still read "off", not "pending"/"controlled"."""
-    _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
-    await write_tracker.async_record(["light.a"], {"light.a": None}, "ctx-1", "automation.room")
-    # Off again, deliberately reusing ctx-1 as the off-transition's own
-    # context id.
-    _set_light(hass, "light.a", "off", context=Context(id="ctx-1"))
-
-    record = sensor_entity.extra_state_attributes["entities"]["light.a"]
-    assert record["status"] == "off"
-
-
-async def test_status_controlled_when_context_mismatches_but_value_matches_pendings_target(
-    hass: HomeAssistant, write_tracker: LastWriteTracker, sensor_entity: _WriteTrackingSensor
-):
-    """The sensor-level twin of grouping.py's own rescue - see its
-    externally_set() docstring for the live incident (light.kitchen_3/
-    light.kitchen_5) this closes. Without it this light would show as
-    "overridden" despite being genuinely, correctly controlled."""
-    _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
-    await write_tracker.async_record(["light.a"], {"light.a": None}, "ctx-1", "automation.room")
-    _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], context=Context(id="ctx-1"))
-    await write_tracker.async_record(
-        ["light.a"],
-        {"light.a": "ctx-1"},
-        "ctx-2",
-        "automation.room",
-        targets={"light.a": {"brightness": 200, "color_temp_kelvin": 3000}},
-    )
-    # The device's own delayed echo: a fresh, untracked context, but
-    # reporting exactly what pending asked for.
-    _set_light(
-        hass,
-        "light.a",
-        "on",
-        supported_color_modes=["color_temp"],
-        brightness=200,
-        color_temp_kelvin=3000,
-        context=Context(id="ctx-device-echo"),
-    )
-
-    record = sensor_entity.extra_state_attributes["entities"]["light.a"]
-    assert record["status"] == "controlled"
-    assert record["matched_via"] == "value"
+    assert sensor_entity.extra_state_attributes["entities"]["light.a"]["status"] == "off"
 
 
 async def test_status_unavailable_when_the_entity_has_no_live_state(
