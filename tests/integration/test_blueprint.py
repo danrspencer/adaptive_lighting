@@ -897,6 +897,37 @@ class TestSceneHandoff:
         calls = apply_lighting_calls
         assert calls and calls[-1].data["entities"] == ["light.a"]
 
+    async def test_a_malformed_scene_template_does_not_crash_the_whole_automation(
+        self, hass, apply_lighting_calls, scene_turn_on_calls
+    ):
+        """Live incident, 2026-08-21: automation.bathroom_spots' scene_template
+        was accidentally set to "{{ {} }}" (brightness_multiplier_template's
+        own default, pasted into the wrong field) - rendered, that's the
+        text "{}", which desired_scene passed straight to states[...], and
+        HA rejects "{}" as a malformed entity_id with a hard TemplateError.
+        Since that happens in variables:, before condition:/action: ever
+        run, the automation failed this way on EVERY trigger - including
+        manual runs - for 36+ hours before being caught (a template error
+        here doesn't raise into the caller, it just leaves the run
+        errored/stopped with no action ever dispatched - apply_lighting_calls
+        staying empty is exactly that symptom). The existing comment above
+        desired_scene already promises "a typo... is treated the same as
+        returning nothing" - this is the case that promise didn't actually
+        cover, since a value that isn't even entity_id-shaped crashes
+        states[...] outright rather than just failing to resolve."""
+        _light(hass, "light.a", "on")
+        await _setup_room_automation(
+            hass, room_target={"entity_id": "light.a"}, scene_template="{{ {} }}"
+        )
+
+        hass.states.async_set("sensor.test_adaptive", "Day", {"brightness": 210, "color_temp": 4000})
+        async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=1))
+        await hass.async_block_till_done()
+
+        assert scene_turn_on_calls == []
+        calls = apply_lighting_calls
+        assert calls and calls[-1].data["entities"] == ["light.a"]
+
     async def test_phase_scene_is_used_when_the_template_returns_nothing(
         self, hass, apply_lighting_calls, scene_turn_on_calls
     ):

@@ -693,9 +693,23 @@ variables:
   # per-phase pick is the fallback for when it doesn't apply. Either
   # way, a typo or a scene that's been renamed/removed is treated the
   # same as returning nothing, rather than erroring.
+  #
+  # candidate must pass an entity_id shape check before ever reaching
+  # states[candidate] - states[] raises a hard TemplateError (not just
+  # "not found") on a string that isn't even valid entity_id shape,
+  # which aborts the whole variables: block before condition:/action:
+  # ever run. Live incident: scene_template accidentally set to
+  # "{{ {} }}" (brightness_multiplier_template's own default, pasted
+  # into the wrong field) rendered as the literal text "{}", and
+  # states["{}"] crashed automation.bathroom_spots on every single
+  # trigger - including manual runs - for 36+ hours before being
+  # caught. phase_scene needs no equivalent guard: it's always None or
+  # a value chosen through a domain: scene entity selector, never a
+  # malformed free-text string the way scene_template (a raw template
+  # field) can be.
   desired_scene: >
     {% set candidate = (scene_template | trim) %}
-    {% if candidate and states[candidate] is not none %}
+    {% if candidate and candidate is match('^[a-z0-9_]+\\.[a-z0-9_]+$') and states[candidate] is not none %}
       {{ candidate }}
     {% elif phase_scene and states[phase_scene] is not none %}
       {{ phase_scene }}
