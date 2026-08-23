@@ -386,18 +386,18 @@ trigger:
       {% if room_target is not none %}
         {% if room_target.entity_id is defined %}
           {% set eids = room_target.entity_id if room_target.entity_id is iterable and room_target.entity_id is not string else [room_target.entity_id] %}
-          {% set ns.entities = ns.entities + (eids | select('match', '^light\.') | list) %}
+          {% set ns.entities = ns.entities + (eids | select('match', '^light\\.') | list) %}
         {% endif %}
         {% if room_target.device_id is defined %}
           {% set dids = room_target.device_id if room_target.device_id is iterable and room_target.device_id is not string else [room_target.device_id] %}
           {% for d in dids %}
-            {% set ns.entities = ns.entities + (device_entities(d) | select('match', '^light\.') | list) %}
+            {% set ns.entities = ns.entities + (device_entities(d) | select('match', '^light\\.') | list) %}
           {% endfor %}
         {% endif %}
         {% if room_target.area_id is defined %}
           {% set aids = room_target.area_id if room_target.area_id is iterable and room_target.area_id is not string else [room_target.area_id] %}
           {% for a in aids %}
-            {% set ns.entities = ns.entities + (area_entities(a) | select('match', '^light\.') | list) %}
+            {% set ns.entities = ns.entities + (area_entities(a) | select('match', '^light\\.') | list) %}
           {% endfor %}
         {% endif %}
       {% endif %}
