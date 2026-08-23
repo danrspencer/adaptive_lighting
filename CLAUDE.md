@@ -4076,6 +4076,94 @@ update+restart runs; the dashboard-YAML half (section width, grid
   there (`color_temp_kelvin: 3205`, device-rounded). `repair_count: 0`
   and `config_check: valid` throughout.
 
+- **`automation.bathroom_spots` silently dead on every single trigger -
+  including manual runs - for 36+ hours, 2026-08-23. Root cause: a
+  misconfigured `scene_template` value, not a code bug - but it exposed a
+  real blueprint robustness gap, fixed in the same session.** User report:
+  the bathroom lights went from `unavailable` to `on` at the wall
+  overnight and never updated, even after manually re-running the
+  automation several times.
+
+  Diagnosed via live forensics before touching anything, not guessed: the
+  four bulbs genuinely were (and still are) flapping `unavailable`/`on`
+  together every 20-90 minutes all day - consistent with a wall switch
+  cutting mains power to them, and not itself a bug (this is exactly the
+  scenario `write_tracking.py`'s clear-on-drop/resync-on-recovery
+  mechanisms already handle correctly elsewhere in this house). The real
+  problem was one level up: `ha_get_automation_traces` showed **every**
+  trace for `automation.bathroom_spots` - motion, `adaptive_tick`,
+  manual - ending in the identical error,
+  `TemplateError: Invalid domain name '{}'`, raised while rendering
+  `variables:`, i.e. before `condition:`/`action:` ever runs. Cross-checked
+  against `ha_get_logs(source="error_log")`: 1,900+ occurrences, `first_seen`
+  2026-08-21 22:30:00, `by_component` showing only
+  `homeassistant.components.automation.bathroom_spots` as affected -
+  confirming this was isolated to this one automation, not a blueprint-wide
+  regression. This is exactly why manual runs never helped either: a
+  manual run still renders `variables:` first, and `force: true` never
+  gets a chance to matter if the run dies before reaching `action:` at
+  all.
+
+  Root cause, confirmed via `ha_config_get_automation`:
+  `automation.bathroom_spots`'s `scene_template` input held the literal
+  string `"{{ {} }}"` - which is actually the blueprint's *default value
+  for a different input*, `brightness_multiplier_template` (confirmed
+  against the blueprint's own declared default for `scene_template`,
+  which is `""`) - almost certainly pasted into the wrong field by
+  mistake. Rendered, `"{{ {} }}"` produces the literal text `"{}"`, and
+  `desired_scene`'s own template then calls `states["{}"]` to check
+  whether it's a real scene - HA's template engine rejects `"{}"` outright
+  as a malformed entity_id (not "not found", a hard `TemplateError`),
+  which aborts the whole `variables:` block for the entire automation.
+
+  **Immediate fix**: corrected `scene_template` back to `""` live via
+  `ha_config_set_automation` - confirmed via a fresh
+  `ha_get_automation_traces` run showing `"execution": "finished"` with a
+  real `apply_lighting` call (`entities: [light.bathroom_spot_1..4]`,
+  correct brightness/color_temp, `force: true` from the manual trigger).
+
+  **Underlying robustness gap, fixed in the blueprint itself**:
+  `desired_scene`'s own comment already documented the *intended*
+  behaviour - "a typo or a scene that's been renamed/removed is treated
+  the same as returning nothing, rather than erroring" - but the
+  implementation only delivered that for a value that's *entity_id-shaped
+  but doesn't resolve* (`states[...]` safely returns `None` there); a
+  value that isn't even syntactically a valid entity_id crashes
+  `states[...]` outright instead. Fixed by adding a format guard before
+  `candidate` ever reaches `states[...]`:
+  `candidate is match('^[a-z0-9_]+\\.[a-z0-9_]+$')`, relying on Jinja's
+  short-circuiting `and` so `states[candidate]` is never evaluated unless
+  `candidate` already looks like a real entity_id. `phase_scene` needs no
+  equivalent guard - it's always `None` or a value chosen through a
+  `domain: scene` entity selector (`morning_scene`/`day_scene`/
+  `evening_scene`/`night_scene`), never a malformed free-text string the
+  way `scene_template` (a raw template field) can be.
+
+  Deliberately written `\\.` (double backslash), not `\.` - the existing
+  `'^light\.'`-style patterns elsewhere in this blueprint already trigger
+  a known, previously-flagged-but-not-yet-fixed Jinja
+  `DeprecationWarning: "\." is an invalid escape sequence` (see "Known,
+  pre-existing, not yet fixed" at the end of the Testing section below).
+  No reason to add a *new* instance of that same warning in code written
+  fresh - confirmed by extracting the actual bytes from the deployed file
+  and compiling them standalone with `DeprecationWarning` promoted to an
+  error: clean compile, no warning. The pre-existing single-backslash
+  patterns elsewhere in the file were deliberately left untouched - that
+  cleanup is still its own separate, out-of-scope task.
+
+  New test `test_a_malformed_scene_template_does_not_crash_the_whole_automation`
+  in `tests/integration/test_blueprint.py`'s `TestSceneHandoff`,
+  reproducing the live incident exactly (`scene_template="{{ {} }}"` via
+  `_setup_room_automation`'s `**extra_inputs`) and asserting
+  `apply_lighting_calls` still gets a normal call after a real trigger -
+  a template error inside `variables:` doesn't raise into the test caller
+  (HA logs it and marks the run errored/stopped), so "the tick silently
+  produced nothing" is the actual symptom to assert against, not an
+  exception. Mutation-verified: reverting the guard back to
+  `candidate and states[candidate] is not none` reproduces the identical
+  live error (`TemplateError: Invalid domain name '{}'`) and fails
+  exactly this one test, nothing else. Full suite: 197/197.
+
 ## Testing
 
 `pip install pytest pytest-homeassistant-custom-component && pytest`
