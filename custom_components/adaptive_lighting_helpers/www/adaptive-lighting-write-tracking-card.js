@@ -163,15 +163,30 @@ class AdaptiveLightingWriteTrackingCard extends HTMLElement {
   // resolved against - if the sensor's next poll/push shows a different
   // context_id in the same slot (a new write went out), any cached
   // trace text for that slot no longer describes what's actually there.
+  // Keyed entity|slot|which, since a two-step claim has two contexts
+  // that resolve to two different logbook events (see _contextFor).
   _invalidateStaleTraces() {
     for (const key of [...this._traces.keys()]) {
-      const [entityId, slot] = key.split('|');
+      const [entityId, slot, which] = key.split('|');
       const claim = this._entities[entityId] && this._entities[entityId][slot];
       const cached = this._traces.get(key);
-      if (!claim || cached.contextId !== claim.context_id) {
+      if (!claim || cached.contextId !== this._contextFor(claim, which)) {
         this._traces.delete(key);
       }
     }
+  }
+
+  // Which of a claim's two possible context ids a given trace is for.
+  // "primary" is every claim's own context_id; "secondary" exists only
+  // on a claim recorded by a two-step transition, where brightness and
+  // colour went out as two separate light.turn_on calls under two
+  // different contexts. Both are matched when deciding whether a light
+  // is still ours, so both need to be traceable - tracing only the
+  // primary would show provenance for the colour step even when it was
+  // the brightness step that actually matched.
+  _contextFor(claim, which) {
+    if (!claim) return null;
+    return which === 'secondary' ? claim.secondary_context_id || null : claim.context_id;
   }
 
   async _clear(entityId) {
@@ -201,27 +216,35 @@ class AdaptiveLightingWriteTrackingCard extends HTMLElement {
     }
   }
 
-  async _trace(entityId, slot, claim) {
-    const key = `${entityId}|${slot}`;
-    this._traces.set(key, { contextId: claim.context_id, state: 'loading' });
+  async _trace(entityId, slot, which, claim) {
+    const key = `${entityId}|${slot}|${which}`;
+    const contextId = this._contextFor(claim, which);
+    this._traces.set(key, { contextId, state: 'loading' });
     this._render();
     try {
       const recordedAt = claim.recorded_at ? new Date(claim.recorded_at) : null;
-      const startTime = recordedAt ? new Date(recordedAt.getTime() - 2000) : new Date(0);
+      // recorded_at is stamped once, after the write completes. For a
+      // two-step transition that's just after the *colour* step, while
+      // the brightness step went out half a transition earlier - 15s at
+      // the blueprint's default 30s Background Transition, and longer if
+      // it's been raised. So the secondary trace looks further back;
+      // the primary keeps its original tight window.
+      const backMs = which === 'secondary' ? 120000 : 2000;
+      const startTime = recordedAt ? new Date(recordedAt.getTime() - backMs) : new Date(0);
       const endTime = recordedAt ? new Date(recordedAt.getTime() + 10000) : new Date();
       const events = await this._hass.callWS({
         type: 'logbook/get_events',
         start_time: startTime.toISOString(),
         end_time: endTime.toISOString(),
-        context_id: claim.context_id,
+        context_id: contextId,
       });
       this._traces.set(key, {
-        contextId: claim.context_id,
+        contextId,
         state: 'done',
         events: Array.isArray(events) ? events : [],
       });
     } catch (err) {
-      this._traces.set(key, { contextId: claim.context_id, state: 'error', message: err && err.message ? err.message : String(err) });
+      this._traces.set(key, { contextId, state: 'error', message: err && err.message ? err.message : String(err) });
     }
     this._render();
   }
@@ -240,32 +263,50 @@ class AdaptiveLightingWriteTrackingCard extends HTMLElement {
     }
     const owner = friendlyOwner(claim.owner_id);
     const when = relativeTime(claim.recorded_at);
-    const traceKey = `${entityId}|${slot}`;
-    const trace = this._traces.get(traceKey);
+    const secondary = claim.secondary_context_id || null;
 
-    let traceHtml;
-    if (!claim.recorded_at) {
-      traceHtml = `<span class="muted trace-note">no recorded time - can't be traced</span>`;
-    } else if (!trace) {
-      traceHtml = `<button class="trace-btn" data-entity="${entityId}" data-slot="${slot}">Trace</button>`;
-    } else if (trace.state === 'loading') {
-      traceHtml = `<span class="muted">Tracing…</span>`;
-    } else if (trace.state === 'error') {
-      traceHtml = `<span class="trace-error">Trace failed: ${trace.message}</span>`;
-    } else if (trace.events.length === 0) {
-      traceHtml = `<span class="muted">No matching logbook entry</span>`;
-    } else {
-      traceHtml = trace.events.map((e) => `<div class="trace-entry">${describeLogbookEntry(e)}</div>`).join('');
-    }
+    // A two-step claim has two contexts and needs both traceable - see
+    // _contextFor. Everything else renders exactly one, as before.
+    const traceFor = (which, label) => {
+      const trace = this._traces.get(`${entityId}|${slot}|${which}`);
+      let inner;
+      if (!claim.recorded_at) {
+        inner = `<span class="muted trace-note">no recorded time - can't be traced</span>`;
+      } else if (!trace) {
+        inner =
+          `<button class="trace-btn" data-entity="${entityId}" data-slot="${slot}" ` +
+          `data-which="${which}">${label}</button>`;
+      } else if (trace.state === 'loading') {
+        inner = `<span class="muted">Tracing…</span>`;
+      } else if (trace.state === 'error') {
+        inner = `<span class="trace-error">Trace failed: ${trace.message}</span>`;
+      } else if (trace.events.length === 0) {
+        inner = `<span class="muted">No matching logbook entry</span>`;
+      } else {
+        inner = trace.events.map((e) => `<div class="trace-entry">${describeLogbookEntry(e)}</div>`).join('');
+      }
+      return `<div class="trace">${inner}</div>`;
+    };
+
+    const contextIds = `
+      <span class="context-id" title="${claim.context_id}">${claim.context_id.slice(0, 8)}…</span>
+      ${
+        secondary
+          ? `<span class="context-id secondary" title="brightness step of a two-step transition: ${secondary}">` +
+            `+ ${secondary.slice(0, 8)}…</span>`
+          : ''
+      }
+    `;
 
     return `
       <div class="claim">
         <div class="owner">${owner || '<span class="muted">no owner</span>'}</div>
         <div class="meta">
           ${when ? `<span class="when">${when}</span>` : ''}
-          <span class="context-id" title="${claim.context_id}">${claim.context_id.slice(0, 8)}…</span>
+          ${contextIds}
         </div>
-        <div class="trace">${traceHtml}</div>
+        ${traceFor('primary', secondary ? 'Trace colour step' : 'Trace')}
+        ${secondary ? traceFor('secondary', 'Trace brightness step') : ''}
       </div>
     `;
   }
@@ -390,6 +431,9 @@ class AdaptiveLightingWriteTrackingCard extends HTMLElement {
         .owner { font-weight: 500; }
         .meta { display: flex; gap: 8px; align-items: baseline; font-size: 0.82em; color: var(--secondary-text-color); }
         .context-id { font-family: var(--code-font-family, monospace); }
+        /* The brightness step of a two-step transition - present on that
+           claim only, and secondary to the colour step's context. */
+        .context-id.secondary { opacity: 0.75; cursor: help; }
         .trace { margin-top: 4px; font-size: 0.85em; }
         .trace-btn {
           background: none;
@@ -468,8 +512,9 @@ class AdaptiveLightingWriteTrackingCard extends HTMLElement {
       btn.addEventListener('click', () => {
         const entityId = btn.dataset.entity;
         const slot = btn.dataset.slot;
+        const which = btn.dataset.which || 'primary';
         const claim = this._entities[entityId][slot];
-        this._trace(entityId, slot, claim);
+        this._trace(entityId, slot, which, claim);
       });
     });
 

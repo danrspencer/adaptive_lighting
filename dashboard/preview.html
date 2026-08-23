@@ -159,6 +159,32 @@
                 target: { brightness: 255, color_temp_kelvin: 4800 },
               },
             },
+            // A two-step-transition bulb (no_combined_transition label):
+            // brightness and colour went out as two separate light.turn_on
+            // calls under two different contexts, and the device reported
+            // back after only the brightness step - so it's the *secondary*
+            // context that matches, not the primary. Exercises the card's
+            // two-trace rendering.
+            'light.extension_right_1': {
+              status: 'pending',
+              owner_id: 'automation.kitchen_lights',
+              matched_via: 'context',
+              live_context_id: '01M0FTMHBRIGHTNESSSTEP0001',
+              confirmed: {
+                context_id: '01M0FTHVWMJ0DRSNB5RT92ZXVC',
+                secondary_context_id: null,
+                owner_id: 'automation.kitchen_lights',
+                recorded_at: minutesAgo(9),
+                target: { brightness: 255, color_temp_kelvin: 4000 },
+              },
+              pending: {
+                context_id: '01M0FTMHCOLOURSTEP00000001',
+                secondary_context_id: '01M0FTMHBRIGHTNESSSTEP0001',
+                owner_id: 'automation.kitchen_lights',
+                recorded_at: minutesAgo(2),
+                target: { brightness: 255, color_temp_kelvin: 4000 },
+              },
+            },
             'light.kitchen_3': {
               // Controlled via the value-match rescue, not a context
               // match - the device's own delayed confirmation landed
