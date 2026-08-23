@@ -59,6 +59,17 @@ from homeassistant.util.color import color_temperature_kelvin_to_mired as _kelvi
 
 class _ContextClaim(TypedDict):
     context_id: str
+    # A two-step transition (no_combined_transition label) genuinely
+    # issues two separate light.turn_on calls - brightness first, then
+    # colour - each now given its own distinct context.id (see
+    # __init__.py's _two_step_turn_on) rather than sharing one. Either
+    # one landing counts as this claim having been observed - a device
+    # whose real confirmation for the *first* step arrives (its own
+    # context, matched here) before the second step's has necessarily
+    # adopted this integration's own command, not something external.
+    # None for a single combined-write claim, which only ever has one
+    # context to begin with.
+    secondary_context_id: Optional[str]
     owner_id: Optional[str]
     # ISO 8601, or None for the synthetic first-write baseline (see
     # write_tracking.py's async_record docstring).
@@ -86,6 +97,19 @@ def _as_int(value, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _context_matches(claim: Optional[dict], current_context: Optional[str]) -> bool:
+    """True if `current_context` equals either of a claim's two possible
+    context ids - the primary one (every claim has this), or the
+    secondary one a two-step transition's own first step gets recorded
+    under (most claims don't have one at all - see _ContextClaim's own
+    field comment)."""
+    if claim is None:
+        return False
+    return current_context == claim["context_id"] or (
+        claim.get("secondary_context_id") is not None and current_context == claim["secondary_context_id"]
+    )
 
 
 def _color_temp_matches(current_kelvin: int, target_kelvin: int, tolerance_kelvin: int) -> bool:
@@ -174,47 +198,61 @@ def classify(
       indistinguishable from a genuinely external change until a
       `confirmed` baseline exists to check against.
     - `"pending"` - live context matches the most recent write
-      attempt, not yet independently reconfirmed by a later tick.
-    - `"controlled"` - live context matches `confirmed` (settled), OR
-      matches neither claim but the entity's current value still
-      matches what `pending` itself asked for (see
-      `target_matches_values` - HA's own Entity._context expires 5
-      seconds after the service call that set it, so a device whose
-      real confirmation takes longer than that reports back under a
-      brand-new, unrelated context even though it's echoing exactly
-      the value asked for; without this rescue that echo reads as
-      external and, since nothing else ever un-marks it while the
-      entity stays continuously on, it would be silently excluded from
-      every future write, forever, the instant it next needed a
-      genuinely different value - confirmed live: light.kitchen_3/
-      light.kitchen_5 stuck exactly this way for over an hour, still
-      correctly lit the whole time).
+      attempt (its primary context, or - for a two-step transition -
+      its secondary one, see `_ContextClaim`), not yet independently
+      reconfirmed by a later tick.
+    - `"controlled"` - live context matches `confirmed` (settled,
+      primary or secondary), OR matches neither claim but the entity's
+      current value still matches what *either* claim's own write
+      actually asked for (see `target_matches_values` - checked against
+      `pending`'s target first, then `confirmed`'s). Two independent
+      reasons a context alone can't be trusted, both closed by this:
+      (1) HA's own Entity._context expires 5 seconds after the service
+      call that set it, so a device whose real confirmation takes
+      longer than that reports back under a brand-new, unrelated
+      context even though it's echoing exactly the value asked for -
+      checking `pending`'s target catches this. (2) A light that
+      genuinely hasn't updated *at all* yet is, by definition, still
+      showing exactly what `confirmed` asked for - its own live context
+      just happens to have changed for some unrelated reason (checking
+      `confirmed`'s target catches this; this was the original intent
+      of keeping two claims in the first place, not a new mechanism -
+      a gap in the implementation, not the design). Without either
+      check, that echo reads as external and, since nothing else ever
+      un-marks it while the entity stays continuously on, it would be
+      silently excluded from every future write, forever, the instant
+      it next needed a genuinely different value - confirmed live:
+      light.kitchen_3/light.kitchen_5 stuck exactly this way for over
+      an hour, still correctly lit the whole time.
     - `"overridden"` - a `confirmed` claim exists and neither it nor
-      `pending` matches, by context *or* value. Something else has
-      genuinely touched this entity since either recorded write.
+      `pending` matches, by context *or* value (against either claim's
+      own target). Something else has genuinely touched this entity
+      since either recorded write.
 
     `claim_owner_id` is the matching claim's recorded owner - `None`
     for `"off"`/`"unclaimed"`/`"overridden"` (nothing to attribute),
-    populated for `"pending"`/`"controlled"` (including the value-
-    rescue case, which returns `pending`'s own owner) so a caller that
-    needs to know whether *this specific* claim belongs to *them* can
-    do that comparison on top - deliberately not resolved here, since
-    that comparison only matters to a caller asking "is this mine",
-    never to something just displaying the raw classification (e.g.
-    sensor.py's diagnostic status, which shows every claim's owner
-    directly regardless of who's asking).
+    populated for `"pending"`/`"controlled"` (including either value-
+    rescue case, which returns whichever of `pending`/`confirmed`'s own
+    owner actually matched) so a caller that needs to know whether
+    *this specific* claim belongs to *them* can do that comparison on
+    top - deliberately not resolved here, since that comparison only
+    matters to a caller asking "is this mine", never to something just
+    displaying the raw classification (e.g. sensor.py's diagnostic
+    status, which shows every claim's owner directly regardless of who's
+    asking).
 
     `matched_via` says *how* a `"pending"`/`"controlled"` status was
-    reached - `"context"` (the live context.id equalled the claim's
-    own recorded context.id directly) or `"value"` (context.id didn't
-    match anything, but the entity's current value still matched what
-    `pending` asked for - the delayed-echo/mired rescue). `None` for
-    every other status, where there's nothing to explain. This is
-    genuinely new information `status` alone doesn't carry - both
-    context-matched and value-rescued cases report `"controlled"`
-    identically otherwise - and exists purely for a diagnostic
-    consumer (the write-tracking sensor/dashboard card) to show *why*,
-    not for any decision logic here or in `is_blocked()`.
+    reached - `"context"` (the live context.id equalled one of the
+    claim's own recorded context ids directly - primary, or secondary
+    for a two-step transition) or `"value"` (context.id didn't match
+    anything, but the entity's current value still matched what
+    `pending` or `confirmed` itself asked for - the delayed-echo/mired
+    rescue). `None` for every other status, where there's nothing to
+    explain. This is genuinely new information `status` alone doesn't
+    carry - context-matched and value-rescued cases report
+    `"controlled"` identically otherwise - and exists purely for a
+    diagnostic consumer (the write-tracking sensor/dashboard card) to
+    show *why*, not for any decision logic here or in `is_blocked()`.
 
     Note this is a real behaviour change from an earlier version of
     this check, not just a move: the value-rescue case used to return
@@ -230,9 +268,9 @@ def classify(
         return "off", None, None
     if confirmed is None and pending is None:
         return "unclaimed", None, None
-    if pending is not None and current_context == pending["context_id"]:
+    if _context_matches(pending, current_context):
         return "pending", pending.get("owner_id"), "context"
-    if confirmed is not None and current_context == confirmed["context_id"]:
+    if _context_matches(confirmed, current_context):
         return "controlled", confirmed.get("owner_id"), "context"
     if confirmed is None:
         return "unclaimed", None, None
@@ -246,6 +284,16 @@ def classify(
         rgb_color_tolerance,
     ):
         return "controlled", pending.get("owner_id"), "value"
+    if target_matches_values(
+        confirmed.get("target"),
+        current_brightness,
+        current_color_temp_kelvin,
+        current_rgb_color,
+        brightness_tolerance,
+        color_temp_tolerance,
+        rgb_color_tolerance,
+    ):
+        return "controlled", confirmed.get("owner_id"), "value"
     return "overridden", None, None
 
 

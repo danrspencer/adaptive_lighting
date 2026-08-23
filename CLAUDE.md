@@ -4164,6 +4164,122 @@ update+restart runs; the dashboard-YAML half (section width, grid
   live error (`TemplateError: Invalid domain name '{}'`) and fails
   exactly this one test, nothing else. Full suite: 197/197.
 
+- **`classify()`'s value-rescue redesigned to check both `confirmed` and
+  `pending`'s own targets, and two-step transitions now generate and
+  track two real context.ids instead of one - 2026-08-23, prompted by
+  the user directly challenging an earlier (already-superseded)
+  diagnosis of the kitchen/dining-room "overridden" false-positive
+  incident.** The user's own question first: "why didn't our existing
+  override protection mechanics fix this; the bulbs didn't update so
+  they should've been on the 'confirmed' colour and good for another
+  update" - correctly identifying that a bulb which genuinely never
+  responded to a write should self-heal via the existing `confirmed`
+  claim, which invalidated a prior session's "device round-trip hasn't
+  landed yet" framing (the thing PR #86's now-reverted 120-second grace
+  period was built to paper over). The user rejected that grace period
+  outright once pressed on it ("I just dont love the 2 minute cooldown
+  it feels inconsistent") and reverted it themselves via PR #87 before
+  handing down the real fix in one message, verbatim: *"oh ffs, the
+  classify thing was ALWAYS meant to check both pending and confirmed
+  that was the entire point of it / as for 2 step transitions, lets
+  generate 2 context ids as we should, but store BOTH in the entry so
+  we can match on either."* Framed by the user as restoring original
+  intent, not adding a new feature - treated that way throughout.
+
+  **Part A - `classify()`'s value-rescue now checks both claims'
+  targets, not just `pending`'s.** Previously, the delayed-echo rescue
+  (a light's live value matching what was actually asked for, even
+  though its context.id matches neither claim - see the 2026-08-22
+  entry above on device-echo timing) only ever compared against
+  `pending.target`. A light whose `pending` write had genuinely dropped
+  entirely (not echoed at all) had no rescue path back to its own
+  still-valid `confirmed.target` - exactly the gap the user's opening
+  question identified. `classify()` now checks `pending`'s target
+  first, then falls back to `confirmed`'s, in that order (matching
+  precedent: `pending` is the more likely explanation for a live value,
+  `confirmed` is the safety net).
+
+  **Part B - two-step transitions (`no_combined_transition` label) now
+  generate two distinct `Context()` objects, one per `light.turn_on`
+  call, and both get persisted.** Previously `_two_step_turn_on`
+  generated no context of its own at all - both calls shared the
+  triggering `apply_lighting` call's own `context`, and
+  `write_tracking.py` had no way to distinguish "the brightness step
+  landed" from "the colour step landed" as two different observable
+  events. Now `_two_step_turn_on` returns `(brightness_context_id,
+  color_context_id)`; the colour step's context becomes the claim's
+  primary `context_id` (the complete, final state), and the brightness
+  step's becomes a new `secondary_context_id` field alongside it - a
+  device reporting back under *either* is recognised as "ours." A new
+  pure helper, `_context_matches(claim, current_context)` in
+  `override_protection.py`, is the single place that checks a context
+  against both slots (`None`-safe against a missing claim or a missing
+  secondary), and is reused everywhere a context comparison happens:
+  `classify()`'s own two context checks (pending first, then confirmed
+  - mirroring the value-rescue's own ordering), and
+  `write_tracking.py`'s promotion logic (`async_record`, replacing a
+  bare `==` comparison with the shared helper - a real correctness gap
+  a first draft introduced and self-caught before ever running a test:
+  a naive `current_context in (claim["context_id"],
+  claim.get("secondary_context_id"))` incorrectly matches when
+  *both* sides are `None` - a light with no live context yet compared
+  against a non-two-step claim with no secondary either).
+
+  **A real gap found while wiring this through the production path,
+  not just the pure `classify()` layer**: `grouping.py`'s
+  `EntityLookup.externally_set()` was building its `confirmed`/`pending`
+  dicts for `classify()` inconsistently - `pending` already carried
+  `target`, but `confirmed` never did, and *neither* carried
+  `secondary_context_id` at all. Without fixing this, both Part A's
+  confirmed-target rescue and Part B's secondary-context matching would
+  have been correct in the pure module but silently inert through the
+  real `apply_lighting` call path - `check_ownership`'s own dict
+  construction had the identical gap and needed the same fix.
+
+  **A genuine, non-obvious test-infrastructure lesson surfaced while
+  building the two-step promotion test, worth remembering for any
+  future test that reads write-tracking state via a second,
+  freshly-constructed `LastWriteTracker` after multiple sequential real
+  writes**: `pytest-homeassistant-custom-component`'s `mock_storage`
+  fixture patches `Store._async_load`/`_async_write_data` to skip real
+  disk I/O, but its mock load path (`if store._data is None: ...
+  store._data = mock_data`) caches a `Store` instance's *first-ever*
+  load into that instance's own `_data` field and never clears it
+  afterward (real HA's `Store` clears `_data` right after a genuine
+  disk write - the mock has no equivalent, since it exists purely to
+  avoid I/O, not to model write-then-reread staleness). A `Store`
+  instance that has already loaded once will silently keep returning
+  that stale snapshot on every subsequent `.async_load()` call,
+  regardless of real writes made through a *different* `Store` instance
+  for the same key in the meantime. This cost real debugging time
+  chasing a phantom "storage layer" bug (reading HA core's actual
+  `Store`/`_StoreManager` source directly, confirming the real
+  mechanism is sound) before the actual cause - the test's own reused
+  `tracker` object - was found. Never a concern in production, where
+  exactly one `LastWriteTracker`/`Store` is created once at
+  `async_setup_entry` and only ever written to afterward, never
+  reloaded. The fix in
+  `test_two_step_promotion_recognises_a_match_via_the_secondary_context`
+  (`tests/integration/test_services.py`) is to construct a *fresh*
+  `LastWriteTracker(hass)` for each read that needs to observe a write
+  made since the last one - not to reuse the same tracker object across
+  multiple real writes.
+
+  16 new tests added: 7 pure (`tests/test_override_protection.py` -
+  both-claims value-rescue ordering, secondary-context matching in both
+  directions, no-accidental-`None`-matching), 3 integration
+  (`tests/integration/test_services.py` - two distinct contexts
+  actually generated, the brightness-step-lands-alone incident
+  reproduction, and the promotion test above). All mutation-verified:
+  removing the confirmed-target rescue branch fails exactly
+  `test_context_matches_neither_but_value_matches_confirmeds_own_target`;
+  stripping the secondary-context check out of `_context_matches` fails
+  exactly the two secondary-context tests; reverting the promotion
+  check's `_context_matches` call back to a bare primary-only
+  comparison fails exactly
+  `test_two_step_promotion_recognises_a_match_via_the_secondary_context`
+  and no other test in the 207-test suite. Full suite: 207/207.
+
 ## Testing
 
 `pip install pytest pytest-homeassistant-custom-component && pytest`

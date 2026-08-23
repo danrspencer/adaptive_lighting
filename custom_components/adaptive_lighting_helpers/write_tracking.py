@@ -139,7 +139,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
-from .override_protection import _ContextClaim, _WriteRecord
+from .override_protection import _context_matches, _ContextClaim, _WriteRecord
 
 STORAGE_VERSION = 1
 STORAGE_KEY = "adaptive_lighting_helpers.last_write_context_ids"
@@ -211,6 +211,13 @@ class LastWriteTracker:
                     if claim is not None:
                         claim.setdefault("recorded_at", None)
                         claim.setdefault("target", None)
+                        # Records from before two-step transitions got
+                        # their own second context.id (see async_record's
+                        # own docstring) are missing this key entirely -
+                        # None here means exactly what it always has for
+                        # a claim with only one context: no secondary to
+                        # match against.
+                        claim.setdefault("secondary_context_id", None)
                 # Records from before last_seen existed (every record
                 # persisted prior to this feature shipping) get backfilled
                 # to *now*, not left missing or backdated - deliberately
@@ -233,6 +240,7 @@ class LastWriteTracker:
                 data[entity_id] = {
                     "confirmed": {
                         "context_id": value["context_id"],
+                        "secondary_context_id": None,
                         "owner_id": value.get("owner_id"),
                         "recorded_at": None,
                         "target": None,
@@ -311,7 +319,13 @@ class LastWriteTracker:
         operation, triggered two different ways."""
         record = self._data.get(entity_id)
         self._data[entity_id] = {
-            "confirmed": {"context_id": context_id, "owner_id": None, "recorded_at": None, "target": None},
+            "confirmed": {
+                "context_id": context_id,
+                "secondary_context_id": None,
+                "owner_id": None,
+                "recorded_at": None,
+                "target": None,
+            },
             "pending": record.get("pending") if record else None,
             "last_seen": dt_util.utcnow().isoformat(),
         }
@@ -325,6 +339,16 @@ class LastWriteTracker:
         record = self._data.get(entity_id)
         claim = record.get("confirmed") if record else None
         return claim.get("owner_id") if claim else None
+
+    def confirmed_target(self, entity_id: str) -> dict | None:
+        record = self._data.get(entity_id)
+        claim = record.get("confirmed") if record else None
+        return claim.get("target") if claim else None
+
+    def confirmed_secondary_context_id(self, entity_id: str) -> str | None:
+        record = self._data.get(entity_id)
+        claim = record.get("confirmed") if record else None
+        return claim.get("secondary_context_id") if claim else None
 
     def pending_context_id(self, entity_id: str) -> str | None:
         record = self._data.get(entity_id)
@@ -340,6 +364,11 @@ class LastWriteTracker:
         record = self._data.get(entity_id)
         claim = record.get("pending") if record else None
         return claim.get("target") if claim else None
+
+    def pending_secondary_context_id(self, entity_id: str) -> str | None:
+        record = self._data.get(entity_id)
+        claim = record.get("pending") if record else None
+        return claim.get("secondary_context_id") if claim else None
 
     async def async_clear(self, entity_ids: list[str]) -> None:
         """Manually discards an entity's tracked record entirely -
@@ -373,6 +402,8 @@ class LastWriteTracker:
         context_id: str,
         owner_id: str | None = None,
         targets: dict[str, dict] | None = None,
+        secondary_context_ids: dict[str, str] | None = None,
+        context_id_overrides: dict[str, str] | None = None,
     ) -> None:
         """Called once per apply_lighting invocation with every entity it
         actually issued a light.turn_on/turn_off for - not entities it
@@ -429,30 +460,58 @@ class LastWriteTracker:
         Entity._context expires 5 seconds after the service call that
         set it, so a device whose real confirmation takes longer than
         that reports back under an unrelated context even when it's
-        agreeing with us exactly."""
+        agreeing with us exactly.
+
+        secondary_context_ids / context_id_overrides: for a two-step
+        transition (no_combined_transition label), the brightness-only
+        step and the colour step now genuinely get two distinct
+        context.id values (see __init__.py's _two_step_turn_on) rather
+        than sharing one - a device reporting the brightness-only step
+        back on its own is a real, expected intermediate state for
+        these bulbs, not an anomaly, and neither of those two contexts
+        is `context_id` above (the *triggering* apply_lighting call's
+        own context - never itself passed to either light.turn_on call
+        for a two-step entity). context_id_overrides supplies the
+        colour step's context as this claim's actual primary
+        `context_id` (the final, complete state); secondary_context_ids
+        supplies the brightness step's as `secondary_context_id`,
+        recorded alongside it - either one landing is recognised as
+        ours (see override_protection.py's _context_matches). Both
+        dicts are keyed by entity_id and stay empty for anything that
+        isn't a two-step entity, which keeps using `context_id` alone,
+        unchanged."""
         if not entity_ids:
             return
         targets = targets or {}
+        secondary_context_ids = secondary_context_ids or {}
+        context_id_overrides = context_id_overrides or {}
         for entity_id in entity_ids:
             old = self._data.get(entity_id)
             confirmed: Optional[_ContextClaim]
             if old is not None:
                 old_pending = old.get("pending")
-                if old_pending is not None and old_pending["context_id"] == live_context_before_write.get(entity_id):
+                if _context_matches(old_pending, live_context_before_write.get(entity_id)):
                     confirmed = old_pending
                 else:
                     confirmed = old.get("confirmed")
             else:
                 baseline_context = live_context_before_write.get(entity_id)
                 confirmed = (
-                    {"context_id": baseline_context, "owner_id": None, "recorded_at": None, "target": None}
+                    {
+                        "context_id": baseline_context,
+                        "secondary_context_id": None,
+                        "owner_id": None,
+                        "recorded_at": None,
+                        "target": None,
+                    }
                     if baseline_context is not None
                     else None
                 )
             self._data[entity_id] = {
                 "confirmed": confirmed,
                 "pending": {
-                    "context_id": context_id,
+                    "context_id": context_id_overrides.get(entity_id, context_id),
+                    "secondary_context_id": secondary_context_ids.get(entity_id),
                     "owner_id": owner_id,
                     "recorded_at": dt_util.utcnow().isoformat(),
                     "target": targets.get(entity_id),
