@@ -111,17 +111,6 @@ done exactly what it was told. A single mired step is worth as little as ~5K nea
 so no single flat Kelvin tolerance could reliably cover this on its own - the mired-equivalence check is
 always-on, on top of whatever `color_temp_tolerance` is configured.
 
-Step 7 has one more exception on top of the value-match rescue: a `pending` write that's very recent (within
-120 seconds of being issued) is never concluded "externally set," even if neither its context nor its value
-match yet - a genuine device round-trip simply might not have landed. Without this, a mass simultaneous write
-(a whole room's worth of lights at once - a phase transition being the obvious case) reliably misjudged
-"overridden" for any device whose confirmation hadn't landed within a single tick, and because an excluded
-light is never written again, that one early misjudgment became permanent: confirmed live, a Night-to-Day
-transition locked out a dozen-plus kitchen/dining lights simultaneously this way, recoverable only by manually
-clicking Clear on the write-tracking card. Past that 120-second window, the ordinary "overridden" conclusion
-applies as before - this is a brief grace period on a genuinely fresh write, not a general loosening of the
-check.
-
 Steps 5 and 6 are both really the same question ("does a recorded owner conflict with the one asking now?"),
 just checked against two different claims instead of one - two different callers writing the *same* light
 with *different* `owner_id`s never look "externally set" to *each other* by context alone, since each one's

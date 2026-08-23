@@ -27,16 +27,11 @@ confirmed live against the real instance instead (see CLAUDE.md).
 
 from __future__ import annotations
 
-from datetime import timedelta
-
 import pytest
-from freezegun import freeze_time
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from homeassistant.core import Context, HomeAssistant
-from homeassistant.util import dt as dt_util
 
-from custom_components.adaptive_lighting_helpers.override_protection import PENDING_GRACE_SECONDS
 from custom_components.adaptive_lighting_helpers.sensor import _WriteTrackingSensor
 from custom_components.adaptive_lighting_helpers.write_tracking import LastWriteTracker
 
@@ -107,34 +102,30 @@ async def test_status_pending_when_live_context_matches_pending_only(
 async def test_status_overridden_when_live_context_and_value_both_mismatch(
     hass: HomeAssistant, write_tracker: LastWriteTracker, sensor_entity: _WriteTrackingSensor
 ):
-    with freeze_time(dt_util.utcnow()) as frozen:
-        _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
-        await write_tracker.async_record(["light.a"], {"light.a": None}, "ctx-1", "automation.room")
-        _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], context=Context(id="ctx-1"))
-        await write_tracker.async_record(
-            ["light.a"],
-            {"light.a": "ctx-1"},
-            "ctx-2",
-            "automation.room",
-            targets={"light.a": {"brightness": 200, "color_temp_kelvin": 3000}},
-        )
-        # An external change - a fresh context matching neither confirmed
-        # (ctx-1) nor pending (ctx-2), and a value nowhere near pending's own
-        # recorded target either, so the value-match rescue doesn't apply.
-        # Brightness deliberately differs from the prior _set_light calls: HA
-        # only replaces an entity's context on a genuine state change, not a
-        # same-state "state_reported" re-set - confirmed live and already
-        # documented in this repo's own
-        # test_force_bypasses_protection_and_reclaims_ownership.
-        _set_light(
-            hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=42, context=Context(id="ctx-3")
-        )
-        # Past the pending-grace-period window - see PENDING_GRACE_SECONDS -
-        # otherwise this mismatch reads as "still in flight", not overridden.
-        frozen.move_to(dt_util.utcnow() + timedelta(seconds=PENDING_GRACE_SECONDS + 1))
+    _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
+    await write_tracker.async_record(["light.a"], {"light.a": None}, "ctx-1", "automation.room")
+    _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], context=Context(id="ctx-1"))
+    await write_tracker.async_record(
+        ["light.a"],
+        {"light.a": "ctx-1"},
+        "ctx-2",
+        "automation.room",
+        targets={"light.a": {"brightness": 200, "color_temp_kelvin": 3000}},
+    )
+    # An external change - a fresh context matching neither confirmed
+    # (ctx-1) nor pending (ctx-2), and a value nowhere near pending's own
+    # recorded target either, so the value-match rescue doesn't apply.
+    # Brightness deliberately differs from the prior _set_light calls: HA
+    # only replaces an entity's context on a genuine state change, not a
+    # same-state "state_reported" re-set - confirmed live and already
+    # documented in this repo's own
+    # test_force_bypasses_protection_and_reclaims_ownership.
+    _set_light(
+        hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=42, context=Context(id="ctx-3")
+    )
 
-        record = sensor_entity.extra_state_attributes["entities"]["light.a"]
-        assert record["status"] == "overridden"
+    record = sensor_entity.extra_state_attributes["entities"]["light.a"]
+    assert record["status"] == "overridden"
 
 
 async def test_owner_id_surfaces_whichever_claim_currently_matches(
@@ -157,26 +148,23 @@ async def test_owner_id_surfaces_whichever_claim_currently_matches(
 async def test_owner_id_is_none_when_nothing_currently_matches(
     hass: HomeAssistant, write_tracker: LastWriteTracker, sensor_entity: _WriteTrackingSensor
 ):
-    with freeze_time(dt_util.utcnow()) as frozen:
-        _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
-        await write_tracker.async_record(["light.a"], {"light.a": None}, "ctx-1", "automation.room_a")
-        _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], context=Context(id="ctx-1"))
-        await write_tracker.async_record(
-            ["light.a"],
-            {"light.a": "ctx-1"},
-            "ctx-2",
-            "automation.room_a",
-            targets={"light.a": {"brightness": 200, "color_temp_kelvin": 3000}},
-        )
-        _set_light(
-            hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=42, context=Context(id="ctx-3")
-        )
-        # Past the pending-grace-period window - see PENDING_GRACE_SECONDS.
-        frozen.move_to(dt_util.utcnow() + timedelta(seconds=PENDING_GRACE_SECONDS + 1))
+    _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
+    await write_tracker.async_record(["light.a"], {"light.a": None}, "ctx-1", "automation.room_a")
+    _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], context=Context(id="ctx-1"))
+    await write_tracker.async_record(
+        ["light.a"],
+        {"light.a": "ctx-1"},
+        "ctx-2",
+        "automation.room_a",
+        targets={"light.a": {"brightness": 200, "color_temp_kelvin": 3000}},
+    )
+    _set_light(
+        hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=42, context=Context(id="ctx-3")
+    )
 
-        record = sensor_entity.extra_state_attributes["entities"]["light.a"]
-        assert record["status"] == "overridden"
-        assert record["owner_id"] is None
+    record = sensor_entity.extra_state_attributes["entities"]["light.a"]
+    assert record["status"] == "overridden"
+    assert record["owner_id"] is None
 
 
 async def test_status_off_when_the_light_is_legitimately_off(

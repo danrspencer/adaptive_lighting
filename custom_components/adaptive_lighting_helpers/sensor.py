@@ -54,7 +54,6 @@ from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
-from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN
 from .coordinator import ScheduleCoordinator, ScheduleInstance, schedule_instances
@@ -237,7 +236,6 @@ class _WriteTrackingSensor(SensorEntity):
                     state.attributes.get("brightness"),
                     state.attributes.get("color_temp_kelvin"),
                     state.attributes.get("rgb_color"),
-                    now=dt_util.utcnow(),
                 )
                 # "unclaimed" (no confirmed/pending at all, or only an
                 # unconfirmed first attempt) displays the same as
@@ -255,12 +253,11 @@ class _WriteTrackingSensor(SensorEntity):
                 # cross-reference confirmed/pending themselves to answer
                 # "who owns this light right now".
                 "owner_id": claim_owner,
-                # "context", "value", or "grace" for pending/controlled
-                # (how the match was actually determined - a raw
-                # context.id equality, the delayed-echo/mired value
-                # rescue, or a too-recent-to-judge pending write), None
-                # otherwise - classify()'s third return value, for the
-                # dashboard card's "why" explanation.
+                # "context" or "value" for pending/controlled (how the
+                # match was actually determined - a raw context.id
+                # equality, or the delayed-echo/mired value rescue),
+                # None otherwise - classify()'s third return value, for
+                # the dashboard card's "why" explanation.
                 "matched_via": matched_via,
                 "live_context_id": live_context_id,
                 "confirmed": confirmed,

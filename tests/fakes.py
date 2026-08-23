@@ -2,7 +2,6 @@
 Assistant state, so grouping.py/scenes.py can be exercised without a
 running HA instance."""
 
-from datetime import datetime
 from typing import Optional
 
 from grouping import EntityLookup
@@ -18,8 +17,6 @@ def make_lookup(
     pending_context_ids: Optional[dict] = None,
     pending_owner_ids: Optional[dict] = None,
     pending_targets: Optional[dict] = None,
-    pending_recorded_ats: Optional[dict] = None,
-    now: Optional[datetime] = None,
 ) -> EntityLookup:
     """
     states:    {entity_id: {"state": "on"/"off"/"unavailable"/..., "attributes": {...}, "context_id": "..."}}
@@ -40,14 +37,6 @@ def make_lookup(
                pending claim's write actually asked for. Absent means no
                target is known for that claim (an off-command, or a
                claim write_tracking only observed rather than issued).
-    pending_recorded_ats: {entity_id: "2026-01-01T00:00:00+00:00"} - when
-               the pending claim was recorded, ISO 8601. Absent means
-               unknown/not recorded.
-    now: the current time, passed straight through to classify() as its
-               own `now` - defaults to None, which (matching classify()'s
-               own default) disables the pending-grace-period leniency
-               entirely, so every existing test keeps its original,
-               stricter behaviour unless it explicitly opts in.
     """
     device_of = device_of or {}
     labels_of = labels_of or {}
@@ -56,7 +45,6 @@ def make_lookup(
     pending_context_ids = pending_context_ids or {}
     pending_owner_ids = pending_owner_ids or {}
     pending_targets = pending_targets or {}
-    pending_recorded_ats = pending_recorded_ats or {}
 
     def is_state(entity_id, value):
         return states.get(entity_id, {}).get("state") == value
@@ -88,9 +76,6 @@ def make_lookup(
     def pending_target(entity_id):
         return pending_targets.get(entity_id)
 
-    def pending_recorded_at(entity_id):
-        return pending_recorded_ats.get(entity_id)
-
     return EntityLookup(
         is_state=is_state,
         state_attr=state_attr,
@@ -102,8 +87,6 @@ def make_lookup(
         pending_context_id=pending_context_id,
         pending_owner_id=pending_owner_id,
         pending_target=pending_target,
-        pending_recorded_at=pending_recorded_at,
-        now=lambda: now,
     )
 
 
