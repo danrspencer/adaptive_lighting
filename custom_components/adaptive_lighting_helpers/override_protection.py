@@ -19,17 +19,14 @@ test file is targeted.
 
 Genuinely generic, not specific to adaptive lighting or even to
 lights - the only light-flavoured piece is `target_matches_values`'s
-{brightness, color_temp_kelvin, rgb_color} shape (kept as-is rather
-than generalised to arbitrary entity attributes - a deliberate,
-smaller-scope choice; see CLAUDE.md). Extracted out of grouping.py's
-`EntityLookup.externally_set()`, where this same logic used to live
-inline, coupled to that module's brightness-bucketing concerns only
-through the EntityLookup dataclass boundary - grouping.py's
-`externally_set()` is now a thin adapter calling `classify()` below,
-and the two new `check_ownership`/`record_ownership` services
-(__init__.py) expose the identical mechanism standalone, for any
-caller that wants it without any of adaptive_lighting_helpers' curve/
-brightness logic at all.
+{brightness, color_temp_kelvin, rgb_color} shape, deliberately kept
+concrete rather than generalised to arbitrary entity attributes.
+
+Three consumers share this one decision table: grouping.py's
+`EntityLookup.externally_set()`, sensor.py's diagnostic status, and the
+standalone `check_ownership` service. Keeping them on one implementation
+is the point - they previously drifted, and an off light was classified
+"overridden" in one and "not excluded" in the other.
 
 Each tracked entity has not one recorded write but two - `confirmed`
 (a write some *earlier* call actually observed landing) and `pending`
@@ -205,25 +202,18 @@ def classify(
       primary or secondary), OR matches neither claim but the entity's
       current value still matches what *either* claim's own write
       actually asked for (see `target_matches_values` - checked against
-      `pending`'s target first, then `confirmed`'s). Two independent
-      reasons a context alone can't be trusted, both closed by this:
-      (1) HA's own Entity._context expires 5 seconds after the service
-      call that set it, so a device whose real confirmation takes
-      longer than that reports back under a brand-new, unrelated
-      context even though it's echoing exactly the value asked for -
-      checking `pending`'s target catches this. (2) A light that
-      genuinely hasn't updated *at all* yet is, by definition, still
-      showing exactly what `confirmed` asked for - its own live context
-      just happens to have changed for some unrelated reason (checking
-      `confirmed`'s target catches this; this was the original intent
-      of keeping two claims in the first place, not a new mechanism -
-      a gap in the implementation, not the design). Without either
-      check, that echo reads as external and, since nothing else ever
-      un-marks it while the entity stays continuously on, it would be
-      silently excluded from every future write, forever, the instant
-      it next needed a genuinely different value - confirmed live:
-      light.kitchen_3/light.kitchen_5 stuck exactly this way for over
-      an hour, still correctly lit the whole time.
+      `pending`'s target first, then `confirmed`'s). Two separate
+      reasons a context alone can't be trusted, one per claim:
+      (1) `pending` - HA's Entity._context expires 5 seconds after the
+      service call that set it, so a device whose confirmation takes
+      longer reports back under an unrelated context while echoing
+      exactly the value asked for. (2) `confirmed` - a light that never
+      adopted the latest write at all is, by definition, still showing
+      what the last landed write asked for, even if its own context has
+      since changed for an unrelated reason. Without both, such a light
+      reads as external and - since nothing un-marks it while it stays
+      continuously on - is silently excluded from every future write
+      the instant it next needs a different value.
     - `"overridden"` - a `confirmed` claim exists and neither it nor
       `pending` matches, by context *or* value (against either claim's
       own target). Something else has genuinely touched this entity
@@ -254,16 +244,10 @@ def classify(
     diagnostic consumer (the write-tracking sensor/dashboard card) to
     show *why*, not for any decision logic here or in `is_blocked()`.
 
-    Note this is a real behaviour change from an earlier version of
-    this check, not just a move: the value-rescue case used to return
-    "not externally set" unconditionally, with no owner comparison at
-    all - meaning an entity whose live value happened to match a
-    *different* owner's `pending` target would have incorrectly read
-    as free-to-manage for anyone. The other two matched cases
-    (context-matches-pending, context-matches-confirmed) always did
-    check the owner first; returning `pending`'s owner here makes all
-    three matched cases go through the identical caller-side owner
-    check uniformly."""
+    Every matched case returns an owner, including both value-rescue
+    branches, so the caller-side owner check applies uniformly - a light
+    whose live value happens to match a *different* owner's target must
+    not read as free-to-manage."""
     if not is_on:
         return "off", None, None
     if confirmed is None and pending is None:
