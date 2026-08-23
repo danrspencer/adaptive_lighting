@@ -233,7 +233,15 @@ def clamp_color_temp_kelvin(entity_id: str, target_kelvin: int, lookup: EntityLo
     no benefit - the device already does this clamping itself. A missing
     or unparseable bound (0 below - no real bulb reports 0K) leaves the
     target untouched, so a light that doesn't publish its range behaves
-    exactly as it did before."""
+    exactly as it did before.
+
+    The advertised range is NOT always authoritative, which is why
+    _already_set treats this as an *additional* way to match rather than
+    a replacement: confirmed live, light.utility_spot_1 advertises
+    max_color_temp_kelvin 4000 while happily reporting 5813 and tracking
+    the curve correctly. Comparing such a bulb only against its clamped
+    target would re-command it on every tick - the exact bug this
+    function exists to prevent, just inverted."""
     lo = _as_int(lookup.state_attr(entity_id, "min_color_temp_kelvin"), 0)
     hi = _as_int(lookup.state_attr(entity_id, "max_color_temp_kelvin"), 0)
     if lo > 0:
@@ -378,11 +386,20 @@ def _already_set(
     if not _brightness_close(entity_id, target_brightness, lookup, brightness_tolerance):
         return False
     current_color_temp = _as_int(lookup.state_attr(entity_id, "color_temp_kelvin"), -999)
-    # Against what this bulb can actually reach, not the raw curve value -
-    # see clamp_color_temp_kelvin for why comparing against an
-    # unreachable target re-commands the light on every tick forever.
+    if _color_temp_matches(current_color_temp, target_color_temp_kelvin, color_temp_tolerance):
+        return True
+    # Also accept the target narrowed to this bulb's own advertised range:
+    # a bulb that physically can't reach the target settles at its ceiling
+    # and would otherwise never compare equal, so it'd be re-commanded
+    # every tick forever (see clamp_color_temp_kelvin). Checked *in
+    # addition to* the raw target rather than instead of it, because the
+    # advertised range isn't always honest - some bulbs report values
+    # outside their own stated min/max - and clamping unconditionally
+    # would create that same endless churn for them instead.
     reachable_target = clamp_color_temp_kelvin(entity_id, target_color_temp_kelvin, lookup)
-    return _color_temp_matches(current_color_temp, reachable_target, color_temp_tolerance)
+    return reachable_target != target_color_temp_kelvin and _color_temp_matches(
+        current_color_temp, reachable_target, color_temp_tolerance
+    )
 
 
 def _already_set_rgb(

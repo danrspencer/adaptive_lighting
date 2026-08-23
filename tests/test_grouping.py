@@ -1185,3 +1185,34 @@ def test_a_bulb_publishing_no_range_is_compared_against_the_raw_target():
         lookup=lookup,
     )
     assert groups[0].combined == ["light.a"]
+
+
+def test_a_bulb_reporting_outside_its_advertised_range_is_not_recommanded():
+    """Live counter-example that shapes the clamp: light.utility_spot_1
+    advertises max_color_temp_kelvin 4000 while actually reporting 5813 and
+    tracking the curve correctly. Its advertised range is simply not honest.
+    Clamping the comparison target unconditionally would compare 5813 against
+    4000, never match, and re-command it on every tick - the same endless
+    churn the clamp exists to prevent, just inverted. So the clamped target is
+    an *additional* way to match, never a replacement for the raw one."""
+    lookup = make_lookup(
+        states={
+            "light.a": {
+                "state": "on",
+                "attributes": {
+                    "brightness": 255,
+                    "color_temp_kelvin": 5813,
+                    "min_color_temp_kelvin": 2202,
+                    "max_color_temp_kelvin": 4000,
+                },
+            }
+        },
+    )
+    groups = build_groups(
+        entities=["light.a"],
+        brightness_multipliers={},
+        sensor_brightness=255,
+        sensor_color_temp_kelvin=5813,
+        lookup=lookup,
+    )
+    assert groups[0].combined == []
