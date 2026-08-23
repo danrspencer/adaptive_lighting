@@ -21,10 +21,15 @@ from datetime import timedelta
 import pytest
 import voluptuous as vol
 from freezegun import freeze_time
-from pytest_homeassistant_custom_component.common import MockConfigEntry, async_mock_service
+from pytest_homeassistant_custom_component.common import (
+    MockConfigEntry,
+    async_fire_time_changed,
+    async_mock_service,
+)
 
 from homeassistant.config_entries import ConfigEntryState
 from homeassistant.core import Context, HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 
 from custom_components.adaptive_lighting_helpers import _build_lookup, async_setup_entry
@@ -60,6 +65,31 @@ async def _setup_entry(hass: HomeAssistant) -> MockConfigEntry:
 
 def _set_light(hass: HomeAssistant, entity_id: str, state: str, *, context: Context | None = None, **attrs) -> None:
     hass.states.async_set(entity_id, state, attrs, context=context)
+
+
+async def _label_two_step(hass: HomeAssistant, entity_id: str) -> None:
+    """Registers entity_id with the real "no_combined_transition" label
+    directly on the entity (no device needed - EntityLookup.tags() reads
+    entity labels plus device labels, and a fake/unregistered device
+    just contributes nothing). HA's entity registry `labels` field is a
+    plain set of label id strings with no foreign-key enforcement, so
+    this doesn't need a real label-registry entry to exist first - see
+    tests/integration/test_two_step_repair.py for the fuller
+    device+label-registry setup a different feature (detecting bulbs
+    *missing* this label) actually needs.
+
+    Async because a real entity-registry change here also triggers
+    two_step_check.py's own, unrelated registry-change watcher
+    (async_start_watching), which schedules a 5s-debounced check -
+    flushed here immediately so it doesn't linger past the end of
+    whichever test called this and fail the harness's own lingering-
+    timer assertion, the same class of gotcha lesson 10/the two-step
+    repair feature's own tests already document."""
+    domain, object_id = entity_id.split(".", 1)
+    er.async_get(hass).async_get_or_create(domain, "test", object_id, suggested_object_id=object_id)
+    er.async_get(hass).async_update_entity(entity_id, labels={"no_combined_transition"})
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=30))
+    await hass.async_block_till_done()
 
 
 @pytest.fixture
@@ -610,6 +640,170 @@ async def test_a_devices_own_delayed_echo_does_not_permanently_lock_the_light_ou
         blocking=True,
     )
     assert len(turn_on_calls) == 3
+
+
+async def test_two_step_transition_generates_two_distinct_contexts(setup_integration: HomeAssistant):
+    """A two-step transition (no_combined_transition label) really is
+    two separate light.turn_on calls - brightness first, then colour -
+    and each now gets its own real Context() rather than sharing
+    call.context (see __init__.py's _two_step_turn_on). Both land in
+    write_tracking: the colour step's (the final, complete state) as
+    the claim's primary context_id, the brightness step's as its
+    secondary_context_id."""
+    hass = setup_integration
+    turn_on_calls = async_mock_service(hass, "light", "turn_on")
+    await _label_two_step(hass, "light.a")
+    _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
+
+    await hass.services.async_call(
+        DOMAIN,
+        "apply_lighting",
+        {
+            "entities": ["light.a"],
+            "brightness": 200,
+            "color_temp_kelvin": 3000,
+            "transition": 0.2,
+            "owner_id": "automation.room",
+        },
+        blocking=True,
+    )
+
+    assert len(turn_on_calls) == 2
+    brightness_call, color_call = turn_on_calls
+    assert brightness_call.data == {"entity_id": ["light.a"], "transition": 0.1, "brightness": 200}
+    assert color_call.data["color_temp_kelvin"] == 3000
+    # Two genuinely different contexts, and neither is the apply_lighting
+    # call's own (nothing threads that through to either light.turn_on
+    # call for a two-step entity anymore - see _two_step_turn_on).
+    assert brightness_call.context.id != color_call.context.id
+
+    tracker = LastWriteTracker(hass)
+    await tracker.async_load()
+    assert tracker.pending_context_id("light.a") == color_call.context.id
+    assert tracker.pending_secondary_context_id("light.a") == brightness_call.context.id
+
+
+async def test_two_step_brightness_step_landing_alone_is_recognised_as_ours(setup_integration: HomeAssistant):
+    """The actual incident this fixes: a two-step bulb reporting back
+    after just its brightness-only step (a real, expected intermediate
+    state for these bulbs, not an anomaly) used to look externally-set,
+    because that intermediate report's context matched neither the
+    single shared context.id apply_lighting used to record nor the
+    final combined target's values. Now the brightness step gets its
+    own context, recorded as this claim's secondary_context_id - a
+    device reporting back under exactly that context is recognised
+    directly, even though its colour hasn't caught up to the new target
+    yet."""
+    hass = setup_integration
+    turn_on_calls = async_mock_service(hass, "light", "turn_on")
+    await _label_two_step(hass, "light.a")
+    _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
+
+    await hass.services.async_call(
+        DOMAIN,
+        "apply_lighting",
+        {
+            "entities": ["light.a"],
+            "brightness": 200,
+            "color_temp_kelvin": 3000,
+            "transition": 0.2,
+            "owner_id": "automation.room",
+        },
+        blocking=True,
+    )
+    assert len(turn_on_calls) == 2
+    brightness_context = turn_on_calls[0].context
+
+    # The device confirms the brightness step on its own - genuinely new
+    # brightness, colour still at whatever it was before (light started
+    # off, so color_temp_kelvin was never set at all) - under exactly
+    # the context that step was issued with.
+    _set_light(
+        hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=200, context=brightness_context
+    )
+
+    result = await hass.services.async_call(
+        DOMAIN,
+        "check_ownership",
+        {"entities": ["light.a"], "owner_id": "automation.room"},
+        blocking=True,
+        return_response=True,
+    )
+    assert result["results"]["light.a"] == {
+        "blocked": False,
+        "status": "pending",
+        "owner_id": "automation.room",
+        "matched_via": "context",
+    }
+
+
+async def test_two_step_promotion_recognises_a_match_via_the_secondary_context(setup_integration: HomeAssistant):
+    """write_tracking.py's own promotion logic (async_record) is a
+    genuinely different code path from classify()'s read-side check
+    covered above - both call the shared _context_matches helper, but
+    only a real second apply_lighting call actually exercises the
+    promotion branch. A device that only ever confirms a two-step
+    write's brightness step (never the colour one - e.g. a dropped
+    colour command) must still promote that write into `confirmed` on
+    the next call, not treat it as never-landed."""
+    hass = setup_integration
+    async_mock_service(hass, "light", "turn_on")
+    await _label_two_step(hass, "light.a")
+    _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
+
+    await hass.services.async_call(
+        DOMAIN,
+        "apply_lighting",
+        {
+            "entities": ["light.a"],
+            "brightness": 200,
+            "color_temp_kelvin": 3000,
+            "transition": 0.2,
+            "owner_id": "automation.room",
+        },
+        blocking=True,
+    )
+
+    tracker = LastWriteTracker(hass)
+    await tracker.async_load()
+    brightness_ctx_1 = tracker.pending_secondary_context_id("light.a")
+    color_ctx_1 = tracker.pending_context_id("light.a")
+    assert brightness_ctx_1 is not None and color_ctx_1 is not None
+
+    # The device only ever confirms the brightness step - the colour
+    # command silently dropped (a real, if less common, two-step
+    # failure mode alongside the "neither step confirms" case the
+    # dropped-first-write test below already covers).
+    _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=200, context=Context(id=brightness_ctx_1))
+
+    await hass.services.async_call(
+        DOMAIN,
+        "apply_lighting",
+        {
+            "entities": ["light.a"],
+            "brightness": 200,
+            "color_temp_kelvin": 3000,
+            "transition": 0.2,
+            "owner_id": "automation.room",
+        },
+        blocking=True,
+    )
+
+    # A fresh LastWriteTracker/Store, not the one used above - the test
+    # harness's mock_storage patch caches a Store instance's first-ever
+    # load in `store._data` and never refreshes it on a later load (real
+    # HA's Store clears that field right after a write; the mock deliberately
+    # doesn't, since it exists to skip disk I/O, not to model write-then-
+    # reread staleness) - reusing `tracker` here would just re-read the
+    # snapshot from before call 2 ran.
+    tracker_after = LastWriteTracker(hass)
+    await tracker_after.async_load()
+    # Promoted: the first write's own claim (both its contexts) is now
+    # `confirmed`, proven via the secondary (brightness) context match,
+    # not the primary (colour) one - the light never reported the
+    # colour step's context at all.
+    assert tracker_after.confirmed_context_id("light.a") == color_ctx_1
+    assert tracker_after.confirmed_secondary_context_id("light.a") == brightness_ctx_1
 
 
 async def test_a_dropped_first_write_self_heals_on_the_next_tick_with_no_interference(

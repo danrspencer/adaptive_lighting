@@ -72,14 +72,27 @@ class EntityLookup:
     confirmed_owner_id: Callable[[str], Optional[str]]
     pending_context_id: Callable[[str], Optional[str]]
     pending_owner_id: Callable[[str], Optional[str]]
-    # What the *pending* claim's write actually intended - {brightness,
+    # What each claim's write actually intended - {brightness,
     # color_temp_kelvin} or {brightness, rgb_color}, or None if that
     # claim isn't a real apply_lighting write (an off-command, or a
     # write_tracking-observed baseline rather than one we issued). Lets
     # externally_set() below tell "our own write, echoed back under an
-    # unrelated context" apart from a genuine external change - see its
-    # own docstring.
+    # unrelated context" apart from a genuine external change, checking
+    # both claims - not just pending's - since a light that genuinely
+    # hasn't updated at all yet is, by definition, still showing exactly
+    # what confirmed itself asked for.
     pending_target: Callable[[str], Optional[dict]]
+    confirmed_target: Callable[[str], Optional[dict]]
+    # The second context.id a two-step transition's own brightness-only
+    # step gets (see write_tracking.py's async_record docstring) - None
+    # for a combined write, which never has one. Lets externally_set()
+    # recognise a two-step write's first step landing on its own, not
+    # just the final combined state. confirmed's own secondary context
+    # is whatever pending's was at the moment of promotion (see
+    # async_record) - carried forward automatically once accessed here,
+    # same as confirmed_target above.
+    pending_secondary_context_id: Callable[[str], Optional[str]]
+    confirmed_secondary_context_id: Callable[[str], Optional[str]]
 
     def reachable(self, entity_id: str) -> bool:
         """False for anything HA already knows it can't reach - no point commanding it."""
@@ -209,11 +222,21 @@ class EntityLookup:
         story) and with the standalone check_ownership/record_ownership
         services this same mechanism is also exposed as."""
         confirmed_ctx = self.confirmed_context_id(entity_id)
-        confirmed = {"context_id": confirmed_ctx, "owner_id": self.confirmed_owner_id(entity_id)} if confirmed_ctx is not None else None
+        confirmed = (
+            {
+                "context_id": confirmed_ctx,
+                "secondary_context_id": self.confirmed_secondary_context_id(entity_id),
+                "owner_id": self.confirmed_owner_id(entity_id),
+                "target": self.confirmed_target(entity_id),
+            }
+            if confirmed_ctx is not None
+            else None
+        )
         pending_ctx = self.pending_context_id(entity_id)
         pending = (
             {
                 "context_id": pending_ctx,
+                "secondary_context_id": self.pending_secondary_context_id(entity_id),
                 "owner_id": self.pending_owner_id(entity_id),
                 "target": self.pending_target(entity_id),
             }

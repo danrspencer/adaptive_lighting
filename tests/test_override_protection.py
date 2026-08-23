@@ -12,7 +12,7 @@ homeassistant.util.color directly - see its own module docstring for why
 that's a deliberate exception to "no HA dependency", not an oversight).
 """
 
-from override_protection import _color_temp_matches, classify, is_blocked, target_matches_values
+from override_protection import _color_temp_matches, _context_matches, classify, is_blocked, target_matches_values
 
 
 def test_off_light_is_never_protected_regardless_of_claims():
@@ -68,6 +68,61 @@ def test_context_matches_confirmed():
     assert (status, owner, matched_via) == ("controlled", "automation.a", "context")
 
 
+def test_context_matches_pendings_secondary_context():
+    # A two-step transition's brightness-only step lands under its own
+    # context (see __init__.py's _two_step_turn_on) - matching that
+    # secondary context is just as much "ours" as matching the primary
+    # (colour step's) one.
+    status, owner, matched_via = classify(
+        is_on=True,
+        confirmed={"context_id": "ctx-confirmed", "owner_id": "automation.a"},
+        pending={"context_id": "ctx-pending-colour", "secondary_context_id": "ctx-pending-brightness", "owner_id": "automation.b"},
+        current_context="ctx-pending-brightness",
+    )
+    assert (status, owner, matched_via) == ("pending", "automation.b", "context")
+
+
+def test_context_matches_confirmeds_secondary_context():
+    # confirmed inherits secondary_context_id automatically once
+    # promoted (async_record just carries the whole old pending dict
+    # forward) - this proves classify() actually checks it there too,
+    # not just on pending.
+    status, owner, matched_via = classify(
+        is_on=True,
+        confirmed={"context_id": "ctx-confirmed-colour", "secondary_context_id": "ctx-confirmed-brightness", "owner_id": "automation.a"},
+        pending={"context_id": "ctx-pending", "owner_id": "automation.a"},
+        current_context="ctx-confirmed-brightness",
+    )
+    assert (status, owner, matched_via) == ("controlled", "automation.a", "context")
+
+
+def test_secondary_context_absent_does_not_accidentally_match_none():
+    # A claim with no secondary_context_id at all (the ordinary,
+    # combined-write case) must never match on a live context that's
+    # itself None (e.g. a brand new entity with no live state yet) -
+    # _context_matches must not treat "no secondary" and "no live
+    # context" as equal.
+    assert not _context_matches({"context_id": "ctx-a", "secondary_context_id": None}, None)
+    assert not _context_matches({"context_id": "ctx-a"}, None)
+
+
+def test_context_matching_neither_primary_nor_secondary_falls_through_to_value_rescue():
+    status, owner, matched_via = classify(
+        is_on=True,
+        confirmed={"context_id": "ctx-confirmed", "owner_id": "automation.a"},
+        pending={
+            "context_id": "ctx-pending-colour",
+            "secondary_context_id": "ctx-pending-brightness",
+            "owner_id": "automation.a",
+            "target": {"brightness": 200, "color_temp_kelvin": 3000},
+        },
+        current_context="ctx-completely-unrelated",
+        current_brightness=200,
+        current_color_temp_kelvin=3000,
+    )
+    assert (status, owner, matched_via) == ("controlled", "automation.a", "value")
+
+
 def test_context_matches_neither_but_value_matches_pendings_target():
     # The delayed-echo rescue - see classify()'s own docstring for why
     # a context mismatch alone doesn't prove an external touch.
@@ -84,6 +139,53 @@ def test_context_matches_neither_but_value_matches_pendings_target():
     # entirely for the rescue case. matched_via distinguishes this from
     # the context-matched "controlled" case above.
     assert (status, owner, matched_via) == ("controlled", "automation.b", "value")
+
+
+def test_context_matches_neither_but_value_matches_confirmeds_own_target():
+    # The other half of the value-rescue, checking both claims was
+    # always the point of keeping two - a light that genuinely hasn't
+    # updated at all yet is, by definition, still showing exactly what
+    # `confirmed` itself asked for; its live context just happens to
+    # have changed for some unrelated reason (a benign registry event,
+    # a two-step bulb's other step landing under its own context, etc).
+    # pending's own target (10/2000) deliberately does NOT match, so
+    # this only passes if confirmed's target is actually being checked.
+    status, owner, matched_via = classify(
+        is_on=True,
+        confirmed={"context_id": "ctx-confirmed", "owner_id": "automation.a", "target": {"brightness": 50, "color_temp_kelvin": 2700}},
+        pending={"context_id": "ctx-pending", "owner_id": "automation.b", "target": {"brightness": 10, "color_temp_kelvin": 2000}},
+        current_context="ctx-something-unrelated",
+        current_brightness=50,
+        current_color_temp_kelvin=2700,
+    )
+    assert (status, owner, matched_via) == ("controlled", "automation.a", "value")
+
+
+def test_pending_value_rescue_is_checked_before_confirmeds():
+    # When both would technically match, pending (the more recent claim)
+    # takes precedence - matching classify()'s existing context-check
+    # ordering (pending before confirmed).
+    status, owner, matched_via = classify(
+        is_on=True,
+        confirmed={"context_id": "ctx-confirmed", "owner_id": "automation.a", "target": {"brightness": 200, "color_temp_kelvin": 3000}},
+        pending={"context_id": "ctx-pending", "owner_id": "automation.b", "target": {"brightness": 200, "color_temp_kelvin": 3000}},
+        current_context="ctx-something-unrelated",
+        current_brightness=200,
+        current_color_temp_kelvin=3000,
+    )
+    assert (status, owner, matched_via) == ("controlled", "automation.b", "value")
+
+
+def test_rescue_does_not_apply_when_neither_claims_target_matches():
+    status, owner, matched_via = classify(
+        is_on=True,
+        confirmed={"context_id": "ctx-confirmed", "owner_id": "automation.a", "target": {"brightness": 50, "color_temp_kelvin": 2700}},
+        pending={"context_id": "ctx-pending", "owner_id": "automation.a", "target": {"brightness": 200, "color_temp_kelvin": 3000}},
+        current_context="ctx-someone-else",
+        current_brightness=40,
+        current_color_temp_kelvin=6000,
+    )
+    assert (status, owner, matched_via) == ("overridden", None, None)
 
 
 def test_rescue_does_not_apply_when_values_dont_match():

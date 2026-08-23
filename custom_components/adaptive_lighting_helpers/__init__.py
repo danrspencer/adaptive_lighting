@@ -214,6 +214,9 @@ def _build_lookup(hass: HomeAssistant, tracker: LastWriteTracker) -> EntityLooku
         pending_context_id=tracker.pending_context_id,
         pending_owner_id=tracker.pending_owner_id,
         pending_target=tracker.pending_target,
+        confirmed_target=tracker.confirmed_target,
+        pending_secondary_context_id=tracker.pending_secondary_context_id,
+        confirmed_secondary_context_id=tracker.confirmed_secondary_context_id,
     )
 
 
@@ -254,30 +257,42 @@ async def _two_step_turn_on(
     *,
     color_temp_kelvin: int | None = None,
     rgb_color: list | None = None,
-) -> None:
+) -> tuple[str, str]:
     """Brightness-only call, wait, then brightness + colour - for bulbs
     that can't transition both together (no_combined_transition label).
     Works the same for either colour representation; only the second
-    call's colour field differs. `context` is threaded through both
-    calls explicitly - hass.services.async_call makes its own fresh,
-    unrelated Context() for anything it isn't given (confirmed against
-    HA core's core.py), so without this every light we turn on would
-    get an unmatched context.id and immediately look externally-set on
-    the very next tick (see write_tracking.py)."""
+    call's colour field differs.
+
+    Each step now gets its own real Context() (parented to the
+    triggering apply_lighting call's own context, for logbook
+    traceability via that context chain) rather than sharing one - a
+    two-step transition genuinely is two separate light.turn_on calls,
+    and forcing them to share a single context.id meant a device
+    reporting the brightness-only step on its own (a real, expected
+    intermediate state for these bulbs, not an anomaly) did so under a
+    context that matched neither the final target nor anything else
+    write_tracking.py recognised - indistinguishable from a genuine
+    external touch. Returns (brightness_context_id, color_context_id)
+    so the caller can record *both* against this entity's write-tracking
+    claim - see write_tracking.py's async_record docstring for how
+    either one landing is recognised as ours."""
+    brightness_context = Context(parent_id=context.id)
     await hass.services.async_call(
         "light",
         "turn_on",
         {"entity_id": entity_ids, "transition": half_transition, "brightness": brightness},
         blocking=True,
-        context=context,
+        context=brightness_context,
     )
     await asyncio.sleep(half_transition)
+    color_context = Context(parent_id=context.id)
     data = {"entity_id": entity_ids, "transition": half_transition, "brightness": brightness}
     if color_temp_kelvin is not None:
         data["color_temp_kelvin"] = color_temp_kelvin
     else:
         data["rgb_color"] = rgb_color
-    await hass.services.async_call("light", "turn_on", data, blocking=True, context=context)
+    await hass.services.async_call("light", "turn_on", data, blocking=True, context=color_context)
+    return brightness_context.id, color_context.id
 
 
 CARD_URL_BASE = "/adaptive_lighting_helpers_static"
@@ -466,7 +481,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # has no brightness/colour target, so needing_off entities are
         # simply left out (write_targets.get() defaults to None).
         write_targets: dict = {}
+        # Two-step entities get their own pair of contexts (see
+        # _two_step_turn_on), not call.context - populated below once
+        # asyncio.gather resolves, since the contexts don't exist until
+        # the calls actually run. context_id_overrides is the colour
+        # step's context (the final, complete state); secondary_context_ids
+        # is the brightness step's (see write_tracking.py's async_record).
+        # Both stay empty for every non-two-step entity, which keeps
+        # using call.context.id alone, unchanged.
+        context_id_overrides: dict = {}
+        secondary_context_ids: dict = {}
         tasks = []
+        # (index into tasks, entities) for each two-step dispatch, so the
+        # matching (brightness_context_id, color_context_id) can be
+        # pulled back out of asyncio.gather's own same-order results -
+        # tasks itself is a flat mix of turn_off/turn_on/two-step
+        # coroutines, only the latter return anything meaningful.
+        two_step_dispatches: list[tuple[int, list]] = []
         for g in groups:
             if g.needing_off:
                 written_entities.extend(g.needing_off)
@@ -519,6 +550,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 written_entities.extend(g.two_step)
                 for e in g.two_step:
                     write_targets[e] = {"brightness": g.brightness, "color_temp_kelvin": color_temp_kelvin}
+                two_step_dispatches.append((len(tasks), g.two_step))
                 tasks.append(
                     _two_step_turn_on(
                         hass,
@@ -533,6 +565,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 written_entities.extend(g.two_step_rgb)
                 for e in g.two_step_rgb:
                     write_targets[e] = {"brightness": g.brightness, "rgb_color": rgb_color_list}
+                two_step_dispatches.append((len(tasks), g.two_step_rgb))
                 tasks.append(
                     _two_step_turn_on(
                         hass, g.two_step_rgb, g.brightness, half_transition, call.context, rgb_color=rgb_color_list
@@ -551,10 +584,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         live_context_before_write = {e: lookup.context_id(e) for e in written_entities}
 
         if tasks:
-            await asyncio.gather(*tasks)
+            results = await asyncio.gather(*tasks)
+            for index, entities in two_step_dispatches:
+                brightness_context_id, color_context_id = results[index]
+                for e in entities:
+                    context_id_overrides[e] = color_context_id
+                    secondary_context_ids[e] = brightness_context_id
         if written_entities:
             await write_tracker.async_record(
-                written_entities, live_context_before_write, call.context.id, owner_id, targets=write_targets
+                written_entities,
+                live_context_before_write,
+                call.context.id,
+                owner_id,
+                targets=write_targets,
+                secondary_context_ids=secondary_context_ids,
+                context_id_overrides=context_id_overrides,
             )
 
         return _groups_response(groups)
@@ -591,7 +635,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             state = hass.states.get(entity_id)
             confirmed_ctx = write_tracker.confirmed_context_id(entity_id)
             confirmed = (
-                {"context_id": confirmed_ctx, "owner_id": write_tracker.confirmed_owner_id(entity_id)}
+                {
+                    "context_id": confirmed_ctx,
+                    "secondary_context_id": write_tracker.confirmed_secondary_context_id(entity_id),
+                    "owner_id": write_tracker.confirmed_owner_id(entity_id),
+                    "target": write_tracker.confirmed_target(entity_id),
+                }
                 if confirmed_ctx is not None
                 else None
             )
@@ -599,6 +648,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             pending = (
                 {
                     "context_id": pending_ctx,
+                    "secondary_context_id": write_tracker.pending_secondary_context_id(entity_id),
                     "owner_id": write_tracker.pending_owner_id(entity_id),
                     "target": write_tracker.pending_target(entity_id),
                 }

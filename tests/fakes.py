@@ -17,6 +17,9 @@ def make_lookup(
     pending_context_ids: Optional[dict] = None,
     pending_owner_ids: Optional[dict] = None,
     pending_targets: Optional[dict] = None,
+    confirmed_targets: Optional[dict] = None,
+    pending_secondary_context_ids: Optional[dict] = None,
+    confirmed_secondary_context_ids: Optional[dict] = None,
 ) -> EntityLookup:
     """
     states:    {entity_id: {"state": "on"/"off"/"unavailable"/..., "attributes": {...}, "context_id": "..."}}
@@ -32,11 +35,18 @@ def make_lookup(
                "pending" claim - the most recent write attempted, not yet
                verified either way. Absent means no attempt is currently
                outstanding.
-    pending_targets: {entity_id: {"brightness": ..., "color_temp_kelvin": ...}
-               or {"brightness": ..., "rgb_color": [...]}} - what the
-               pending claim's write actually asked for. Absent means no
-               target is known for that claim (an off-command, or a
-               claim write_tracking only observed rather than issued).
+    pending_targets / confirmed_targets: {entity_id: {"brightness": ...,
+               "color_temp_kelvin": ...} or {"brightness": ...,
+               "rgb_color": [...]}} - what that claim's own write
+               actually asked for. Absent means no target is known for
+               that claim (an off-command, or a claim write_tracking
+               only observed rather than issued).
+    pending_secondary_context_ids / confirmed_secondary_context_ids:
+               {entity_id: value} - the *second* context.id a two-step
+               transition's own brightness-only step gets (see
+               write_tracking.py's async_record). Absent means that
+               claim only has the one (primary) context, same as any
+               combined-write claim.
     """
     device_of = device_of or {}
     labels_of = labels_of or {}
@@ -45,6 +55,9 @@ def make_lookup(
     pending_context_ids = pending_context_ids or {}
     pending_owner_ids = pending_owner_ids or {}
     pending_targets = pending_targets or {}
+    confirmed_targets = confirmed_targets or {}
+    pending_secondary_context_ids = pending_secondary_context_ids or {}
+    confirmed_secondary_context_ids = confirmed_secondary_context_ids or {}
 
     def is_state(entity_id, value):
         return states.get(entity_id, {}).get("state") == value
@@ -76,6 +89,15 @@ def make_lookup(
     def pending_target(entity_id):
         return pending_targets.get(entity_id)
 
+    def confirmed_target(entity_id):
+        return confirmed_targets.get(entity_id)
+
+    def pending_secondary_context_id(entity_id):
+        return pending_secondary_context_ids.get(entity_id)
+
+    def confirmed_secondary_context_id(entity_id):
+        return confirmed_secondary_context_ids.get(entity_id)
+
     return EntityLookup(
         is_state=is_state,
         state_attr=state_attr,
@@ -87,6 +109,9 @@ def make_lookup(
         pending_context_id=pending_context_id,
         pending_owner_id=pending_owner_id,
         pending_target=pending_target,
+        confirmed_target=confirmed_target,
+        pending_secondary_context_id=pending_secondary_context_id,
+        confirmed_secondary_context_id=confirmed_secondary_context_id,
     )
 
 
