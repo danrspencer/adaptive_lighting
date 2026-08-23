@@ -1,19 +1,13 @@
 compute_lighting_groups:
   name: Compute lighting groups
   description: >-
-    Given a set of light entities, a target brightness/colour-temperature,
-    and optional per-light brightness multipliers, works out the minimal
-    set of light.turn_on/light.turn_off calls actually needed: filters out
+    Works out the minimal set of light.turn_on/light.turn_off calls
+    needed to reach a target brightness/colour temperature: filters out
     unreachable lights, groups by multiplier, skips anything already
-    within tolerance of the target, leaves externally-set lights alone
-    (a light whose current context.id doesn't match what this
-    integration itself last wrote it with under the same owner_id - a
-    person, another automation, a device regaining power, or a
-    different owner_id entirely - see that field's own description),
-    and separates out lights that need a two-step (brightness-then-
-    colour) transition.
-    Standalone - call this from your own automation, it doesn't require
-    the adaptive_lighting blueprint in this repo.
+    within tolerance, leaves overridden lights alone (see owner_id), and
+    separates out lights needing a two-step transition. Read-only - it
+    reports what it would do without touching anything.
+    Standalone; doesn't require this repo's blueprint.
   fields:
     entities:
       name: Entities
@@ -123,28 +117,23 @@ compute_lighting_groups:
     owner_id:
       name: Owner ID
       description: >-
-        Identifies this caller for externally-set protection - e.g. an
-        automation passing its own {{ this.entity_id }}. Left unset, the
-        check is skipped entirely (every light is treated as free to
-        manage, regardless of what last touched it) - same as force
-        below, but without claiming the write for a later call to
-        recognise. Set it, and a light is left alone once anything other
-        than a write recorded under this exact owner_id has touched it
-        since - a person, another automation, a device regaining power,
-        or an apply_lighting call using a different owner_id. A write
-        recorded with no owner_id at all doesn't count against you -
-        there was no claim to conflict with.
+        Identifies this caller for override protection - e.g. an
+        automation passing its own {{ this.entity_id }}. Set it, and a
+        light is left alone once anything other than a write recorded
+        under this same owner_id has touched it. Left unset, the check is
+        skipped entirely and nothing is claimed for later calls to
+        recognise. A write recorded with no owner_id doesn't count
+        against you.
       selector:
         text:
     force:
       name: Force
       description: >-
-        Bypasses externally-set protection outright for this call,
-        regardless of owner_id. The write is still recorded under
-        owner_id if one was given, so a later, non-forced call with that
-        same owner_id correctly recognises it as its own rather than
-        finding an orphaned record - the right way to force through and
-        keep protection working normally afterward. Off by default.
+        Bypasses override protection for this call, regardless of
+        owner_id. The write is still recorded under owner_id if one was
+        given, so a later non-forced call still recognises it as its own
+        - the right way to force through and keep protection working
+        afterward. Off by default.
       default: false
       selector:
         boolean:
@@ -280,28 +269,23 @@ apply_lighting:
     owner_id:
       name: Owner ID
       description: >-
-        Identifies this caller for externally-set protection - e.g. an
-        automation passing its own {{ this.entity_id }}. Left unset, the
-        check is skipped entirely (every light is treated as free to
-        manage, regardless of what last touched it) - same as force
-        below, but without claiming the write for a later call to
-        recognise. Set it, and a light is left alone once anything other
-        than a write recorded under this exact owner_id has touched it
-        since - a person, another automation, a device regaining power,
-        or an apply_lighting call using a different owner_id. A write
-        recorded with no owner_id at all doesn't count against you -
-        there was no claim to conflict with.
+        Identifies this caller for override protection - e.g. an
+        automation passing its own {{ this.entity_id }}. Set it, and a
+        light is left alone once anything other than a write recorded
+        under this same owner_id has touched it. Left unset, the check is
+        skipped entirely and nothing is claimed for later calls to
+        recognise. A write recorded with no owner_id doesn't count
+        against you.
       selector:
         text:
     force:
       name: Force
       description: >-
-        Bypasses externally-set protection outright for this call,
-        regardless of owner_id. The write is still recorded under
-        owner_id if one was given, so a later, non-forced call with that
-        same owner_id correctly recognises it as its own rather than
-        finding an orphaned record - the right way to force through and
-        keep protection working normally afterward. Off by default.
+        Bypasses override protection for this call, regardless of
+        owner_id. The write is still recorded under owner_id if one was
+        given, so a later non-forced call still recognises it as its own
+        - the right way to force through and keep protection working
+        afterward. Off by default.
       default: false
       selector:
         boolean:

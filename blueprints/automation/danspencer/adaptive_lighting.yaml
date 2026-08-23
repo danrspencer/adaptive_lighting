@@ -232,32 +232,17 @@ trigger_variables:
   room_target: !input room_target
 
 trigger:
-  # The live brightness/colour-temperature sensor - but only on a
-  # genuine phase transition (Morning->Day etc.), not on the
-  # attribute-only ticks that happen every ~60s while the curve is
-  # ramping (Day, and the evening/night transition). Ordinary
-  # attribute-level tracking during a ramp isn't lost - it continues
-  # via adaptive_tick below, unconditionally, on its own schedule.
+  # The live brightness/colour sensor, but only on a genuine phase
+  # transition - not the attribute-only ticks that happen every ~60s
+  # while the curve ramps. Ramp tracking isn't lost; adaptive_tick below
+  # covers it unconditionally.
   #
-  # The `to:` list is what does this: with no to:/from:/attribute:
-  # filter at all, a `platform: state` trigger fires on attribute-only
-  # changes too (HA's own state trigger only skips a truly identical
-  # state_reported event, not an attribute-only state_changed one).
-  # Listing `to:` values switches on a different, native HA behaviour
-  # instead - confirmed by reading the trigger's own source
-  # (homeassistant/components/homeassistant/triggers/state.py,
-  # async_attach_trigger): with any of from:/not_from:/to:/not_to:
-  # present, the listener explicitly rejects an event where the old
-  # and new values are equal (`not match_all and old_value ==
-  # new_value`), i.e. it now requires an actual value change. The four
-  # values below are the sensor's only real phase values - already
-  # hardcoded in several other places in this blueprint (rgb_phases'
-  # selector options, the per-phase scene/exclude-list inputs), so
-  # this isn't a new coupling. `from:` is deliberately left
-  # unrestricted, so a transition INTO a real phase from unknown/
-  # unavailable (a restart, or the sensor's very first-ever value)
-  # still correctly fires - old_value is None there, which never
-  # equals a real phase name.
+  # The `to:` list is what does this. With no from:/to: filter at all a
+  # `platform: state` trigger also fires on attribute-only changes; with
+  # any of them present HA rejects events where old and new values are
+  # equal, i.e. it requires a real value change. `from:` is left
+  # unrestricted so a transition into a real phase from unknown/
+  # unavailable (a restart, or the first-ever value) still fires.
   - platform: state
     entity_id: !input adaptive_sensor
     id: adaptive
@@ -267,34 +252,17 @@ trigger:
       - Evening
       - Night
   # Periodic floor tick, on its own configurable interval - the sole
-  # driver of ordinary brightness/colour-temperature tracking now that
-  # `adaptive` above only fires on a real phase change, and also still
-  # the fallback for Morning/Night's flat stretches of the curve
-  # (constant brightness and Kelvin for the whole phase, where the
-  # sensor's attributes never change at all, so there'd be nothing for
-  # `adaptive` to fire on even without the `to:` filter above).
+  # driver of ordinary brightness/colour tracking now that `adaptive`
+  # only fires on a real phase change, and the only tick at all during
+  # Morning/Night, where the curve is flat and the sensor's attributes
+  # never change. This is what makes "the next tick will fix it" always
+  # true. Also hosts the self-heal check (see the adaptive_tick branch in
+  # action:, which decides whether a given tick is a self-heal one).
   #
-  # Diagnosed live (2026-08-19): the sensor's own last_updated sat
-  # unmoved for ~56 minutes while last_reported kept advancing every
-  # minute, and no room had a single `adaptive`-triggered run in its
-  # trace history across that window - this tick is what guarantees
-  # "the next tick will fix it" is always a true statement, whether or
-  # not the curve is moving.
-  #
-  # Also the self-healing safety net (see the `adaptive_tick` branch in
-  # action: below, which checks whether it's actually a self-heal tick
-  # or an ordinary one) - merged from what used to be a second,
-  # separate `reconcile` trigger on its own interval, once there turned
-  # out to be no real reason for two independent periodic ticks: the
-  # self-heal check already re-debounces itself against Wait time on
-  # every tick regardless of how often it's asked (see that branch's
-  # own comment), so sharing this tick's cadence only means dropped
-  # commands get retried at least as promptly as before, never less.
-  #
-  # Deliberately a separate id rather than reusing `adaptive` -
-  # scene_recheck_due reads trigger.from_state/to_state, which a
-  # time_pattern trigger has no equivalent of, and attribute access on
-  # an undefined name raises and aborts the whole run.
+  # A separate id from `adaptive` deliberately: scene_recheck_due reads
+  # trigger.from_state/to_state, which a time_pattern trigger has no
+  # equivalent of, and attribute access on an undefined name raises and
+  # aborts the whole run.
   - id: adaptive_tick
     platform: time_pattern
     minutes: !input update_interval
@@ -386,18 +354,18 @@ trigger:
       {% if room_target is not none %}
         {% if room_target.entity_id is defined %}
           {% set eids = room_target.entity_id if room_target.entity_id is iterable and room_target.entity_id is not string else [room_target.entity_id] %}
-          {% set ns.entities = ns.entities + (eids | select('match', '^light\.') | list) %}
+          {% set ns.entities = ns.entities + (eids | select('match', '^light\\.') | list) %}
         {% endif %}
         {% if room_target.device_id is defined %}
           {% set dids = room_target.device_id if room_target.device_id is iterable and room_target.device_id is not string else [room_target.device_id] %}
           {% for d in dids %}
-            {% set ns.entities = ns.entities + (device_entities(d) | select('match', '^light\.') | list) %}
+            {% set ns.entities = ns.entities + (device_entities(d) | select('match', '^light\\.') | list) %}
           {% endfor %}
         {% endif %}
         {% if room_target.area_id is defined %}
           {% set aids = room_target.area_id if room_target.area_id is iterable and room_target.area_id is not string else [room_target.area_id] %}
           {% for a in aids %}
-            {% set ns.entities = ns.entities + (area_entities(a) | select('match', '^light\.') | list) %}
+            {% set ns.entities = ns.entities + (area_entities(a) | select('match', '^light\\.') | list) %}
           {% endfor %}
         {% endif %}
       {% endif %}
@@ -407,22 +375,14 @@ trigger:
          | list | length > 0 }}
 
 condition:
-  # Occupancy has exactly two jobs in this blueprint, and neither of
-  # them is "should we update already-on lights" - see motion_off/
-  # reconcile in action: below for the two places occupancy actually
-  # gates anything (turning lights on via motion, and turning them off
-  # once the room's confirmed empty). condition: itself no longer checks
-  # occupancy at all: adaptive/extra/recovered always proceed (an
-  # already-on light should track the curve regardless of who's in the
-  # room right now - a room *with* a real occupancy sensor used to stop
-  # updating on-lights the moment it read "unoccupied", while a room
-  # with *no* sensor never had that restriction at all, since its own
-  # "occupied" fallback is just "is anything already on" - inconsistent
-  # for no real reason, removed); motion_on keeps its own efficiency
-  # check (skip the call entirely if there's nothing to turn on), purely
-  # to avoid a pointless apply_lighting round-trip, not a correctness
-  # requirement - adaptive_target_entities/allow_turn_on below already
-  # decide, correctly, whether anything's actually eligible to change.
+  # Occupancy has exactly two jobs here, and neither is "should we update
+  # already-on lights": turning a room on via motion, and turning it off
+  # once confirmed empty (motion_off and the self-heal branch in action:).
+  # condition: checks occupancy nowhere - adaptive/extra/recovered always
+  # proceed, since an already-on light should track the curve regardless
+  # of who is in the room. motion_on keeps an efficiency check only (skip
+  # the call if there is nothing to turn on); allow_turn_on below is what
+  # actually decides permission.
   - or:
       - condition: not
         conditions:
@@ -520,30 +480,11 @@ variables:
       {% endif %}
     {% endfor %}
     {{ ns.items }}
-  # Brightness/colour temperature are extracted here, as plain
-  # state_attr() reads off adaptive_sensor, and passed to
-  # adaptive_lighting_helpers.apply_lighting as literal values (see its
-  # own action step below) - apply_lighting itself doesn't read any
-  # sensor entity at all, matching compute_lighting_groups's own
-  # brightness/color_temp_kelvin/rgb_color fields exactly. This went
-  # through two designs, not one: originally the blueprint extracted
-  # these itself (much like this comment describes); that was then
-  # deliberately moved into apply_lighting instead (reading
-  # sensor_entity_id's attributes internally) reasoning that a hard
-  # fail on a missing attribute and support for this integration's own
-  # multiple named sensor instances both needed it there - re-examined
-  # later and found not to actually require it (voluptuous's own
-  # required-field validation gives an equivalent hard fail before this
-  # automation's own action even runs, and entity *selection* - which
-  # of the multiple sensor instances to point at - happens identically
-  # either way, via adaptive_sensor, regardless of which layer reads
-  # its attributes afterward) - so it moved back here, this time to
-  # stay, matching every other service in this integration which
-  # already takes plain values rather than an entity reference.
-  # (sensor_service/sensor_scene_id, a "sensor requests scene.apply"
-  # passthrough, were removed here too, a while back - dead code:
-  # scene.apply's real service schema only accepts entities/transition,
-  # not a scene_id field, so that call never actually did anything.)
+  # Extracted here as plain state_attr() reads and passed to
+  # apply_lighting as literal values - it reads no sensor entity itself,
+  # matching compute_lighting_groups exactly. It did read one internally
+  # once; that was reverted deliberately and is meant to stay reverted
+  # (see CLAUDE.md).
   brightness: "{{ state_attr(adaptive_sensor, 'brightness') }}"
   color_temp_kelvin: "{{ state_attr(adaptive_sensor, 'color_temp') }}"
   # None whenever adaptive_sensor doesn't populate this attribute (a
@@ -615,26 +556,19 @@ variables:
       this guard fixes was about, unavoidable without a real sensor.
     #}
     {{ resolved_entities | map('states') | select('eq', 'on') | list | count > 0 }}
-  # Only three things may turn an off light on: motion actually
-  # detecting someone, a deliberate manual run, or - the room already
-  # being in active use (occupied: at least one of its lights is
-  # already on). Everything else that reaches default: below (adaptive,
-  # extra, recovered) may only ever update lights that are already on,
-  # never switch a new one on. condition: doesn't gate any of these on
-  # occupancy at all (see its own comment) - this is the only place that
-  # actually decides it, for every trigger type uniformly, including
-  # recovered: a light rejoining the network after a brief Zigbee/power
-  # blip gets exactly the same treatment as any other light on any
-  # other trigger - included if it's on, left alone if it's off. This
-  # guard is what caught a real incident live: Jacob's only light, off
-  # at bedtime, turned on from a network blip, before this existed
-  # (grouping.py's tolerance/externally-set checks both explicitly
-  # treat an off light as "not yet at target" and so include it for
-  # turning on - correct for motion_on, wrong for everything else). The
-  # `occupied` branch is what lets a *different* off light in an
-  # already-in-use multi-light room still get switched on to match the
-  # rest (e.g. a periodic tick topping up a room where one lamp's off
-  # but others are already on) - room-level, not per-light.
+  # Only three things may turn an off light on: motion detecting someone,
+  # a deliberate manual run, or the room already being in active use
+  # (at least one of its lights already on). Everything else reaching
+  # default: below - adaptive, extra, recovered - may only update lights
+  # that are already on. condition: doesn't gate any of this on occupancy
+  # (see its own comment); this is the only place that decides it, and it
+  # applies uniformly to every trigger, recovered included.
+  #
+  # Load-bearing: grouping.py treats an off light as "not yet at target"
+  # and so would include it for turning on - correct for motion_on, wrong
+  # for everything else. Without this, a light off at bedtime came back on
+  # from a network blip. The `occupied` branch is room-level, not
+  # per-light, so one lamp off in an in-use room still gets topped up.
   allow_turn_on: >
     {{ manual_run
        or (trigger is defined and trigger.id is defined and trigger.id == 'motion_on')
@@ -665,25 +599,16 @@ variables:
   phase_scene: >
     {% set m = {'Morning': morning_scene, 'Day': day_scene, 'Evening': evening_scene, 'Night': night_scene} %}
     {{ m.get(states(adaptive_sensor)) }}
-  # scene_template wins whenever it returns something valid (it can
-  # react to things a phase alone can't, e.g. "if the TV is on") - the
-  # per-phase pick is the fallback for when it doesn't apply. Either
-  # way, a typo or a scene that's been renamed/removed is treated the
-  # same as returning nothing, rather than erroring.
+  # scene_template wins whenever it returns something valid (it can react
+  # to things a phase alone can't, e.g. "if the TV is on"); the per-phase
+  # pick is the fallback. A typo or a renamed/removed scene is treated as
+  # returning nothing rather than erroring.
   #
-  # candidate must pass an entity_id shape check before ever reaching
-  # states[candidate] - states[] raises a hard TemplateError (not just
-  # "not found") on a string that isn't even valid entity_id shape,
-  # which aborts the whole variables: block before condition:/action:
-  # ever run. Live incident: scene_template accidentally set to
-  # "{{ {} }}" (brightness_multiplier_template's own default, pasted
-  # into the wrong field) rendered as the literal text "{}", and
-  # states["{}"] crashed automation.bathroom_spots on every single
-  # trigger - including manual runs - for 36+ hours before being
-  # caught. phase_scene needs no equivalent guard: it's always None or
-  # a value chosen through a domain: scene entity selector, never a
-  # malformed free-text string the way scene_template (a raw template
-  # field) can be.
+  # candidate must pass an entity_id shape check before reaching
+  # states[candidate]: states[] raises a hard TemplateError - not "not
+  # found" - on a string that isn't even entity_id-shaped, aborting the
+  # whole variables: block before condition:/action: run. phase_scene
+  # needs no such guard; it comes from a domain: scene selector.
   desired_scene: >
     {% set candidate = (scene_template | trim) %}
     {% if candidate and candidate is match('^[a-z0-9_]+\\.[a-z0-9_]+$') and states[candidate] is not none %}
@@ -702,37 +627,19 @@ variables:
   # The scene only counts as usable if every entity it covers is within our scope
   scene_valid: "{{ scene_covered_entities | reject('in', scope_entities) | list | length == 0 }}"
   scene_active: "{{ desired_scene | length > 0 and scene_valid }}"
-  # Whether the "Activate matching scene" action step below should
-  # actually bother calling scene.turn_on again this tick. Scenes carry
-  # none of apply_lighting's own tolerance/override protections, so
-  # re-issuing scene.turn_on on every single adaptive tick (which fires
-  # roughly once a minute, on brightness/colour-temp alone - see the
-  # adaptive trigger's own comment) would silently stomp a manual
-  # change to any of the scene's own lights within a minute, for as
-  # long as the scene stays active. A plain attribute tick has nothing
-  # scene-relevant in it at all - desired_scene only depends on the
-  # sensor's phase (its state string) and scene_template's own
-  # dependencies (named via Additional Triggers, which fire their own
-  # 'extra' id and are exempt from this check below) - so this only
-  # actually recomputes to false for the specific case of an
-  # adaptive-id tick whose phase didn't change. Every other trigger
-  # (extra, motion_on, manual, recovered) is comparatively rare and
-  # meaningful already, so always re-checks.
-  # The periodic floor tick is excluded outright: it carries no phase
-  # information to compare (no from_state/to_state at all - reading
-  # those on a time_pattern trigger would raise and abort the run), and
-  # treating every minute as "recheck due" is exactly the re-activate-
-  # the-scene-every-minute behaviour this variable exists to prevent.
-  # Same answer as a same-phase `adaptive` tick, for the same reason.
+  # Whether the "Activate matching scene" step below should call
+  # scene.turn_on again this tick. Scenes carry none of apply_lighting's
+  # tolerance/override protections, so re-issuing it every minute would
+  # silently stomp a manual change to any of the scene's own lights.
   #
-  # The `adaptive` branch below is now provably unreachable-when-false:
-  # since the `adaptive` trigger itself only fires on a genuine phase
-  # change (its own `to:` filter, see trigger: above), any run that
-  # reaches this point with trigger.id == 'adaptive' already has
-  # from_state.state != to_state.state by construction. Left as-is
-  # rather than simplified in the same change that introduced that
-  # filter - still correct, just partially redundant now; treat
-  # simplifying it as a separate, lower-risk cleanup.
+  # desired_scene depends only on the sensor's phase and on
+  # scene_template's own dependencies (which fire their own 'extra' id,
+  # exempt below) - so the only tick worth skipping is an `adaptive` one
+  # whose phase didn't change. Every other trigger is rare and meaningful
+  # already. The periodic floor tick is excluded outright: it has no
+  # from_state/to_state to compare (reading them would raise and abort
+  # the run), and treating every minute as "recheck due" is exactly what
+  # this variable exists to prevent.
   scene_recheck_due: >
     {% if trigger is defined and trigger.id is defined and trigger.id == 'adaptive_tick' %}
       false
@@ -755,30 +662,17 @@ variables:
       {{ scoped | reject('is_state', 'off') | list }}
     {% endif %}
 action:
-  # Spreads a genuine phase change or the periodic Update tick's
-  # writes across a random window, so many rooms sharing one Adaptive
-  # Lighting Sensor don't all send commands in the same wall-clock
-  # second - most acute right at a phase boundary (adaptive), where
-  # every such room fires at literally the same instant, but also
-  # relevant to adaptive_tick's own synchronized time_pattern boundary.
-  # Placed first so it applies uniformly regardless of which branch
-  # below eventually runs, including the self-healing check (it shares
-  # this same adaptive_tick trigger - see that branch's own comment).
-  # Every other trigger renders 0 seconds, which HA's script engine
-  # short-circuits synchronously - no real overhead for motion/manual/
-  # extra/recovered, none of which are jittered (extra/recovered are
-  # inherently per-room events, not something that fires simultaneously
-  # across multiple rooms the way a shared sensor's phase transition or
-  # a synchronized time_pattern boundary does, so there's no cascade
-  # for jitter to address there).
+  # Spreads a phase change or the periodic tick's writes across a random
+  # window, so rooms sharing one sensor don't all command in the same
+  # wall-clock second - most acute at a phase boundary, where every such
+  # room fires at literally the same instant. Placed first so it applies
+  # regardless of which branch below runs. Every other trigger renders 0,
+  # which HA short-circuits synchronously; extra/recovered are inherently
+  # per-room, so there is no cascade for jitter to address there.
   #
-  # mode: restart (above) means a genuine trigger arriving mid-delay
-  # correctly preempts a jittered run rather than queuing behind it -
-  # confirmed against HA core's helpers/script.py: a new run's
-  # Script._async_run calls async_stop() on any in-flight run before
-  # starting, which resolves _async_step_delay's awaited stop future,
-  # so the delayed run's next loop iteration sees self._stop.done() and
-  # aborts before ever reaching the choose: block below.
+  # mode: restart means a genuine trigger mid-delay preempts a jittered
+  # run: a new run stops the in-flight one, resolving the delay's awaited
+  # stop future, and it aborts before reaching the choose: block.
   - alias: "Jitter: spread a phase change or the periodic Update tick's writes across a random window"
     delay:
       seconds: >-
@@ -789,21 +683,15 @@ action:
         {% endif %}
   - choose:
       # Motion timed out: turn everything reachable off - but only if
-      # Room's occupancy is actually clear in aggregate right now.
-      # occupancy.cleared fires per-entity, not per-target: with two
-      # occupancy-class sensors in Room (e.g. a real motion sensor plus
-      # a nightlight override sensor), this trigger fires the instant
-      # EITHER one goes from on to off, even while the other is still
-      # reporting occupied. Without this re-check, the real motion
-      # sensor clearing overnight was turning lights off outright even
-      # though the nightlight override sensor was still "on" the whole
-      # time - confirmed live via automation.bedroom_hall_lights'
-      # trace history, not just suspected. If occupancy.is_detected is
-      # still true here (another sensor's still on), this branch's
-      # conditions fail and default: below re-applies adaptive lighting
-      # instead - a harmless, idempotent no-op if the light's already
-      # at the right target (see grouping.py's tolerance check), or a
-      # correct resync if it wasn't.
+      # Room's occupancy is clear in aggregate right now.
+      # occupancy.cleared fires per-entity, not per-target, so with two
+      # occupancy-class sensors in Room it fires the instant EITHER goes
+      # off, even while the other still reports occupied. Without this
+      # re-check a real motion sensor clearing overnight turned lights
+      # off while a nightlight override sensor was still on. If another
+      # sensor is still on these conditions fail and default: reapplies
+      # adaptive lighting instead - an idempotent no-op if the light is
+      # already correct.
       - conditions:
           - condition: trigger
             id: motion_off
@@ -818,27 +706,20 @@ action:
               entity_id: "{{ reachable_entities }}"
             data:
               transition: !input motion_off_transition
-      # Self-healing: on an adaptive_tick tick, if we're unoccupied but
-      # something's still on (e.g. an earlier turn-off command didn't
-      # land), retry just that - sharing adaptive_tick's own trigger/
-      # interval rather than a separate `reconcile` one, once there
-      # turned out to be no real reason for two independent periodic
-      # ticks (see that trigger's own comment). These conditions -
-      # not just "trigger.id == adaptive_tick" alone - decide whether
-      # THIS tick is a self-heal one: when they don't all hold, this
-      # branch doesn't match and default: below runs instead, reapplying
-      # adaptive lighting exactly as any other adaptive_tick would.
+      # Self-healing: on an adaptive_tick, if the room is unoccupied but
+      # something is still on (an earlier turn-off didn't land), retry
+      # just that. These conditions - not trigger.id alone - decide
+      # whether THIS tick is a self-heal one; when they don't all hold
+      # the branch doesn't match and default: reapplies lighting as any
+      # other adaptive_tick would.
       #
-      # Deliberately exclusive of default: when they DO hold, rather
-      # than doing both in the same run: entities_still_on and
-      # adaptive_target_entities are computed once, in variables: above,
-      # before action: runs - they don't reflect this branch's own
-      # turn_off yet, so reapplying lighting in the same run risks
-      # apply_lighting immediately turning the just-turned-off light
-      # back on from stale state. The next adaptive_tick picks up
-      # normal brightness/colour tracking correctly, once state has
-      # caught up - the same one-tick lag this self-heal check already
-      # has today.
+      # Deliberately exclusive of default: rather than doing both.
+      # entities_still_on and adaptive_target_entities are computed once
+      # in variables:, before action: runs, so they don't reflect this
+      # branch's own turn_off - reapplying in the same run risks
+      # apply_lighting turning the just-turned-off light straight back
+      # on. The next tick resumes tracking, a one-tick lag this check
+      # already had.
       - conditions:
           - condition: trigger
             id: adaptive_tick
@@ -849,36 +730,20 @@ action:
           # description.
           - condition: template
             value_template: "{{ room_occupancy_entities | length > 0 }}"
-          # Requires occupancy to have been continuously clear for the
-          # full Wait time, not just clear at this exact instant -
-          # unlike the motion_off trigger above (whose own for: clause
-          # already provides this), this self-heal check has no
-          # relationship to occupancy timing on its own, so nothing else
-          # here debounces it. A bare "not occupancy.is_detected" check
-          # previously let a momentary sensor blip - a room that's
-          # genuinely still in use, just reported briefly clear by a
-          # noisy sensor - turn lights off immediately, bypassing Wait
-          # time entirely.
+          # Requires occupancy continuously clear for the full Wait
+          # time, not just clear at this instant. Unlike motion_off
+          # above (whose trigger-level for: provides this), the
+          # self-heal check has no relationship to occupancy timing on
+          # its own, so nothing else debounces it - a bare
+          # "not occupancy.is_detected" let a momentary sensor blip turn
+          # lights off, bypassing Wait time entirely.
           #
-          # A plain template, not occupancy.is_not_detected's own
-          # `for:` option (which does exist and would be the more
-          # "native" fit - HA core's helpers/condition.py:
-          # EntityConditionBase supports it via the same duration
-          # mechanism trigger-level `for:` already uses). Deliberately
-          # not used: it needs the recorder to "prime" a duration
-          # that was already satisfied before the condition itself
-          # started watching (HA core's own _HistoryPrimingManager
-          # exists specifically for this), which is exactly the
-          # situation right after a restart - this condition would
-          # start watching fresh with no in-memory history of its own,
-          # needing the recorder to correctly recognise a room that's
-          # already been clear a while. This template needs no such
-          # priming: `last_changed` is a plain property every state
-          # object already carries, answered instantly from memory
-          # regardless of restart timing or recorder availability - the
-          # "0 vs null multiplier" precedent already documents why
-          # relying on something available only sometimes is worth
-          # avoiding here.
+          # A plain template, not occupancy.is_not_detected's native
+          # `for:`, which does exist: `for:` needs the recorder to prime
+          # a duration already satisfied before the condition started
+          # watching - exactly the situation after a restart.
+          # last_changed is a plain property answered from memory,
+          # needing no priming and no recorder.
           - condition: template
             value_template: >-
               {% set ns = namespace(all_clear=true) %}
@@ -909,35 +774,19 @@ action:
               entity_id: "{{ desired_scene }}"
             data:
               transition: "{{ script_transition }}"
-      # Reachability, multiplier bucketing, tolerance-based "already
-      # correct" checks, externally-set protection, two-step/combined
-      # routing, and RGB-vs-colour-temp dispatch are all handled by the
-      # Adaptive Lighting Helpers integration (a standalone HACS add-on,
-      # not specific to this blueprint - see its README) - this used to
-      # be ~90 lines of namespace-loop Jinja, then a repeat/parallel
-      # dispatch block, then a scene-mode choose: branch (removed - see
-      # CLAUDE.md on why the "sensor requests scene.apply" mechanism was
-      # dead code), here. brightness/color_temp_kelvin/rgb_color
-      # (computed above, from adaptive_sensor's own attributes) are
-      # passed as plain values - apply_lighting itself doesn't read any
-      # sensor entity, matching compute_lighting_groups exactly.
-      # Guarded because brightness/color_temp_kelvin above are plain
-      # state_attr() reads: when Adaptive Lighting Sensor is unavailable
-      # (mid-startup before its first refresh, a failed refresh) or points
-      # at an entity that no longer exists (renamed, deleted), they render
-      # as null - and apply_lighting's own schema requires both, so the
-      # action would fail validation on every single tick, once a minute,
-      # indefinitely. That's the same shape as a real incident where one
-      # room logged 1,900+ identical template errors over 36 hours before
-      # anyone noticed.
+      # Reachability, multiplier bucketing, tolerance checks, override
+      # protection, two-step/combined routing and RGB-vs-colour-temp
+      # dispatch all live in the Adaptive Lighting Helpers integration
+      # (standalone HACS add-on, not specific to this blueprint).
       #
-      # Deliberately guarding this one step rather than condition:, which
-      # would gate the whole tick: motion_off and the self-heal branch
-      # above turn lights *off* and need nothing from the sensor, so
-      # gating the automation would stop a room switching off just
-      # because its sensor was briefly unavailable. Skipping is the right
-      # response here - with no target there is nothing to apply, and
-      # substituting a default would silently drive lights to a made-up
+      # Guarded because brightness/color_temp_kelvin are plain state_attr()
+      # reads: an unavailable sensor, or one pointed at a renamed/deleted
+      # entity, renders them null, and apply_lighting requires both - so
+      # the action would fail validation on every tick, indefinitely.
+      # Guards this one step rather than condition:, which would gate the
+      # whole tick - motion_off and self-heal turn lights *off* and need
+      # nothing from the sensor. Skipping is right: with no target there
+      # is nothing to apply, and a default would drive lights to a made-up
       # value.
       - alias: "Apply adaptive lighting, unless the sensor has no target to apply"
         if:
