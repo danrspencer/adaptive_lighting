@@ -1478,3 +1478,71 @@ async def test_a_restart_style_unavailable_blip_does_not_clear_an_existing_recor
         return_response=True,
     )
     assert "light.a" not in result["groups"][0]["combined"]
+
+
+async def test_write_tracking_records_the_reachable_target_not_the_raw_one(setup_integration: HomeAssistant):
+    """A bulb whose max_color_temp_kelvin sits below the curve target
+    settles at its own ceiling, so that ceiling - not the raw target - is
+    what a later value-rescue has to compare its reported state against
+    (see grouping.clamp_color_temp_kelvin). Recording the raw 6667 here
+    would leave every capped bulb permanently unable to pass
+    externally_set()'s target_matches_values check, swapping the
+    every-tick-churn bug for a stuck-"overridden" one."""
+    hass = setup_integration
+    async_mock_service(hass, "light", "turn_on")
+    _set_light(
+        hass,
+        "light.a",
+        "off",
+        supported_color_modes=["color_temp"],
+        min_color_temp_kelvin=2000,
+        max_color_temp_kelvin=6535,
+    )
+
+    await hass.services.async_call(
+        DOMAIN,
+        "apply_lighting",
+        {
+            "entities": ["light.a"],
+            "brightness": 255,
+            "color_temp_kelvin": 6667,
+            "transition": 0,
+            "owner_id": "automation.room",
+        },
+        blocking=True,
+    )
+
+    tracker = LastWriteTracker(hass)
+    await tracker.async_load()
+    assert tracker.pending_target("light.a") == {"brightness": 255, "color_temp_kelvin": 6535}
+
+
+async def test_write_tracking_records_the_raw_target_when_it_is_reachable(setup_integration: HomeAssistant):
+    """The clamp must not rewrite a target the bulb can genuinely hit."""
+    hass = setup_integration
+    async_mock_service(hass, "light", "turn_on")
+    _set_light(
+        hass,
+        "light.a",
+        "off",
+        supported_color_modes=["color_temp"],
+        min_color_temp_kelvin=2000,
+        max_color_temp_kelvin=6535,
+    )
+
+    await hass.services.async_call(
+        DOMAIN,
+        "apply_lighting",
+        {
+            "entities": ["light.a"],
+            "brightness": 200,
+            "color_temp_kelvin": 3000,
+            "transition": 0,
+            "owner_id": "automation.room",
+        },
+        blocking=True,
+    )
+
+    tracker = LastWriteTracker(hass)
+    await tracker.async_load()
+    assert tracker.pending_target("light.a") == {"brightness": 200, "color_temp_kelvin": 3000}

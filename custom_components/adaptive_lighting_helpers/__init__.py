@@ -68,7 +68,7 @@ from homeassistant.helpers.typing import ConfigType
 from .const import DOMAIN
 from .coordinator import CURVE_KEYS, ScheduleCoordinator, schedule_instances
 from .curve import phase_at, targets_for_phase
-from .grouping import EntityLookup, Group, build_groups
+from .grouping import EntityLookup, Group, build_groups, clamp_color_temp_kelvin
 from .override_protection import classify, is_blocked
 from .scenes import SceneLookup, compute_scene_coverage
 from .two_step_check import async_start_watching
@@ -513,7 +513,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             if g.combined:
                 written_entities.extend(g.combined)
                 for e in g.combined:
-                    write_targets[e] = {"brightness": g.brightness, "color_temp_kelvin": color_temp_kelvin}
+                    # The *effective* target for this specific bulb, not the raw
+                    # curve value - a bulb whose own range can't reach the
+                    # target settles at its ceiling instead, and this claim is
+                    # what externally_set()'s value-rescue later compares its
+                    # reported state against (see clamp_color_temp_kelvin).
+                    # Recording the raw value would leave every capped bulb
+                    # unable to pass that rescue.
+                    write_targets[e] = {
+                        "brightness": g.brightness,
+                        "color_temp_kelvin": clamp_color_temp_kelvin(e, color_temp_kelvin, lookup),
+                    }
                 tasks.append(
                     hass.services.async_call(
                         "light",
@@ -549,7 +559,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             if g.two_step:
                 written_entities.extend(g.two_step)
                 for e in g.two_step:
-                    write_targets[e] = {"brightness": g.brightness, "color_temp_kelvin": color_temp_kelvin}
+                    # Clamped per entity, same reasoning as g.combined above.
+                    write_targets[e] = {
+                        "brightness": g.brightness,
+                        "color_temp_kelvin": clamp_color_temp_kelvin(e, color_temp_kelvin, lookup),
+                    }
                 two_step_dispatches.append((len(tasks), g.two_step))
                 tasks.append(
                     _two_step_turn_on(

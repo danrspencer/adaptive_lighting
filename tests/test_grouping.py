@@ -1083,3 +1083,105 @@ def test_rgb_external_override_and_reachability_still_apply():
     )
     assert groups[0].combined_rgb == []
     assert groups[0].two_step_rgb == []
+
+
+def test_a_bulb_at_its_own_ceiling_is_already_set_for_a_higher_target():
+    """Live incident: light.dining_room_1/light.kitchen_1 report
+    max_color_temp_kelvin 6535 while the default Morning target is 6667,
+    held flat for the whole phase. HA does not clamp color_temp_kelvin for
+    a natively COLOR_TEMP light (confirmed against light/__init__.py) - the
+    device does - so the bulb sits at 6535 forever while the un-clamped
+    comparison never matches: 132K apart, and not mired-equivalent either
+    (floor(1e6/6535)=153 vs floor(1e6/6667)=149). Result was a re-command
+    on every single tick, indefinitely, for the whole phase."""
+    lookup = make_lookup(
+        states={
+            "light.a": {
+                "state": "on",
+                "attributes": {
+                    "brightness": 255,
+                    "color_temp_kelvin": 6535,
+                    "min_color_temp_kelvin": 2000,
+                    "max_color_temp_kelvin": 6535,
+                },
+            }
+        },
+    )
+    groups = build_groups(
+        entities=["light.a"],
+        brightness_multipliers={},
+        sensor_brightness=255,
+        sensor_color_temp_kelvin=6667,
+        lookup=lookup,
+    )
+    assert groups[0].combined == []
+
+
+def test_a_bulb_below_its_own_floor_is_already_set_for_a_lower_target():
+    """The other end of the same clamp - a warm target under the bulb's
+    min_color_temp_kelvin. Reachable via curve.py's Evening fade under a
+    pinned phase override, and via any deliberately-warm night_kelvin."""
+    lookup = make_lookup(
+        states={
+            "light.a": {
+                "state": "on",
+                "attributes": {
+                    "brightness": 80,
+                    "color_temp_kelvin": 2202,
+                    "min_color_temp_kelvin": 2202,
+                    "max_color_temp_kelvin": 4000,
+                },
+            }
+        },
+    )
+    groups = build_groups(
+        entities=["light.a"],
+        brightness_multipliers={},
+        sensor_brightness=80,
+        sensor_color_temp_kelvin=1708,
+        lookup=lookup,
+    )
+    assert groups[0].combined == []
+
+
+def test_a_reachable_target_still_updates_a_bulb_that_is_not_there_yet():
+    """The clamp must not make everything look already-set: a target well
+    inside the bulb's own range that it genuinely hasn't reached still
+    needs a write."""
+    lookup = make_lookup(
+        states={
+            "light.a": {
+                "state": "on",
+                "attributes": {
+                    "brightness": 255,
+                    "color_temp_kelvin": 6535,
+                    "min_color_temp_kelvin": 2000,
+                    "max_color_temp_kelvin": 6535,
+                },
+            }
+        },
+    )
+    groups = build_groups(
+        entities=["light.a"],
+        brightness_multipliers={},
+        sensor_brightness=255,
+        sensor_color_temp_kelvin=4000,
+        lookup=lookup,
+    )
+    assert groups[0].combined == ["light.a"]
+
+
+def test_a_bulb_publishing_no_range_is_compared_against_the_raw_target():
+    """A light that doesn't report min/max_color_temp_kelvin behaves
+    exactly as it did before the clamp existed - no bounds, no narrowing."""
+    lookup = make_lookup(
+        states={"light.a": {"state": "on", "attributes": {"brightness": 255, "color_temp_kelvin": 6535}}},
+    )
+    groups = build_groups(
+        entities=["light.a"],
+        brightness_multipliers={},
+        sensor_brightness=255,
+        sensor_color_temp_kelvin=6667,
+        lookup=lookup,
+    )
+    assert groups[0].combined == ["light.a"]

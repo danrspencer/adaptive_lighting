@@ -1,132 +1,83 @@
 """
-Tracks which context.id (and, optionally, caller-supplied owner_id) this
-integration itself last used to write each light entity, so grouping.py
-can tell "did WE make the last change to this light" apart from any
-other cause - a person, another automation, a device regaining power
-with its own fresh context. context.id (not context.user_id) is the
-right signal: every service call made within one automation run shares
-the same context.id (confirmed against HA core's helpers/script.py -
-each run's Script._context is passed through to every action step),
-while anything else - including a *different* automation, which HA
-gives its own fresh Context() too - gets an unrelated one. This is what
-lets the "leave alone" check catch the case context.user_id couldn't:
-another automation (e.g. one triggered directly by a physical button)
-setting a light carries no user_id either, identical to our own writes
-under the old check.
+Tracks which context.id (and optional caller-supplied owner_id) this
+integration last wrote each light with, so grouping.py can tell "did WE
+make the last change" apart from a person, another automation, or a
+device reconnecting under its own fresh context.
 
-owner_id (apply_lighting's optional caller-supplied string, e.g. the
-blueprint passing its own `this.entity_id`) is recorded alongside
-context.id so a *different* apply_lighting caller's write can also be
-recognised as "not mine" even though it was technically still this
-integration writing it - see grouping.py's externally_set() for the
-full comparison. A caller that omits owner_id entirely skips the check
-altogether (its own writes are still recorded, with owner_id=None, so a
-later keyed caller correctly sees them as someone else's).
+context.id rather than context.user_id: every service call within one
+automation run shares that run's context.id (HA core's
+helpers/script.py passes Script._context to every action step), while
+anything else - including a different automation - gets an unrelated
+one. user_id can't distinguish our own write from another automation's,
+since neither carries one.
 
-Persisted via Store (not just in-memory) so a HA restart doesn't make
-every already-on light look externally-set until it happens to change
-again some other way.
+owner_id (e.g. the blueprint passing its own `this.entity_id`) is
+recorded alongside, so a *different* apply_lighting caller's write is
+recognised as "not mine" even though this integration still made it.
+Omitting owner_id skips the check entirely; the write is still recorded
+under owner_id=None so a later keyed caller sees it as someone else's.
+grouping.py's externally_set() and override_protection.classify() own
+the comparison itself - this module only records and persists.
 
-A device regaining power after an outage is a real gap in the write-
-record model above: its own reconnect state report gets a fresh
-context too (confirmed against HA core's core.py - any state write
-without an explicit context, which a reconnecting device's own state
-report always is, gets `Context(id=ulid_at_time(...))`, unconditionally),
-indistinguishable from a genuine external change. Left as-is, a
-recovered light would look externally-set forever, since nothing else
-here ever un-marks it. async_start_listening() closes this by watching
-both directions of the unavailable/unknown boundary: it clears an
-entity's own record the moment it's *observed* going from a real on/off
-state to unavailable/unknown - by the time it reconnects, there's no
-record left to compare against, so it's "free to manage" again (the
-same fallback already used for a brand new entity) - and, symmetrically,
-it snapshots the just-observed context as a fresh baseline the moment
-an entity is seen coming back the other way, unavailable/unknown (or no
-prior state at all) to real. That second direction also covers a plain
-HA restart on its own, not just a genuine network drop -
-async_resync_to_live_state performs the identical snapshot once at
-startup for whatever's already reporting a real state by then, and the
-listener's recovery handling picks up whatever was still mid-reconnect
-at that exact moment instead of staying stuck (see async_resync_to_live_state's
-own docstring for the live incident this specific case closes). Either
-way, resuming control happens through completely ordinary means - no
-forced write, no special-casing, just the next regular call finding a
-claim that matches.
+Persisted via Store so a restart doesn't make every already-on light
+look externally set.
 
-The transition must start from a real on/off state, not just end at
-unavailable/unknown - almost every entity passes through unavailable/
-unknown as a routine part of every HA restart (a fresh process's state
-machine has no prior state for anything yet), which is indistinguishable
-from a genuine drop if only the destination state is checked. Clearing
-on that alone wiped override protection for practically every managed
-light in the house on every single restart, not just ones that had
-actually dropped off the network - confirmed as the cause of a live
-incident where a light dimmed by hand hours after a restart was
-silently overwritten on the very next tick, because its record had
-been cleared during that restart and nothing had needed a real
-rewrite to it since.
+Two claims per entity, not one
+------------------------------
+- `confirmed` - a write some earlier call actually observed landing.
+- `pending`   - the most recent attempt, not yet verified either way.
 
-Each entity's record holds not one write but two - `confirmed` and
-`pending`:
+apply_lighting records the context it *issued*; nothing waits to confirm
+the bulb adopted it. With a single record, one dropped write locks a
+light out permanently - the next tick compares the light's real,
+unchanged context against a value the device never adopted, and nothing
+that happens afterward can ever make those equal. (Seen live: a light
+dropped a colour command at a phase boundary and sat excluded for over
+an hour, correctly lit the whole time.)
 
-- `confirmed` is a write some *earlier* call actually observed landing
-  (a later tick found the entity's live context.id matching it).
-- `pending` is the most recent write attempted, not yet verified either
-  way.
+Two slots fix that without needing a growing history. If the live
+context matches `pending`, that attempt is now known-good and is
+promoted (`confirmed <- pending`) before the new attempt overwrites
+`pending`. If it still matches the old `confirmed`, `pending` never
+landed and `confirmed` is left exactly as it was. Either way the light
+is still recognised as ours and retried next tick. `confirmed` is only
+ever evicted by an *observed* match, so it survives any number of
+consecutive dropped writes.
 
-apply_lighting records the context it *issued*, not the context the
-device actually adopted - the two calls are asynchronous, and nothing
-here waits to confirm the physical bulb applied the command before
-recording it. A single-record design (what this used to be) treats
-that recorded-but-never-adopted context as gospel: the next tick
-compares the light's real, unchanged context against it, finds a
-mismatch, and concludes the light was touched externally - permanently,
-since nothing that ever happens next can make the live context
-retroactively equal a value the device never adopted. Confirmed live:
-a kitchen light dropped a colour-mode switch command at the Evening
-boundary and sat stuck on Day's stale colour temperature for over an
-hour, silently excluded from every tick in between.
+An entity's very first write has no `confirmed` to fall back on, so the
+context.id live *before* that write is recorded as `confirmed` instead.
+That isn't claiming ownership of it - it's reusing the same "the light
+hasn't changed" retry signal every later dropped write relies on, since
+a dropped first write leaves the context at exactly that value. See
+async_record.
 
-The fix doesn't need to know *why* a write failed, only to notice when
-one did and try again: on each call, if the live context matches
-`pending`, the previous attempt is now known-good and gets promoted
-(`confirmed <- pending`) before the new attempt overwrites `pending`.
-If live context instead still matches the *old* `confirmed` - meaning
-`pending` never landed - `confirmed` is left exactly as it was and only
-`pending` is replaced. Either way the light is still recognised as ours
-and retried on the very next tick, rather than locked out. `confirmed`
-is never evicted except by an observed match, so it survives any number
-of consecutive dropped writes - the record needs exactly two slots, not
-a growing history, to be self-healing (see async_record's own
-docstring for the promotion logic in full, and grouping.py's
-externally_set() for how the two slots are actually checked).
+Why a context mismatch still isn't proof
+-----------------------------------------
+HA's Entity._context expires 5 seconds after the service call that set
+it (homeassistant/core.py), so a device whose Zigbee/MQTT round-trip
+confirmation takes longer reports back under an unrelated context while
+echoing exactly the value asked for. Each claim therefore also records
+its `target` (brightness plus colour temperature or RGB, or None for a
+claim that isn't a real write), and classify() falls back to comparing
+the entity's current values against either claim's target before
+concluding "external".
 
-A light's very first-ever write (no prior record at all) has no
-earlier `confirmed` claim to fall back on if it drops. Rather than
-either staying lenient (which would leave a real external change in
-that same narrow window unprotected) or going strict (which would
-resurrect permanent lockout for exactly this case), the context.id
-live *before* that first write is itself recorded as `confirmed` -
-not because it's ours, but because "the light hasn't changed" is
-already the retry signal every later dropped write relies on, and a
-dropped first write leaves the light's context at exactly that
-pre-write value. See async_record's docstring for the full reasoning.
+Device recovery and restarts
+-----------------------------
+A reconnecting device's own state report also gets a fresh context (any
+state write with no explicit context does - core.py).
+async_start_listening() watches both directions of the
+unavailable/unknown boundary: it clears an entity's record when it is
+observed dropping from a real on/off state, and snapshots the
+newly-observed context as a fresh `confirmed` baseline when it comes
+back. async_resync_to_live_state performs the same snapshot once at
+startup for whatever is already reporting by then.
 
-A context.id mismatch is still not conclusive proof of an external
-change even with both claims present, because context.id itself isn't
-permanent on the *device* side: HA's own Entity._context expires 5
-seconds after the service call that set it (confirmed against
-homeassistant/core.py), so a real device whose Zigbee/MQTT round-trip
-confirmation takes longer than that reports its state back under a
-brand-new, unrelated context - even though it's echoing exactly the
-value we asked for, not an external touch at all. Each claim now also
-records what it was actually trying to write (`target` -
-brightness/color_temp_kelvin, or brightness/rgb_color, or None for a
-claim that isn't a real write), so grouping.py's externally_set() can
-fall back to comparing the entity's *current* values against `pending`'s
-own target before concluding "external" - see its docstring for the
-live incident (light.kitchen_3/light.kitchen_5, stuck for over an hour,
-correctly lit the entire time) this closes.
+The drop direction must *start* from a real on/off state, not merely end
+at unavailable/unknown: nearly every entity passes through
+unavailable/unknown on every restart, and clearing on the destination
+alone wiped override protection for practically every managed light in
+the house on each one.
 """
 
 from __future__ import annotations

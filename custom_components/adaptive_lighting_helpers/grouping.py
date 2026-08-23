@@ -114,113 +114,30 @@ class EntityLookup:
     ) -> bool:
         """True if the entity is on and something other than *this*
         caller's own last apply_lighting write has touched it since - a
-        person, another automation (even one with no context.user_id of
-        its own, such as one triggered directly by a physical button -
-        the gap context.user_id-based detection used to miss), a device
-        regaining power under a fresh context, or a *different*
-        apply_lighting caller (identified by owner_id, e.g. a different
-        room's automation).
+        person, another automation, a device regaining power under a
+        fresh context, or a different apply_lighting caller (identified
+        by owner_id, e.g. another room's automation).
 
-        force bypasses the check outright, regardless of owner_id -
-        always returns False. Distinct from omitting owner_id (below):
-        force still lets the caller claim an identity for the write that
-        follows, so a *later* call - not forced, but with the same
-        owner_id - correctly recognises that write as its own rather
-        than finding an orphaned record with no claimed owner. Without
-        this, a forced write would leave the entity looking permanently
-        externally-set to its own regular caller from the very next
-        tick onward - the actual bug that prompted adding this parameter
-        (surfaced by asking, before shipping, "if we do one run without
-        an owner id, will subsequent runs with one continue to work?" -
-        they would not have, without this).
+        A thin adapter: it gathers this entity's two claims plus its live
+        state and hands them to override_protection.classify() /
+        is_blocked(), which hold the actual decision table and are shared
+        with sensor.py's diagnostic status and the standalone
+        check_ownership service. Those two functions document what each
+        status means and why a context mismatch alone isn't proof of an
+        external touch; write_tracking.py's module docstring covers why
+        there are two claims rather than one.
 
-        owner_id is the caller's own identity for this call, entirely
-        optional: pass None (the default - "I don't care who touched
-        this last") to skip the check altogether too, same as force,
-        but - unlike force - without claiming anything for later calls
-        to recognise.
+        force bypasses the check outright, regardless of owner_id.
+        Deliberately distinct from omitting owner_id, which also
+        bypasses: force still lets the caller claim an identity for the
+        write that follows, so a later non-forced call with that same
+        owner_id recognises it as its own instead of finding an orphaned
+        record. Without that distinction a forced write would leave the
+        entity looking permanently externally-set to its own regular
+        caller from the very next tick.
 
-        Two independent claims are checked, not one - see
-        write_tracking.py's module docstring for the full reasoning.
-        `confirmed` is a write some earlier call actually observed
-        landing; `pending` is the most recent attempt, not yet verified
-        either way (apply_lighting records the context it *issues*, not
-        one it's confirmed the device adopted - the two are asynchronous,
-        so a dropped command still gets optimistically recorded). Passing
-        an owner_id (and force left False) asks, in order:
-
-        1. Does the entity's current context.id match `pending`? If so,
-           the most recent write landed - not externally set, subject to
-           the owner check below.
-        2. If not, does it match `confirmed` instead? If so, `pending`
-           never landed (the device dropped it, or hasn't caught up yet)
-           but the light is still ours as of the last write that
-           *did* land - not externally set, same owner check.
-        3. If neither matches, and there's no `confirmed` at all yet -
-           only ever one unconfirmed attempt has been made, and it
-           doesn't match either - there isn't enough evidence yet to
-           call this external. Stay lenient (not externally set) rather
-           than lock the light out over a single write whose fate is
-           still unknown; this is the one gap the two-claim design
-           doesn't close (see write_tracking.py's module docstring) -
-           a light's very first tracked write, if it happens to be the
-           one that gets dropped, is indistinguishable from a genuinely
-           external change until a `confirmed` baseline exists to check
-           against.
-        4. Otherwise (a `confirmed` claim exists and neither it nor
-           `pending` matches): genuinely externally set - UNLESS the
-           `pending` claim recorded what it was actually trying to write
-           (brightness/color_temp_kelvin, or brightness/rgb_color) and
-           the entity's *current* reported values still match that
-           within the same tolerance apply_lighting itself uses to
-           decide "already correct". A context mismatch alone doesn't
-           prove someone else touched the light - HA's own Entity._context
-           expires 5 seconds after the service call that set it
-           (confirmed against homeassistant/core.py), so a real device
-           whose Zigbee/MQTT round-trip confirmation takes longer than
-           that reports back under a brand-new, unrelated context even
-           though it's echoing exactly the value we asked for. Without
-           this check that echo reads as an external touch and - because
-           nothing here ever un-marks it while the light stays
-           continuously on (see the module docstring's "naturally stops
-           being true" note, which only covers *turning off*) - the
-           light is silently excluded from every future tick, forever,
-           the instant it next needs a genuinely different value.
-           Confirmed live: light.kitchen_3/light.kitchen_5 stuck exactly
-           this way for over an hour, still correctly lit the whole
-           time, invisible until the phase next changed and they didn't
-           follow. Deliberately checked against `pending` (the most
-           recent attempt) rather than `confirmed` - `pending` is what
-           this specific echo would be confirming.
-
-        The owner check, wherever a context matches: a claim's owner_id
-        of None doesn't count against anyone (no claim was ever made);
-        otherwise it must equal this caller's own owner_id, or the
-        matching write belongs to a *different* apply_lighting caller
-        (e.g. a different room's automation) and counts as external too,
-        even though nothing about the light's own context has changed.
-
-        No remembered write at all (a brand new entity, or the very
-        first tick before anything's been recorded) counts as free to
-        manage either way - the same "don't block on missing
-        provenance" behaviour a restart used to fall back to under the
-        old check. Checked fresh against live state every call, so
-        there's nothing to expire: once a light is turned off, this
-        naturally stops being true on its own (the is_state check above
-        fails first). A device recovering from unavailable is a
-        different case, handled entirely by write_tracking.py clearing
-        the whole record (both claims) the moment the entity is observed
-        going unavailable - by the time it reconnects there's nothing
-        left here to compare against at all, so it falls into "no
-        remembered write," not into the lenient-pending case above.
-
-        This method is now a thin adapter: the actual decision table
-        lives in override_protection.classify()/is_blocked(), shared
-        with sensor.py's diagnostic status classification (previously a
-        second, separately-maintained copy of this same logic that had
-        quietly drifted - see classify()'s own module for the full
-        story) and with the standalone check_ownership/record_ownership
-        services this same mechanism is also exposed as."""
+        owner_id is the caller's own identity, entirely optional - None
+        (the default) means "I don't care who touched this last"."""
         confirmed_ctx = self.confirmed_context_id(entity_id)
         confirmed = (
             {
@@ -284,6 +201,46 @@ def _as_int(value, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def clamp_color_temp_kelvin(entity_id: str, target_kelvin: int, lookup: EntityLookup) -> int:
+    """The target colour temperature, narrowed to what this specific
+    entity can actually reach, per its own reported
+    min_color_temp_kelvin/max_color_temp_kelvin.
+
+    This is the colour-temperature counterpart of MAX_BRIGHTNESS above,
+    and exists for exactly the same reason - except that where
+    light.turn_on clamps brightness itself (vol.Clamp), it does *not*
+    clamp colour temperature for a light that natively supports
+    COLOR_TEMP: the value is passed straight through to the integration
+    and the physical device clamps it. Confirmed against HA core's
+    light/__init__.py, which only rewrites color_temp_kelvin when the
+    light *lacks* COLOR_TEMP support (emulating it via RGBWW/HS).
+
+    So the write is harmless - the bulb goes to its ceiling - but
+    _already_set would then compare that ceiling against the un-clamped
+    target, never find it within tolerance, and re-command the light on
+    every single tick forever. Confirmed live: light.dining_room_1 and
+    light.kitchen_1 report max_color_temp_kelvin 6535 against a 6667K
+    Morning target (132K apart, and not mired-equivalent either -
+    floor(1e6/6535)=153 vs floor(1e6/6667)=149), and the six
+    light.extension_* bulbs cap at 4000K while Day ramps 6667->4000.
+
+    Deliberately clamps only what we *compare* against, not what gets
+    sent: entities are dispatched in shared per-multiplier groups, and
+    two bulbs in one group can have different ceilings, so clamping the
+    outgoing value would mean splitting a group per distinct ceiling for
+    no benefit - the device already does this clamping itself. A missing
+    or unparseable bound (0 below - no real bulb reports 0K) leaves the
+    target untouched, so a light that doesn't publish its range behaves
+    exactly as it did before."""
+    lo = _as_int(lookup.state_attr(entity_id, "min_color_temp_kelvin"), 0)
+    hi = _as_int(lookup.state_attr(entity_id, "max_color_temp_kelvin"), 0)
+    if lo > 0:
+        target_kelvin = max(target_kelvin, lo)
+    if hi > 0:
+        target_kelvin = min(target_kelvin, hi)
+    return target_kelvin
 
 
 def _bucket_by_multiplier(entities: list, brightness_multipliers: dict) -> dict:
@@ -421,7 +378,11 @@ def _already_set(
     if not _brightness_close(entity_id, target_brightness, lookup, brightness_tolerance):
         return False
     current_color_temp = _as_int(lookup.state_attr(entity_id, "color_temp_kelvin"), -999)
-    return _color_temp_matches(current_color_temp, target_color_temp_kelvin, color_temp_tolerance)
+    # Against what this bulb can actually reach, not the raw curve value -
+    # see clamp_color_temp_kelvin for why comparing against an
+    # unreachable target re-commands the light on every tick forever.
+    reachable_target = clamp_color_temp_kelvin(entity_id, target_color_temp_kelvin, lookup)
+    return _color_temp_matches(current_color_temp, reachable_target, color_temp_tolerance)
 
 
 def _already_set_rgb(

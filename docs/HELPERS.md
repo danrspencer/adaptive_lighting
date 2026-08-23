@@ -72,6 +72,13 @@ using "the light hasn't changed" as the same retry signal every later dropped wr
 write drops, the light's context stays at exactly that pre-write value, and the next call recognises the
 match and retries cleanly rather than treating a brand-new attempt as having no history at all.
 
+Each claim records a `context_id` and, for two-step transitions only, a second `secondary_context_id`. A
+two-step transition (the `no_combined_transition` label - see below) issues brightness and colour as two
+separate `light.turn_on` calls, so it produces two contexts: the colour step's is the claim's primary
+`context_id`, the brightness step's is the secondary. Both are matched, because a bulb reporting back after
+only the first step is a normal intermediate state for those bulbs. Every other claim leaves
+`secondary_context_id` null.
+
 The check itself asks, in this order, for one specific light:
 
 1. **Is the light currently off?** Free to manage - nothing to protect.
@@ -86,10 +93,16 @@ The check itself asks, in this order, for one specific light:
    `owner_id` (including the synthetic first-write baseline's, which claims nobody) means the write is free
    to proceed.
 7. **Neither matches, and a `confirmed` claim exists.** Something has touched this light since either
-   recorded write - externally set; left alone. Unless: `pending` recorded what its write actually asked for
-   (brightness/colour-temperature, or brightness/RGB), and the light's *current* value still matches that
-   within the same tolerance `apply_lighting` uses to decide "already correct" - see below for why that's not
-   external either.
+   recorded write - externally set; left alone. Unless *either* claim recorded what its write actually asked
+   for (brightness/colour-temperature, or brightness/RGB) and the light's *current* value still matches that,
+   within the same tolerance `apply_lighting` uses to decide "already correct" - `pending`'s target is
+   checked first, then `confirmed`'s. See below for why neither counts as external.
+
+Steps 5 and 6 each compare against **either of that claim's context ids**, not just one. Most claims only
+have one; a claim recorded by a two-step transition has two, because that transition genuinely issues two
+separate `light.turn_on` calls (brightness, then colour) under two different contexts. A bulb confirming
+only the first step is a normal intermediate state for those bulbs, not an external touch, so either
+context matching counts as ours.
 
 A `context.id` mismatch alone isn't conclusive proof of an external touch, even with both claims present:
 Home Assistant's own `Entity._context` expires 5 seconds after the service call that set it, so a real device
@@ -99,6 +112,11 @@ above, that echo reads as an external touch, and - since nothing here ever un-ma
 continuously on (only turning it off does) - it's excluded from every future tick indefinitely, invisible
 until the phase next changes and it silently doesn't follow. Confirmed live: two kitchen spotlights sat
 excluded this way for over an hour, still correctly lit the entire time.
+
+`confirmed`'s target is checked for a different reason, and catches a different case: a light that never
+adopted the most recent write *at all* is, by definition, still showing exactly what the last write that
+*did* land asked for. Checking only `pending` there would leave a genuinely dropped write looking like an
+external change.
 
 Step 7's value comparison also recognises a colour-temperature match that a flat Kelvin tolerance alone would
 miss: Zigbee bulbs communicate colour temperature in **mireds** (`1,000,000 / kelvin`, always a whole number),
@@ -171,9 +189,9 @@ data:
   owner_id: "{{ this.entity_id }}"
 response_variable: ownership
 # ownership.results["light.kitchen_1"] -> {"blocked": false, "status": "controlled", "owner_id": "...", "matched_via": "context"}
-# matched_via is "context" (a direct context.id match) or "value" (the delayed-echo/mired rescue above) for a
-# "pending"/"controlled" status, null otherwise - useful for understanding *why* a light is considered ours,
-# not just that it is.
+# matched_via is "context" (a direct match on either of the claim's context ids) or "value" (the
+# delayed-echo/mired rescue above, against either claim's target) for a "pending"/"controlled" status, null
+# otherwise - useful for understanding *why* a light is considered ours, not just that it is.
 ```
 
 ```yaml
@@ -233,12 +251,12 @@ ever detect, since there's no state left in Home Assistant to observe going away
 hourly while running; nothing to configure.
 
 - `controlled` — the light's live `context.id` matches the `confirmed` claim, settled; or it matches neither
-  claim's `context.id` but its current value still matches what `pending`'s own `target` asked for - almost
-  certainly that write's own delayed confirmation landing under an unrelated context (HA's `Entity._context`
-  expires 5s after the service call that set it), not a real external change. Either way, not excluded from
-  the next tick.
+  claim's `context.id` but its current value still matches what `pending`'s or `confirmed`'s own `target`
+  asked for - almost certainly a delayed confirmation landing under an unrelated context (HA's
+  `Entity._context` expires 5s after the service call that set it), or a write that never landed leaving the
+  light on the previous one, not a real external change. Either way, not excluded from the next tick.
 - `pending` — matches `pending` only, not yet independently reconfirmed by a later tick.
-- `overridden` — matches neither claim's `context.id`, and the current value doesn't match `pending`'s own
+- `overridden` — matches neither claim's `context.id`, and the current value doesn't match either claim's own
   target either. Something has genuinely touched this light since either recorded write - whether that means
   "externally set" for a given caller also depends on `owner_id` (see the numbered check above), which this
   sensor can't evaluate without knowing which `owner_id` would be asking.
