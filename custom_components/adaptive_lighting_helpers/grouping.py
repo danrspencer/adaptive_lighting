@@ -286,6 +286,46 @@ def _as_int(value, default: int) -> int:
         return default
 
 
+def clamp_color_temp_kelvin(entity_id: str, target_kelvin: int, lookup: EntityLookup) -> int:
+    """The target colour temperature, narrowed to what this specific
+    entity can actually reach, per its own reported
+    min_color_temp_kelvin/max_color_temp_kelvin.
+
+    This is the colour-temperature counterpart of MAX_BRIGHTNESS above,
+    and exists for exactly the same reason - except that where
+    light.turn_on clamps brightness itself (vol.Clamp), it does *not*
+    clamp colour temperature for a light that natively supports
+    COLOR_TEMP: the value is passed straight through to the integration
+    and the physical device clamps it. Confirmed against HA core's
+    light/__init__.py, which only rewrites color_temp_kelvin when the
+    light *lacks* COLOR_TEMP support (emulating it via RGBWW/HS).
+
+    So the write is harmless - the bulb goes to its ceiling - but
+    _already_set would then compare that ceiling against the un-clamped
+    target, never find it within tolerance, and re-command the light on
+    every single tick forever. Confirmed live: light.dining_room_1 and
+    light.kitchen_1 report max_color_temp_kelvin 6535 against a 6667K
+    Morning target (132K apart, and not mired-equivalent either -
+    floor(1e6/6535)=153 vs floor(1e6/6667)=149), and the six
+    light.extension_* bulbs cap at 4000K while Day ramps 6667->4000.
+
+    Deliberately clamps only what we *compare* against, not what gets
+    sent: entities are dispatched in shared per-multiplier groups, and
+    two bulbs in one group can have different ceilings, so clamping the
+    outgoing value would mean splitting a group per distinct ceiling for
+    no benefit - the device already does this clamping itself. A missing
+    or unparseable bound (0 below - no real bulb reports 0K) leaves the
+    target untouched, so a light that doesn't publish its range behaves
+    exactly as it did before."""
+    lo = _as_int(lookup.state_attr(entity_id, "min_color_temp_kelvin"), 0)
+    hi = _as_int(lookup.state_attr(entity_id, "max_color_temp_kelvin"), 0)
+    if lo > 0:
+        target_kelvin = max(target_kelvin, lo)
+    if hi > 0:
+        target_kelvin = min(target_kelvin, hi)
+    return target_kelvin
+
+
 def _bucket_by_multiplier(entities: list, brightness_multipliers: dict) -> dict:
     """Groups entities whose multiplier isn't null/false (that means
     "don't touch this on power-on, something else owns it" - see the
@@ -421,7 +461,11 @@ def _already_set(
     if not _brightness_close(entity_id, target_brightness, lookup, brightness_tolerance):
         return False
     current_color_temp = _as_int(lookup.state_attr(entity_id, "color_temp_kelvin"), -999)
-    return _color_temp_matches(current_color_temp, target_color_temp_kelvin, color_temp_tolerance)
+    # Against what this bulb can actually reach, not the raw curve value -
+    # see clamp_color_temp_kelvin for why comparing against an
+    # unreachable target re-commands the light on every tick forever.
+    reachable_target = clamp_color_temp_kelvin(entity_id, target_color_temp_kelvin, lookup)
+    return _color_temp_matches(current_color_temp, reachable_target, color_temp_tolerance)
 
 
 def _already_set_rgb(

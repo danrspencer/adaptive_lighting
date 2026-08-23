@@ -172,7 +172,18 @@ def kelvin_for_phase(
     if day_phase == "Evening":
         fade_start_ts = night_ts - 3600
         if now_ts >= fade_start_ts:
-            t = (night_ts - now_ts) / 3600
+            # Clamped like every other ramp in this file (Day's above,
+            # Evening's own opening ramp below, and brightness_for_phase's
+            # equivalent fade, which clamps its output instead). Needed
+            # because day_phase is a *parameter*, not derived from now_ts:
+            # coordinator.py passes a manually-overridden phase alongside
+            # the real current time, so "Evening" can legitimately be
+            # asked for at an instant past night_ts. Unclamped, t goes
+            # negative there and the interpolation extrapolates straight
+            # through night_kelvin - the floor this fade is meant to
+            # bottom out at - returning 2200K at 23:00 and 1708K by 23:59
+            # on the defaults, below many bulbs' min_color_temp_kelvin.
+            t = min(max((night_ts - now_ts) / 3600, 0), 1)
             return round(night_kelvin + ((evening_kelvin - night_kelvin) * t))
         hold_start_ts = min(evening_ts + 3600, fade_start_ts)
         if now_ts < hold_start_ts:

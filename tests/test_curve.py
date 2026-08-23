@@ -170,3 +170,28 @@ def test_kelvin_to_rgb_gets_warmer_as_kelvin_drops():
     low = kelvin_to_rgb(2000)
     assert low[0] >= mid[0] >= high[0]  # red non-increasing as Kelvin rises
     assert low[2] <= mid[2] <= high[2]  # blue non-decreasing as Kelvin rises
+
+
+def test_evening_kelvin_fade_never_extrapolates_past_night_kelvin():
+    """day_phase is a parameter, not derived from now_ts - coordinator.py
+    passes a manually-overridden phase (select.<slug>_adaptive_lighting_phase)
+    alongside the real current time, so "Evening" can legitimately be asked
+    for at an instant past NIGHT. Unclamped, the fade's interpolation factor
+    goes negative there and extrapolates straight through night_kelvin, the
+    floor it's supposed to bottom out at."""
+    # One hour past Night: t would be -1.0 unclamped -> 2700 + 500*-1 = 2200K.
+    assert kelvin_for_phase("Evening", NIGHT + 3600, EVENING, DAY_START, NIGHT) == 2700
+    # Just before midnight (two hours past Night): t would be ~-1.98 -> ~1708K.
+    assert kelvin_for_phase("Evening", NIGHT + 7199, EVENING, DAY_START, NIGHT) == 2700
+    # And with a custom range, it still bottoms out at that range's own floor.
+    assert kelvin_for_phase("Evening", NIGHT + 3600, EVENING, DAY_START, NIGHT, evening_kelvin=4000, night_kelvin=2200) == 2200
+
+
+def test_evening_kelvin_fade_is_unchanged_inside_its_real_window():
+    """The clamp must not alter the fade itself - only its extrapolation."""
+    # Exactly at Night: fully faded to night_kelvin.
+    assert kelvin_for_phase("Evening", NIGHT, EVENING, DAY_START, NIGHT) == 2700
+    # Exactly at the fade's start (one hour before Night): still evening_kelvin.
+    assert kelvin_for_phase("Evening", NIGHT - 3600, EVENING, DAY_START, NIGHT) == 3200
+    # Halfway through the fade: halfway between the two.
+    assert kelvin_for_phase("Evening", NIGHT - 1800, EVENING, DAY_START, NIGHT) == 2950
