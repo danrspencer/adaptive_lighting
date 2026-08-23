@@ -208,43 +208,20 @@ class LastWriteTracker:
     async def async_resync_to_live_state(self, hass: HomeAssistant) -> None:
         """Called once at integration startup, right after async_load().
 
-        A HA restart recreates every entity's state object from scratch,
-        so the very first state report after restart always carries a
-        fresh context.id - even when the reported value hasn't actually
-        changed and the underlying device never went offline at all.
-        That's indistinguishable from a genuine external change to
-        externally_set()'s comparison, and since an externally-set light
-        is never written, every already-tracked light left alone here
-        would look permanently overridden the moment HA comes back up -
-        the same lockout the confirmed/pending redesign exists to
-        prevent (see the module docstring), just triggered by *any*
-        restart instead of a dropped write. Confirmed live: a plain
-        restart left `light.kitchen_1` - genuinely on, never dropped
-        off the network - excluded from every tick.
+        A restart recreates every entity's state object, so the first
+        report after one always carries a fresh context.id even when the
+        value never changed and the device never went offline - which is
+        indistinguishable from a genuine external change. Without this,
+        every already-tracked light would look permanently overridden
+        after any restart.
 
-        A light still unavailable/unknown at this exact moment isn't
-        skipped forever - async_start_listening()'s listener performs
-        the identical snapshot the moment that light *does* next report
-        a real state, closing what would otherwise be a startup-ordering
-        race: a restart puts nearly every entity through
-        unavailable/unknown before it reports back on, and this
-        one-shot pass runs early enough that many entities are still
-        mid-reconnect when it does. Confirmed live: light.kitchen_2,
-        genuinely on, stayed excluded through several real ticks after a
-        restart that this pass alone did fix light.kitchen_1 against -
-        both recovered from the same restart, just close enough
-        together in time that only one of them had already reported
-        back when this ran.
-
-        Snapshots each tracked entity's current live context as its new
-        `confirmed` baseline (see _snapshot_confirmed) - owner_id=None
-        and recorded_at=None, exactly the synthetic first-write baseline
-        async_record already uses for the analogous "no real claim yet,
-        but the light hasn't changed" situation (see its own docstring).
-        If nothing touches the light between restart and the next real
-        write attempt, its context stays exactly this value, so that
-        attempt sees a match and resumes control normally instead of
-        treating the restart itself as an override."""
+        Snapshots each tracked entity's live context as a new `confirmed`
+        baseline (owner_id/recorded_at None - observed, not written, the
+        same convention async_record's first-write baseline uses). An
+        entity still unavailable here isn't skipped forever:
+        async_start_listening's recovery branch performs the identical
+        snapshot when it next reports, closing a startup-ordering race
+        where a restart leaves many entities still mid-reconnect."""
         changed = False
         for entity_id in list(self._data):
             state = hass.states.get(entity_id)
@@ -356,81 +333,38 @@ class LastWriteTracker:
         secondary_context_ids: dict[str, str] | None = None,
         context_id_overrides: dict[str, str] | None = None,
     ) -> None:
-        """Called once per apply_lighting invocation with every entity it
-        actually issued a light.turn_on/turn_off for - not entities it
-        merely considered (already-at-target, unreachable, or currently
-        externally-set are never passed here).
+        """Called once per apply_lighting invocation, with every entity it
+        actually issued a light.turn_on/turn_off for - not ones it merely
+        considered. See the module docstring for the two-claim model this
+        maintains; this documents the arguments.
 
-        live_context_before_write is each entity's context.id as read
-        *before* any of this call's writes were dispatched - the caller
-        (apply_lighting) snapshots it straight after build_groups()
-        returns, since nothing async happens between that point and
-        actually issuing the writes below it, so it's a true "walking in"
-        value. It cannot be read fresh in here instead: by the time this
-        function runs, this call's own writes have already been awaited,
-        so the light's live context may already reflect the very write
-        about to be recorded as `pending` - comparing against that would
-        make every write look like it promoted itself instantly, whether
-        or not the device actually adopted anything.
+        live_context_before_write: each entity's context.id as read
+        *before* any of this call's writes were dispatched. It cannot be
+        read fresh in here - by the time this runs the writes have been
+        awaited, so a light's live context may already reflect the very
+        write about to be recorded as `pending`, making every write look
+        like it promoted itself instantly.
 
-        For each entity, this is the one and only place promotion
-        happens: if the *previous* pending claim's context.id matches
-        what was live just before this new write went out, that previous
-        attempt is now proven to have landed, and gets promoted into
-        `confirmed` - overwriting whatever `confirmed` held before
-        it, since it's necessarily newer. Otherwise `confirmed` is left
-        completely untouched, and only `pending` is replaced. This is
-        what keeps `confirmed` valid across any number of consecutive
-        dropped writes - it is only ever replaced by an *observed*
-        match, never by assumption, so a light can be retried
-        indefinitely without the fallback that's still known-good ever
-        being discarded on a guess.
+        This is the one and only place promotion happens: if the previous
+        `pending` claim matches what was live just before this write went
+        out, that attempt is proven landed and becomes `confirmed`.
+        Otherwise `confirmed` is left untouched and only `pending` is
+        replaced. The exception is an entity's first-ever write, which has
+        no `confirmed` to fall back on - the pre-write context is recorded
+        as `confirmed` with owner_id=None, so a dropped first write still
+        has a retry signal, and that synthetic baseline never blocks
+        anyone else's claim.
 
-        The one exception is the entity's very first-ever write (no
-        prior record at all): there is no previous `confirmed` to fall
-        back on, so the context.id that was live *before* this write -
-        almost certainly not ours - is recorded as `confirmed` instead,
-        with owner_id=None. This isn't claiming that write as ours; it's
-        using "the light hasn't changed" as the retry signal it already
-        is for every later write. If this first write drops, the light's
-        context stays exactly that pre-write value (nothing else can
-        produce the same context.id without actually touching the
-        entity), so the next call sees a `confirmed` match and retries
-        cleanly instead of reading "no record -> free" and losing track
-        of the attempt. owner_id=None means this synthetic baseline
-        never itself blocks a different owner_id's claim - see
-        grouping.py's externally_set().
+        targets: per entity, what this write asked for. An entity missing
+        from it (an off-command has no colour target) gets None.
 
-        targets records, per entity, what this write actually asked for
-        - {"brightness": ..., "color_temp_kelvin": ...} or {"brightness":
-        ..., "rgb_color": [...]}. An entity missing from targets (an
-        off-command has no brightness/colour target) gets None. This is
-        what lets externally_set() recognise its own write echoed back
-        under a context.id it doesn't otherwise recognise - see its
-        docstring for why that's a real, not hypothetical, gap: HA's
-        Entity._context expires 5 seconds after the service call that
-        set it, so a device whose real confirmation takes longer than
-        that reports back under an unrelated context even when it's
-        agreeing with us exactly.
-
-        secondary_context_ids / context_id_overrides: for a two-step
-        transition (no_combined_transition label), the brightness-only
-        step and the colour step now genuinely get two distinct
-        context.id values (see __init__.py's _two_step_turn_on) rather
-        than sharing one - a device reporting the brightness-only step
-        back on its own is a real, expected intermediate state for
-        these bulbs, not an anomaly, and neither of those two contexts
-        is `context_id` above (the *triggering* apply_lighting call's
-        own context - never itself passed to either light.turn_on call
-        for a two-step entity). context_id_overrides supplies the
-        colour step's context as this claim's actual primary
-        `context_id` (the final, complete state); secondary_context_ids
-        supplies the brightness step's as `secondary_context_id`,
-        recorded alongside it - either one landing is recognised as
-        ours (see override_protection.py's _context_matches). Both
-        dicts are keyed by entity_id and stay empty for anything that
-        isn't a two-step entity, which keeps using `context_id` alone,
-        unchanged."""
+        secondary_context_ids / context_id_overrides: two-step entities
+        only. Those writes go out as two light.turn_on calls under two
+        distinct contexts, neither of which is `context_id` above (the
+        triggering call's own, never passed to either). The overrides
+        supply the colour step as the claim's primary context; the
+        secondaries supply the brightness step. Both stay empty for
+        everything else, which keeps using `context_id` alone."""
         if not entity_ids:
             return
         targets = targets or {}
@@ -473,49 +407,22 @@ class LastWriteTracker:
         async_dispatcher_send(self._hass, SIGNAL_WRITE_TRACKING_UPDATED)
 
     async def async_prune_stale(self) -> None:
-        """Discards any tracked record that hasn't been written or
-        observed in over STALE_RECORD_MAX_AGE_DAYS days - the cleanup
-        an entity genuinely *deleted* from Home Assistant (not just
-        restarting) never otherwise gets. Every existing cleanup path
-        here (async_start_listening's drop-detection,
-        async_resync_to_live_state's startup pass) depends on
-        `hass.states.get(entity_id)` returning *something* - a real
-        on/off state, or at least unavailable/unknown - to have anything
-        to act on. An entity removed outright (no device, no
-        entity_id, nothing - e.g. a Zigbee2MQTT group deleted at the
-        source) produces none of that: `hass.states.get(...)` just
-        returns `None` forever, silently skipped by both of those paths
-        (see their own docstrings), leaving its record in the Store
-        indefinitely with nothing left in Home Assistant that could ever
-        prompt its removal. Confirmed live: `light.extension_spots_left`,
-        a deleted Zigbee2MQTT group with no matching entity anywhere in
-        the registry, found stuck in this Store with no way to ever
-        observe its own deletion.
+        """Discards any tracked record not written or observed in over
+        STALE_RECORD_MAX_AGE_DAYS days - the cleanup an entity genuinely
+        *deleted* from HA never otherwise gets. Every other cleanup path
+        here needs `hass.states.get()` to return *something* to act on;
+        a removed entity returns None forever and is silently skipped by
+        all of them, leaving its record stranded.
 
-        Called once at startup (right after async_load()/
-        async_resync_to_live_state), and again every PRUNE_CHECK_INTERVAL
-        while running (see __init__.py) - the one-day cutoff needs the
-        periodic call to mean anything in practice, since a startup-only
-        pass would let a record sit stale for as long as HA happens to
-        stay up between restarts before ever being cleaned.
+        Called once at startup and every PRUNE_CHECK_INTERVAL after - a
+        startup-only pass would let records sit stale for however long HA
+        stays up.
 
-        Deliberately aggressive on timing, not conservative: unlike most
-        of this integration's own decisions, there's no failure mode to
-        weigh against pruning too soon - `classify()` treats "no record
-        at all" identically to `"unclaimed"` (see its own docstring),
-        never as blocked, so a pruned-too-early record for a still-real
-        light just makes it look brand new again, re-established
-        normally on its very next write. The only thing at stake here is
-        Store hygiene, not override protection, which is why this can
-        be short where nearly everything else in this module is
-        deliberately lenient/slow-to-conclude instead.
-
-        Still, a record with no `last_seen` at all
-        (shouldn't happen after async_load()'s own backfill, but handled
-        defensively) or an unparseable one is left alone rather than
-        pruned - when age can't be judged, the same "don't delete on
-        ambiguity" preference this integration applies everywhere else
-        (see the module docstring's first-write-baseline reasoning)."""
+        Deliberately aggressive on timing, unlike most decisions here:
+        pruning too soon has no failure mode, since classify() treats "no
+        record" as `unclaimed`, never as blocked. A record with no
+        parseable `last_seen` is left alone - when age can't be judged,
+        the same "don't delete on ambiguity" preference used elsewhere."""
         cutoff = dt_util.utcnow() - timedelta(days=STALE_RECORD_MAX_AGE_DAYS)
         stale = []
         for entity_id, record in self._data.items():
@@ -533,44 +440,26 @@ class LastWriteTracker:
         async_dispatcher_send(self._hass, SIGNAL_WRITE_TRACKING_UPDATED)
 
     def async_start_listening(self, hass: HomeAssistant) -> CALLBACK_TYPE:
-        """Watches both directions of the unavailable/unknown boundary
-        for every tracked entity, via a single hass-wide "state_changed"
-        listener (not a per-entity subscription that would need to be
-        kept in sync with self._data as apply_lighting calls add new
-        entities over time - the filter below is a cheap dict lookup,
-        and HA integrations commonly use this same broad-listen-then-
-        filter pattern rather than manage dynamic per-entity
-        subscriptions for something this cheap to check):
+        """Watches both directions of the unavailable/unknown boundary for
+        every tracked entity, via one hass-wide "state_changed" listener -
+        cheaper than keeping per-entity subscriptions in sync with
+        self._data as apply_lighting adds entities over time.
 
         - **Drop** (a real on/off state -> unavailable/unknown): clears
-          the entity's record entirely - see the module docstring's
-          "device regaining power" section. Its eventual reconnect (a
-          write we have no way to intercept, since it isn't a
-          light.turn_on/turn_off call at all) then finds no claim to
-          conflict with.
-        - **Recovery** (unavailable/unknown, or no prior state at all ->
-          a real state): snapshots the just-observed context as the new
-          `confirmed` baseline via _snapshot_confirmed - the same
-          operation async_resync_to_live_state performs once at startup,
-          triggered here instead by the live event that startup pass
-          can miss if this entity was still mid-reconnect at that exact
-          moment (see that method's own docstring for the live incident
-          - light.kitchen_2 - this closes).
+          the record entirely, so the eventual reconnect - a write we
+          can't intercept, since it isn't a service call at all - finds
+          no claim to conflict with.
+        - **Recovery** (unavailable/unknown, or no prior state, -> a real
+          state): snapshots the observed context as the new `confirmed`
+          baseline, the same operation async_resync_to_live_state does at
+          startup, triggered by the live event that pass can miss.
 
         Both directions require the *other* endpoint to be a genuine
-        on/off state, not just checking the destination - almost every
-        entity passes through unavailable/unknown as a routine part of
-        every HA restart (old_state is None - a fresh process's state
-        machine has no history yet - or already unavailable/unknown
-        itself), and treating a drop-shaped transition as a real drop
-        when it's actually just routine restart noise wiped override
-        protection for practically every managed light in the house on
-        every single restart, not just ones that had actually dropped
-        off the network - a live incident: a light dimmed by hand hours
-        after a restart got silently overwritten on the next tick,
-        because its record had been cleared during that restart and
-        never rewritten since (nothing had needed a real write to it in
-        between)."""
+        on/off state, not just the destination. Almost every entity
+        passes through unavailable/unknown on every restart, and treating
+        that as a real drop cleared protection for practically every
+        light in the house each time - a light dimmed by hand hours later
+        was then silently overwritten, its record long since wiped."""
 
         @callback
         def _on_state_changed(event: Event[EventStateChangedData]) -> None:

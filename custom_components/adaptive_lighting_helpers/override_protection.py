@@ -179,75 +179,50 @@ def classify(
     color_temp_tolerance: int = 10,
     rgb_color_tolerance: int = 10,
 ) -> tuple[str, Optional[str], Optional[str]]:
-    """The actual decision logic - given everything known about one
-    entity right now, returns `(status, claim_owner_id, matched_via)`:
+    """The decision table - given everything known about one entity right
+    now, returns `(status, claim_owner_id, matched_via)`.
 
-    - `"off"` - not currently on. Override protection is entirely moot
-      for a light that isn't on - checked first, before any claim.
-    - `"unclaimed"` - no `confirmed`/`pending` claim at all (a brand
-      new entity, or the very first tick before anything's been
-      recorded), or only a single unconfirmed `pending` attempt that
-      doesn't match live state either - there isn't enough evidence
-      yet to call this external, so free to manage either way. This is
-      the one gap the two-claim design doesn't close (see
-      write_tracking.py's module docstring): a light's very first
-      tracked write, if it happens to be the one that gets dropped, is
-      indistinguishable from a genuinely external change until a
-      `confirmed` baseline exists to check against.
-    - `"pending"` - live context matches the most recent write
-      attempt (its primary context, or - for a two-step transition -
-      its secondary one, see `_ContextClaim`), not yet independently
-      reconfirmed by a later tick.
-    - `"controlled"` - live context matches `confirmed` (settled,
-      primary or secondary), OR matches neither claim but the entity's
-      current value still matches what *either* claim's own write
-      actually asked for (see `target_matches_values` - checked against
-      `pending`'s target first, then `confirmed`'s). Two separate
-      reasons a context alone can't be trusted, one per claim:
-      (1) `pending` - HA's Entity._context expires 5 seconds after the
-      service call that set it, so a device whose confirmation takes
-      longer reports back under an unrelated context while echoing
-      exactly the value asked for. (2) `confirmed` - a light that never
-      adopted the latest write at all is, by definition, still showing
-      what the last landed write asked for, even if its own context has
-      since changed for an unrelated reason. Without both, such a light
-      reads as external and - since nothing un-marks it while it stays
-      continuously on - is silently excluded from every future write
-      the instant it next needs a different value.
-    - `"overridden"` - a `confirmed` claim exists and neither it nor
-      `pending` matches, by context *or* value (against either claim's
-      own target). Something else has genuinely touched this entity
-      since either recorded write.
+    - `"off"` - not on. Override protection is moot; checked first,
+      before any claim.
+    - `"unclaimed"` - no claim at all, or only a single unconfirmed
+      `pending` that doesn't match live state. Not enough evidence to
+      call it external, so free to manage. This is the one gap the
+      two-claim design doesn't close: a light's very first tracked
+      write, if that's the one that drops, is indistinguishable from a
+      genuine external change until a `confirmed` baseline exists.
+    - `"pending"` - live context matches the most recent attempt, not
+      yet independently reconfirmed.
+    - `"controlled"` - live context matches `confirmed`, OR matches
+      neither claim but the current value still matches what either
+      claim asked for (`pending`'s target first, then `confirmed`'s).
+      Two separate reasons a context alone can't be trusted, one per
+      claim: `pending`, because Entity._context expires 5s after the
+      call that set it, so a slow device confirms under an unrelated
+      context while echoing exactly what was asked; `confirmed`,
+      because a light that never adopted the latest write is by
+      definition still showing what the last landed write asked for.
+      Without both, such a light reads as external and - since nothing
+      un-marks it while it stays on - is excluded from every future
+      write the instant it next needs a different value.
+    - `"overridden"` - a `confirmed` exists and neither claim matches,
+      by context or by value.
 
-    `claim_owner_id` is the matching claim's recorded owner - `None`
-    for `"off"`/`"unclaimed"`/`"overridden"` (nothing to attribute),
-    populated for `"pending"`/`"controlled"` (including either value-
-    rescue case, which returns whichever of `pending`/`confirmed`'s own
-    owner actually matched) so a caller that needs to know whether
-    *this specific* claim belongs to *them* can do that comparison on
-    top - deliberately not resolved here, since that comparison only
-    matters to a caller asking "is this mine", never to something just
-    displaying the raw classification (e.g. sensor.py's diagnostic
-    status, which shows every claim's owner directly regardless of who's
-    asking).
+    Context matching covers *either* of a claim's two context ids; most
+    claims have one, a two-step transition's has two.
 
-    `matched_via` says *how* a `"pending"`/`"controlled"` status was
-    reached - `"context"` (the live context.id equalled one of the
-    claim's own recorded context ids directly - primary, or secondary
-    for a two-step transition) or `"value"` (context.id didn't match
-    anything, but the entity's current value still matched what
-    `pending` or `confirmed` itself asked for - the delayed-echo/mired
-    rescue). `None` for every other status, where there's nothing to
-    explain. This is genuinely new information `status` alone doesn't
-    carry - context-matched and value-rescued cases report
-    `"controlled"` identically otherwise - and exists purely for a
-    diagnostic consumer (the write-tracking sensor/dashboard card) to
-    show *why*, not for any decision logic here or in `is_blocked()`.
+    `claim_owner_id` is the matching claim's owner, `None` where there's
+    nothing to attribute. Deliberately not resolved against the caller
+    here - that only matters to someone asking "is this mine", never to
+    something merely displaying the classification. Every matched case
+    returns an owner, value-rescues included, so the caller-side check
+    applies uniformly: a light whose value happens to match a
+    *different* owner's target must not read as free-to-manage.
 
-    Every matched case returns an owner, including both value-rescue
-    branches, so the caller-side owner check applies uniformly - a light
-    whose live value happens to match a *different* owner's target must
-    not read as free-to-manage."""
+    `matched_via` is `"context"` or `"value"` for the matched statuses,
+    `None` otherwise - purely for diagnostics (the write-tracking sensor
+    and card), never for decisions here or in `is_blocked()`. It carries
+    information `status` alone doesn't: both routes report
+    `"controlled"` identically."""
     if not is_on:
         return "off", None, None
     if confirmed is None and pending is None:
