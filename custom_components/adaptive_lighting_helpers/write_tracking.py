@@ -341,6 +341,11 @@ class LastWriteTracker:
         claim = record.get("pending") if record else None
         return claim.get("target") if claim else None
 
+    def pending_recorded_at(self, entity_id: str) -> str | None:
+        record = self._data.get(entity_id)
+        claim = record.get("pending") if record else None
+        return claim.get("recorded_at") if claim else None
+
     async def async_clear(self, entity_ids: list[str]) -> None:
         """Manually discards an entity's tracked record entirely -
         deliberately invoked, unlike every other path that removes a

@@ -44,6 +44,7 @@ only classifies them.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Optional, TypedDict
 
 # The real function Home Assistant itself uses (homeassistant/util/color.py) -
@@ -86,6 +87,52 @@ def _as_int(value, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+# Live incident, 2026-08-23: a Night->Day phase transition writes every
+# light in a room (often 10-20+ across a shared Zigbee mesh) in one
+# burst. On the very next tick - normally 30-75s later
+# (update_interval + update_jitter) - any device whose real round-trip
+# confirmation hadn't landed yet reports back with BOTH its context.id
+# and its brightness/colour still unchanged from before the write, so
+# neither the context check nor the value-rescue (target_matches_values,
+# below) can match yet - classify() concluded "overridden" a full tick
+# too early, and because an excluded entity is never written again (see
+# write_tracking.py's async_record docstring - only entities actually
+# written get a fresh claim), that one early misjudgment turned into a
+# permanent lockout across a dozen-plus lights in two rooms at once,
+# recoverable only via clear_ownership. 120s (confirmed with the user)
+# covers a worst-case tick interval plus a full extra tick for a
+# genuinely slow/congested round-trip, without leaving a real external
+# override unrecognised for too long - the failure mode of being too
+# lenient here (we might overwrite a manual change slightly later than
+# today) is far cheaper than the failure mode of being too strict (a
+# permanent lockout nobody notices until the next phase change, exactly
+# what this fixes).
+PENDING_GRACE_SECONDS = 120
+
+
+def _pending_still_fresh(pending: Optional[dict], now: Optional[datetime], grace_seconds: int) -> bool:
+    """True if `pending` was recorded recently enough that a genuine
+    device round-trip might simply not have landed yet - the same
+    "not enough evidence to call this external" leniency classify()
+    already gives a light's very first-ever write (see its own
+    "unclaimed" case), extended to any pending claim while it's still
+    fresh, not just when there's no confirmed baseline at all. `now`
+    is passed in rather than read here (datetime.now()/dt_util.utcnow())
+    so this stays pure and deterministic for testing - a caller that
+    doesn't pass `now` gets no grace period at all (the original,
+    stricter behaviour), not an exception."""
+    if pending is None or now is None:
+        return False
+    recorded_at = pending.get("recorded_at")
+    if not recorded_at:
+        return False
+    try:
+        recorded = datetime.fromisoformat(recorded_at)
+    except ValueError:
+        return False
+    return (now - recorded).total_seconds() <= grace_seconds
 
 
 def _color_temp_matches(current_kelvin: int, target_kelvin: int, tolerance_kelvin: int) -> bool:
@@ -157,6 +204,8 @@ def classify(
     brightness_tolerance: int = 2,
     color_temp_tolerance: int = 10,
     rgb_color_tolerance: int = 10,
+    now: Optional[datetime] = None,
+    pending_grace_seconds: int = PENDING_GRACE_SECONDS,
 ) -> tuple[str, Optional[str], Optional[str]]:
     """The actual decision logic - given everything known about one
     entity right now, returns `(status, claim_owner_id, matched_via)`:
@@ -189,9 +238,20 @@ def classify(
       genuinely different value - confirmed live: light.kitchen_3/
       light.kitchen_5 stuck exactly this way for over an hour, still
       correctly lit the whole time).
+    - `"pending"` (via the grace period) - a `confirmed` claim exists
+      and neither it nor `pending` matches by context or value, but
+      `pending` was recorded too recently (`pending_grace_seconds`,
+      default `PENDING_GRACE_SECONDS`) for a genuine device round-trip
+      to plausibly have landed yet - `matched_via="grace"` distinguishes
+      this from an ordinary context-matched "pending" for a diagnostic
+      viewer. Only reachable when `now` is actually supplied; a caller
+      that omits it gets the original, stricter behaviour (falls
+      straight through to "overridden" below).
     - `"overridden"` - a `confirmed` claim exists and neither it nor
-      `pending` matches, by context *or* value. Something else has
-      genuinely touched this entity since either recorded write.
+      `pending` matches, by context *or* value, and `pending` (if any)
+      is old enough that a round-trip delay no longer explains it.
+      Something else has genuinely touched this entity since either
+      recorded write.
 
     `claim_owner_id` is the matching claim's recorded owner - `None`
     for `"off"`/`"unclaimed"`/`"overridden"` (nothing to attribute),
@@ -206,15 +266,18 @@ def classify(
 
     `matched_via` says *how* a `"pending"`/`"controlled"` status was
     reached - `"context"` (the live context.id equalled the claim's
-    own recorded context.id directly) or `"value"` (context.id didn't
+    own recorded context.id directly), `"value"` (context.id didn't
     match anything, but the entity's current value still matched what
-    `pending` asked for - the delayed-echo/mired rescue). `None` for
-    every other status, where there's nothing to explain. This is
-    genuinely new information `status` alone doesn't carry - both
-    context-matched and value-rescued cases report `"controlled"`
-    identically otherwise - and exists purely for a diagnostic
-    consumer (the write-tracking sensor/dashboard card) to show *why*,
-    not for any decision logic here or in `is_blocked()`.
+    `pending` asked for - the delayed-echo/mired rescue), or `"grace"`
+    (neither context nor value matched anything yet, but `pending` is
+    too recent to conclude anything - the round-trip may simply still
+    be in flight). `None` for every other status, where there's nothing
+    to explain. This is genuinely new information `status` alone
+    doesn't carry - context-matched, value-rescued, and grace-period
+    cases can all report the same status otherwise - and exists purely
+    for a diagnostic consumer (the write-tracking sensor/dashboard
+    card) to show *why*, not for any decision logic here or in
+    `is_blocked()`.
 
     Note this is a real behaviour change from an earlier version of
     this check, not just a move: the value-rescue case used to return
@@ -246,6 +309,8 @@ def classify(
         rgb_color_tolerance,
     ):
         return "controlled", pending.get("owner_id"), "value"
+    if _pending_still_fresh(pending, now, pending_grace_seconds):
+        return "pending", pending.get("owner_id"), "grace"
     return "overridden", None, None
 
 
