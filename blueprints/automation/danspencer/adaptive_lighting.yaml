@@ -552,64 +552,58 @@ variables:
   # rgb_color field explicitly tolerates an explicit null, not just an
   # omitted key, for exactly this reason.
   rgb_color: "{{ state_attr(adaptive_sensor, 'rgb_color') }}"
-  # Every light this automation is allowed to touch, resolved from
-  # room_target - filtered to ^light\. on every branch, since room_target
-  # can also directly name occupancy-class sensor entities now
-  resolved_entities: >
+  # room_target resolved once here; the three consumers below are filters
+  # over the result. Entity/device/area only - floor/label aren't
+  # resolvable in hand-rolled Jinja the way they are through the native
+  # occupancy.* trigger/condition (pre-existing gap).
+  #
+  # Two halves, not one list: scope_entities needs them apart, because a
+  # directly *named* light also pulls in its device's siblings while the
+  # device/area halves already return those. Merging would widen scene
+  # scope.
+  target_named_entities: >
+    {% if room_target is not none and room_target.entity_id is defined %}
+      {% set v = room_target.entity_id %}
+      {{ v if v is iterable and v is not string else [v] }}
+    {% else %}
+      {{ [] }}
+    {% endif %}
+  target_expanded_entities: >
     {% set ns = namespace(entities=[]) %}
     {% if room_target is not none %}
-      {% if room_target.entity_id is defined %}
-        {% set eids = room_target.entity_id if room_target.entity_id is iterable and room_target.entity_id is not string else [room_target.entity_id] %}
-        {% set ns.entities = ns.entities + (eids | select('match', '^light\.') | list) %}
-      {% endif %}
       {% if room_target.device_id is defined %}
-        {% set dids = room_target.device_id if room_target.device_id is iterable and room_target.device_id is not string else [room_target.device_id] %}
-        {% for d in dids %}
-          {% set ns.entities = ns.entities + (device_entities(d) | select('match', '^light\.') | list) %}
+        {% set v = room_target.device_id %}
+        {% for d in (v if v is iterable and v is not string else [v]) %}
+          {% set ns.entities = ns.entities + device_entities(d) %}
         {% endfor %}
       {% endif %}
       {% if room_target.area_id is defined %}
-        {% set aids = room_target.area_id if room_target.area_id is iterable and room_target.area_id is not string else [room_target.area_id] %}
-        {% for a in aids %}
-          {% set ns.entities = ns.entities + (area_entities(a) | select('match', '^light\.') | list) %}
+        {% set v = room_target.area_id %}
+        {% for a in (v if v is iterable and v is not string else [v]) %}
+          {% set ns.entities = ns.entities + area_entities(a) %}
         {% endfor %}
       {% endif %}
     {% endif %}
     {{ ns.entities | unique | list }}
+  all_target_entities: >
+    {{ (target_named_entities + target_expanded_entities) | unique | list }}
+  # Every light this automation is allowed to touch - room_target can
+  # also directly name occupancy-class sensor entities, hence the filter.
+  resolved_entities: >
+    {{ all_target_entities | select('match', '^light\\.') | list }}
   # Entities HA already knows it can't reach right now - no point
   # commanding them - minus anything the multiplier template handed off
   # (see hands_off_entities above). Only feeds the motion_off turn-off.
   reachable_entities: >
     {{ resolved_entities | reject('is_state', 'unavailable') | reject('is_state', 'unknown')
        | reject('in', hands_off_entities) | list }}
-  # room_target's occupancy-class binary_sensor entities (entity/device/
-  # area only - floor/label aren't resolvable through this hand-rolled
-  # Jinja the way they are through the native occupancy.* trigger/
-  # condition, a pre-existing gap this shares with resolved_entities
-  # above). Only used to decide *whether* Room has an occupancy sensor
-  # at all, for the condition:/reconcile branches below - occupancy.is_detected
-  # itself still does the real detection natively.
+  # room_target's occupancy-class binary_sensor entities. Only used to
+  # decide *whether* Room has an occupancy sensor at all, for the
+  # condition:/self-heal branches below - occupancy.is_detected itself
+  # still does the real detection natively.
   room_occupancy_entities: >
-    {% set ns = namespace(entities=[]) %}
-    {% if room_target is not none %}
-      {% if room_target.entity_id is defined %}
-        {% set eids = room_target.entity_id if room_target.entity_id is iterable and room_target.entity_id is not string else [room_target.entity_id] %}
-        {% set ns.entities = ns.entities + (eids | select('match', '^binary_sensor\.') | list) %}
-      {% endif %}
-      {% if room_target.device_id is defined %}
-        {% set dids = room_target.device_id if room_target.device_id is iterable and room_target.device_id is not string else [room_target.device_id] %}
-        {% for d in dids %}
-          {% set ns.entities = ns.entities + (device_entities(d) | select('match', '^binary_sensor\.') | list) %}
-        {% endfor %}
-      {% endif %}
-      {% if room_target.area_id is defined %}
-        {% set aids = room_target.area_id if room_target.area_id is iterable and room_target.area_id is not string else [room_target.area_id] %}
-        {% for a in aids %}
-          {% set ns.entities = ns.entities + (area_entities(a) | select('match', '^binary_sensor\.') | list) %}
-        {% endfor %}
-      {% endif %}
-    {% endif %}
-    {{ ns.entities | select('is_state_attr', 'device_class', 'occupancy') | unique | list }}
+    {{ all_target_entities | select('match', '^binary_sensor\\.')
+       | select('is_state_attr', 'device_class', 'occupancy') | list }}
   occupied: >
     {#
       Is the room "in use" right now - originally for the
@@ -658,28 +652,11 @@ variables:
   # resolved_entities above - otherwise a directly-picked occupancy sensor's
   # own device siblings would incorrectly widen into scope too.
   scope_entities: >
-    {% set ns = namespace(entities=[]) %}
-    {% if room_target is not none %}
-      {% if room_target.entity_id is defined %}
-        {% set eids = room_target.entity_id if room_target.entity_id is iterable and room_target.entity_id is not string else [room_target.entity_id] %}
-        {% for e in (eids | select('match', '^light\.') | list) %}
-          {% set did = device_id(e) %}
-          {% set ns.entities = ns.entities + (device_entities(did) if did else [e]) %}
-        {% endfor %}
-      {% endif %}
-      {% if room_target.device_id is defined %}
-        {% set dids = room_target.device_id if room_target.device_id is iterable and room_target.device_id is not string else [room_target.device_id] %}
-        {% for d in dids %}
-          {% set ns.entities = ns.entities + device_entities(d) %}
-        {% endfor %}
-      {% endif %}
-      {% if room_target.area_id is defined %}
-        {% set aids = room_target.area_id if room_target.area_id is iterable and room_target.area_id is not string else [room_target.area_id] %}
-        {% for a in aids %}
-          {% set ns.entities = ns.entities + area_entities(a) %}
-        {% endfor %}
-      {% endif %}
-    {% endif %}
+    {% set ns = namespace(entities=target_expanded_entities) %}
+    {% for e in (target_named_entities | select('match', '^light\\.') | list) %}
+      {% set did = device_id(e) %}
+      {% set ns.entities = ns.entities + (device_entities(did) if did else [e]) %}
+    {% endfor %}
     {{ ns.entities | unique | list }}
   morning_scene: !input morning_scene
   day_scene: !input day_scene

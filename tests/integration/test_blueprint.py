@@ -502,6 +502,77 @@ class TestRoomTargetResolution:
     throughout the rest of this file; this class is specifically about
     resolving via an area."""
 
+    async def test_device_id_room_target_resolves_both_lights_and_occupancy_sensors(self, hass, apply_lighting_calls):
+        """The device_id branch of room_target resolution - previously the
+        only one of the three target shapes with no coverage at all, and
+        now shared by resolved_entities/room_occupancy_entities/
+        scope_entities via target_expanded_entities."""
+        dev_reg = dr.async_get(hass)
+        ent_reg = er.async_get(hass)
+        config_entry = MockConfigEntry(domain="test")
+        config_entry.add_to_hass(hass)
+        device = dev_reg.async_get_or_create(
+            config_entry_id=config_entry.entry_id, identifiers={("test", "room_device")}
+        )
+        ent_reg.async_get_or_create("light", "test", "light_d", suggested_object_id="d", device_id=device.id)
+        ent_reg.async_get_or_create(
+            "binary_sensor", "test", "occ_d", suggested_object_id="occ_d", device_id=device.id
+        )
+        _light(hass, "light.d", "on")
+        _occupancy(hass, "binary_sensor.occ_d", "on")
+        await hass.async_block_till_done()
+
+        await _setup_room_automation(hass, room_target={"device_id": device.id})
+
+        async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=1))
+        await hass.async_block_till_done()
+
+        calls = apply_lighting_calls
+        assert calls and calls[-1].data["entities"] == ["light.d"]
+
+    async def test_a_named_light_puts_its_device_siblings_in_scene_scope(
+        self, hass, apply_lighting_calls, scene_turn_on_calls
+    ):
+        """scope_entities deliberately differs from the other two consumers:
+        a *directly named* light also pulls in its device's sibling
+        entities, so a scene touching one of those siblings still counts as
+        in-scope rather than reaching outside the room. The device/area
+        branches already return siblings, so only the named-entity branch
+        needs this - which is why target_named_entities and
+        target_expanded_entities are kept apart."""
+        dev_reg = dr.async_get(hass)
+        ent_reg = er.async_get(hass)
+        config_entry = MockConfigEntry(domain="test")
+        config_entry.add_to_hass(hass)
+        device = dev_reg.async_get_or_create(
+            config_entry_id=config_entry.entry_id, identifiers={("test", "sibling_device")}
+        )
+        ent_reg.async_get_or_create("light", "test", "light_s", suggested_object_id="s", device_id=device.id)
+        ent_reg.async_get_or_create(
+            "switch", "test", "switch_s", suggested_object_id="s_aux", device_id=device.id
+        )
+        _light(hass, "light.s", "on")
+        hass.states.async_set("switch.s_aux", "off")
+        # The scene covers the *sibling*, not the light itself - only in
+        # scope because light.s was named directly and shares its device.
+        hass.states.async_set(
+            "scene.sibling_scene", "2024-01-01T00:00:00+00:00", {"entity_id": ["switch.s_aux"]}
+        )
+        await hass.async_block_till_done()
+
+        await _setup_room_automation(
+            hass, room_target={"entity_id": "light.s"}, evening_scene="scene.sibling_scene"
+        )
+
+        hass.states.async_set("sensor.test_adaptive", "Evening", {"brightness": 150, "color_temp": 3000})
+        await hass.async_block_till_done()
+
+        # In scope -> the scene is valid and activates; light.s isn't
+        # covered by it, so adaptive still manages the light itself.
+        assert scene_turn_on_calls and scene_turn_on_calls[-1].data["entity_id"] == ["scene.sibling_scene"]
+        calls = apply_lighting_calls
+        assert calls and calls[-1].data["entities"] == ["light.s"]
+
     async def test_area_id_room_target_resolves_both_lights_and_occupancy_sensors(
         self, hass, apply_lighting_calls
     ):
