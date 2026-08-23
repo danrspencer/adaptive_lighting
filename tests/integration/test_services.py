@@ -67,6 +67,12 @@ def _set_light(hass: HomeAssistant, entity_id: str, state: str, *, context: Cont
     hass.states.async_set(entity_id, state, attrs, context=context)
 
 
+async def _apply(hass: HomeAssistant, entities: list[str], *, context: Context | None = None, **overrides) -> None:
+    """apply_lighting with the fields most tests don't care about defaulted.
+    Pass any of them as a keyword to override."""
+    data = {"entities": entities, "brightness": 200, "color_temp_kelvin": 3000, "transition": 0, **overrides}
+    await hass.services.async_call(DOMAIN, "apply_lighting", data, blocking=True, context=context)
+
 async def _label_two_step(hass: HomeAssistant, entity_id: str) -> None:
     """Registers entity_id with the real "no_combined_transition" label
     directly on the entity (no device needed - EntityLookup.tags() reads
@@ -140,17 +146,7 @@ async def test_apply_lighting_turns_on_reachable_entities(setup_integration: Hom
     turn_on_calls = async_mock_service(hass, "light", "turn_on")
     _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
 
-    await hass.services.async_call(
-        DOMAIN,
-        "apply_lighting",
-        {
-            "entities": ["light.a"],
-            "brightness": 180,
-            "color_temp_kelvin": 3200,
-            "transition": 2,
-        },
-        blocking=True,
-    )
+    await _apply(hass, ['light.a'], brightness=180, color_temp_kelvin=3200, transition=2)
 
     assert len(turn_on_calls) == 1
     assert turn_on_calls[0].data["entity_id"] == ["light.a"]
@@ -171,14 +167,12 @@ async def test_apply_lighting_missing_brightness_raises(setup_integration: HomeA
     _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
 
     with pytest.raises(vol.Invalid):
+        # Deliberately raw, not _apply() - the helper defaults brightness,
+        # which is the exact field this test needs missing.
         await hass.services.async_call(
             DOMAIN,
             "apply_lighting",
-            {
-                "entities": ["light.a"],
-                "color_temp_kelvin": 3200,
-                "transition": 2,
-            },
+            {"entities": ["light.a"], "color_temp_kelvin": 3200, "transition": 2},
             blocking=True,
         )
 
@@ -188,17 +182,7 @@ async def test_apply_lighting_non_numeric_color_temp_kelvin_raises(setup_integra
     _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
 
     with pytest.raises(vol.Invalid):
-        await hass.services.async_call(
-            DOMAIN,
-            "apply_lighting",
-            {
-                "entities": ["light.a"],
-                "brightness": 180,
-                "color_temp_kelvin": "not-a-number",
-                "transition": 2,
-            },
-            blocking=True,
-        )
+        await _apply(hass, ['light.a'], brightness=180, color_temp_kelvin='not-a-number', transition=2)
 
 
 async def test_apply_lighting_accepts_an_explicit_null_rgb_color(setup_integration: HomeAssistant):
@@ -214,18 +198,7 @@ async def test_apply_lighting_accepts_an_explicit_null_rgb_color(setup_integrati
     turn_on_calls = async_mock_service(hass, "light", "turn_on")
     _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
 
-    await hass.services.async_call(
-        DOMAIN,
-        "apply_lighting",
-        {
-            "entities": ["light.a"],
-            "brightness": 180,
-            "color_temp_kelvin": 3200,
-            "rgb_color": None,
-            "transition": 2,
-        },
-        blocking=True,
-    )
+    await _apply(hass, ['light.a'], brightness=180, color_temp_kelvin=3200, rgb_color=None, transition=2)
 
     assert len(turn_on_calls) == 1
 
@@ -461,17 +434,13 @@ async def test_override_protection_survives_a_real_write_tracking_round_trip(set
     _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
 
     our_context = Context()
-    await hass.services.async_call(
-        DOMAIN,
-        "apply_lighting",
-        {
-            "entities": ["light.a"],
-            "brightness": 180,
-            "color_temp_kelvin": 3200,
-            "transition": 2,
-            "owner_id": "automation.test_room",
-        },
-        blocking=True,
+    await _apply(
+        hass,
+        ['light.a'],
+        brightness=180,
+        color_temp_kelvin=3200,
+        transition=2,
+        owner_id='automation.test_room',
         context=our_context,
     )
     assert len(turn_on_calls) == 1
@@ -500,17 +469,13 @@ async def test_override_protection_survives_a_real_write_tracking_round_trip(set
         color_temp_kelvin=3200,
     )
 
-    await hass.services.async_call(
-        DOMAIN,
-        "apply_lighting",
-        {
-            "entities": ["light.a"],
-            "brightness": 180,
-            "color_temp_kelvin": 3200,
-            "transition": 2,
-            "owner_id": "automation.test_room",
-        },
-        blocking=True,
+    await _apply(
+        hass,
+        ['light.a'],
+        brightness=180,
+        color_temp_kelvin=3200,
+        transition=2,
+        owner_id='automation.test_room',
     )
 
     # Still just the one call from before - the second, non-forced call
@@ -542,17 +507,13 @@ async def test_a_devices_own_delayed_echo_does_not_permanently_lock_the_light_ou
     # first-write gap) - matching kitchen_3/kitchen_5's actual live
     # state, which had both a confirmed and a pending claim.
     first_context = Context()
-    await hass.services.async_call(
-        DOMAIN,
-        "apply_lighting",
-        {
-            "entities": ["light.a"],
-            "brightness": 180,
-            "color_temp_kelvin": 3200,
-            "transition": 2,
-            "owner_id": "automation.test_room",
-        },
-        blocking=True,
+    await _apply(
+        hass,
+        ['light.a'],
+        brightness=180,
+        color_temp_kelvin=3200,
+        transition=2,
+        owner_id='automation.test_room',
         context=first_context,
     )
     _set_light(
@@ -566,19 +527,7 @@ async def test_a_devices_own_delayed_echo_does_not_permanently_lock_the_light_ou
     )
 
     second_context = Context()
-    await hass.services.async_call(
-        DOMAIN,
-        "apply_lighting",
-        {
-            "entities": ["light.a"],
-            "brightness": 200,
-            "color_temp_kelvin": 3000,
-            "transition": 2,
-            "owner_id": "automation.test_room",
-        },
-        blocking=True,
-        context=second_context,
-    )
+    await _apply(hass, ['light.a'], transition=2, owner_id='automation.test_room', context=second_context)
     _set_light(
         hass,
         "light.a",
@@ -611,33 +560,18 @@ async def test_a_devices_own_delayed_echo_does_not_permanently_lock_the_light_ou
     # Same target - nothing should be written (already correct either
     # way), but this must NOT be the moment the light gets marked
     # externally-set.
-    await hass.services.async_call(
-        DOMAIN,
-        "apply_lighting",
-        {
-            "entities": ["light.a"],
-            "brightness": 200,
-            "color_temp_kelvin": 3000,
-            "transition": 2,
-            "owner_id": "automation.test_room",
-        },
-        blocking=True,
-    )
+    await _apply(hass, ['light.a'], transition=2, owner_id='automation.test_room')
     assert len(turn_on_calls) == 2
 
     # The curve moves on to a genuinely different value - the real test:
     # a light that's actually excluded would stay excluded here too.
-    await hass.services.async_call(
-        DOMAIN,
-        "apply_lighting",
-        {
-            "entities": ["light.a"],
-            "brightness": 100,
-            "color_temp_kelvin": 4500,
-            "transition": 2,
-            "owner_id": "automation.test_room",
-        },
-        blocking=True,
+    await _apply(
+        hass,
+        ['light.a'],
+        brightness=100,
+        color_temp_kelvin=4500,
+        transition=2,
+        owner_id='automation.test_room',
     )
     assert len(turn_on_calls) == 3
 
@@ -655,18 +589,7 @@ async def test_two_step_transition_generates_two_distinct_contexts(setup_integra
     await _label_two_step(hass, "light.a")
     _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
 
-    await hass.services.async_call(
-        DOMAIN,
-        "apply_lighting",
-        {
-            "entities": ["light.a"],
-            "brightness": 200,
-            "color_temp_kelvin": 3000,
-            "transition": 0.2,
-            "owner_id": "automation.room",
-        },
-        blocking=True,
-    )
+    await _apply(hass, ['light.a'], transition=0.2, owner_id='automation.room')
 
     assert len(turn_on_calls) == 2
     brightness_call, color_call = turn_on_calls
@@ -699,18 +622,7 @@ async def test_two_step_brightness_step_landing_alone_is_recognised_as_ours(setu
     await _label_two_step(hass, "light.a")
     _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
 
-    await hass.services.async_call(
-        DOMAIN,
-        "apply_lighting",
-        {
-            "entities": ["light.a"],
-            "brightness": 200,
-            "color_temp_kelvin": 3000,
-            "transition": 0.2,
-            "owner_id": "automation.room",
-        },
-        blocking=True,
-    )
+    await _apply(hass, ['light.a'], transition=0.2, owner_id='automation.room')
     assert len(turn_on_calls) == 2
     brightness_context = turn_on_calls[0].context
 
@@ -751,18 +663,7 @@ async def test_two_step_promotion_recognises_a_match_via_the_secondary_context(s
     await _label_two_step(hass, "light.a")
     _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
 
-    await hass.services.async_call(
-        DOMAIN,
-        "apply_lighting",
-        {
-            "entities": ["light.a"],
-            "brightness": 200,
-            "color_temp_kelvin": 3000,
-            "transition": 0.2,
-            "owner_id": "automation.room",
-        },
-        blocking=True,
-    )
+    await _apply(hass, ['light.a'], transition=0.2, owner_id='automation.room')
 
     tracker = LastWriteTracker(hass)
     await tracker.async_load()
@@ -776,18 +677,7 @@ async def test_two_step_promotion_recognises_a_match_via_the_secondary_context(s
     # dropped-first-write test below already covers).
     _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=200, context=Context(id=brightness_ctx_1))
 
-    await hass.services.async_call(
-        DOMAIN,
-        "apply_lighting",
-        {
-            "entities": ["light.a"],
-            "brightness": 200,
-            "color_temp_kelvin": 3000,
-            "transition": 0.2,
-            "owner_id": "automation.room",
-        },
-        blocking=True,
-    )
+    await _apply(hass, ['light.a'], transition=0.2, owner_id='automation.room')
 
     # A fresh LastWriteTracker/Store, not the one used above - the test
     # harness's mock_storage patch caches a Store instance's first-ever
@@ -825,34 +715,26 @@ async def test_a_dropped_first_write_self_heals_on_the_next_tick_with_no_interfe
     # to actually exercise it.
     _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=90, color_temp_kelvin=3200)
 
-    await hass.services.async_call(
-        DOMAIN,
-        "apply_lighting",
-        {
-            "entities": ["light.a"],
-            "brightness": 180,
-            "color_temp_kelvin": 3200,
-            "transition": 2,
-            "owner_id": "automation.test_room",
-        },
-        blocking=True,
+    await _apply(
+        hass,
+        ['light.a'],
+        brightness=180,
+        color_temp_kelvin=3200,
+        transition=2,
+        owner_id='automation.test_room',
     )
     assert len(turn_on_calls) == 1
 
     # The write drops: state is deliberately left untouched, simulating
     # the physical bulb never adopting the command.
 
-    await hass.services.async_call(
-        DOMAIN,
-        "apply_lighting",
-        {
-            "entities": ["light.a"],
-            "brightness": 180,
-            "color_temp_kelvin": 3200,
-            "transition": 2,
-            "owner_id": "automation.test_room",
-        },
-        blocking=True,
+    await _apply(
+        hass,
+        ['light.a'],
+        brightness=180,
+        color_temp_kelvin=3200,
+        transition=2,
+        owner_id='automation.test_room',
     )
 
     # Retried, not locked out - the unchanged live context matched the
@@ -873,33 +755,25 @@ async def test_force_bypasses_protection_and_reclaims_ownership(setup_integratio
     # A light with an existing, unrelated write record (as if a
     # different owner had claimed it).
     _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=90, color_temp_kelvin=3200)
-    await hass.services.async_call(
-        DOMAIN,
-        "apply_lighting",
-        {
-            "entities": ["light.a"],
-            "brightness": 180,
-            "color_temp_kelvin": 3200,
-            "transition": 2,
-            "owner_id": "automation.other_room",
-        },
-        blocking=True,
+    await _apply(
+        hass,
+        ['light.a'],
+        brightness=180,
+        color_temp_kelvin=3200,
+        transition=2,
+        owner_id='automation.other_room',
     )
     assert len(turn_on_calls) == 1  # the "other room" claims it
 
     forced_context = Context()
-    await hass.services.async_call(
-        DOMAIN,
-        "apply_lighting",
-        {
-            "entities": ["light.a"],
-            "brightness": 180,
-            "color_temp_kelvin": 3200,
-            "transition": 2,
-            "owner_id": "automation.test_room",
-            "force": True,
-        },
-        blocking=True,
+    await _apply(
+        hass,
+        ['light.a'],
+        brightness=180,
+        color_temp_kelvin=3200,
+        transition=2,
+        owner_id='automation.test_room',
+        force=True,
         context=forced_context,
     )
     assert len(turn_on_calls) == 2  # force wrote through despite the other owner
@@ -954,18 +828,7 @@ async def test_write_tracking_record_is_cleared_when_light_goes_unavailable(setu
     turn_on_calls = async_mock_service(hass, "light", "turn_on")
 
     _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
-    await hass.services.async_call(
-        DOMAIN,
-        "apply_lighting",
-        {
-            "entities": ["light.a"],
-            "brightness": 180,
-            "color_temp_kelvin": 3200,
-            "transition": 2,
-            "owner_id": "automation.room",
-        },
-        blocking=True,
-    )
+    await _apply(hass, ['light.a'], brightness=180, color_temp_kelvin=3200, transition=2, owner_id='automation.room')
     assert len(turn_on_calls) == 1
 
     # The device drops off the network.
@@ -983,18 +846,7 @@ async def test_write_tracking_record_is_cleared_when_light_goes_unavailable(setu
     # stale record left to conflict with the light's new, unrelated
     # context. Before this fix, this second call would have found the
     # light "externally set" and left it alone.
-    await hass.services.async_call(
-        DOMAIN,
-        "apply_lighting",
-        {
-            "entities": ["light.a"],
-            "brightness": 180,
-            "color_temp_kelvin": 3200,
-            "transition": 2,
-            "owner_id": "automation.room",
-        },
-        blocking=True,
-    )
+    await _apply(hass, ['light.a'], brightness=180, color_temp_kelvin=3200, transition=2, owner_id='automation.room')
     assert len(turn_on_calls) == 2
 
 
@@ -1015,18 +867,7 @@ async def test_a_restart_resyncs_confirmed_to_live_context_so_an_on_light_stays_
     turn_on_calls = async_mock_service(hass, "light", "turn_on")
 
     _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
-    await hass.services.async_call(
-        DOMAIN,
-        "apply_lighting",
-        {
-            "entities": ["light.a"],
-            "brightness": 180,
-            "color_temp_kelvin": 3200,
-            "transition": 2,
-            "owner_id": "automation.room",
-        },
-        blocking=True,
-    )
+    await _apply(hass, ['light.a'], brightness=180, color_temp_kelvin=3200, transition=2, owner_id='automation.room')
     assert len(turn_on_calls) == 1
 
     # Simulate the restart in one step: light.a is still "off" (the
@@ -1193,18 +1034,7 @@ async def test_resync_preserves_the_pending_claim(setup_integration: HomeAssista
     async_mock_service(hass, "light", "turn_on")
 
     _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
-    await hass.services.async_call(
-        DOMAIN,
-        "apply_lighting",
-        {
-            "entities": ["light.a"],
-            "brightness": 180,
-            "color_temp_kelvin": 3200,
-            "transition": 2,
-            "owner_id": "automation.room",
-        },
-        blocking=True,
-    )
+    await _apply(hass, ['light.a'], brightness=180, color_temp_kelvin=3200, transition=2, owner_id='automation.room')
     tracker_before = LastWriteTracker(hass)
     await tracker_before.async_load()
     original_pending_context = tracker_before.pending_context_id("light.a")
@@ -1258,17 +1088,13 @@ async def test_prune_stale_removes_a_record_untouched_past_the_cutoff(setup_inte
     _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
 
     with freeze_time(dt_util.utcnow()) as frozen:
-        await hass.services.async_call(
-            DOMAIN,
-            "apply_lighting",
-            {
-                "entities": ["light.a"],
-                "brightness": 180,
-                "color_temp_kelvin": 3200,
-                "transition": 2,
-                "owner_id": "automation.room",
-            },
-            blocking=True,
+        await _apply(
+            hass,
+            ['light.a'],
+            brightness=180,
+            color_temp_kelvin=3200,
+            transition=2,
+            owner_id='automation.room',
         )
         tracker = LastWriteTracker(hass)
         await tracker.async_load()
@@ -1290,17 +1116,13 @@ async def test_prune_stale_leaves_a_recent_record_alone(setup_integration: HomeA
     _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
 
     with freeze_time(dt_util.utcnow()) as frozen:
-        await hass.services.async_call(
-            DOMAIN,
-            "apply_lighting",
-            {
-                "entities": ["light.a"],
-                "brightness": 180,
-                "color_temp_kelvin": 3200,
-                "transition": 2,
-                "owner_id": "automation.room",
-            },
-            blocking=True,
+        await _apply(
+            hass,
+            ['light.a'],
+            brightness=180,
+            color_temp_kelvin=3200,
+            transition=2,
+            owner_id='automation.room',
         )
         tracker = LastWriteTracker(hass)
         await tracker.async_load()
@@ -1343,17 +1165,13 @@ async def test_recovered_light_is_freed_while_an_unrelated_override_stays_protec
         _set_light(hass, entity_id, "off", supported_color_modes=["color_temp"])
 
     our_context = Context()
-    await hass.services.async_call(
-        DOMAIN,
-        "apply_lighting",
-        {
-            "entities": ["light.recovering", "light.sibling"],
-            "brightness": 180,
-            "color_temp_kelvin": 3200,
-            "transition": 2,
-            "owner_id": "automation.room",
-        },
-        blocking=True,
+    await _apply(
+        hass,
+        ['light.recovering', 'light.sibling'],
+        brightness=180,
+        color_temp_kelvin=3200,
+        transition=2,
+        owner_id='automation.room',
         context=our_context,
     )
     assert len(turn_on_calls) == 1
@@ -1426,17 +1244,13 @@ async def test_a_restart_style_unavailable_blip_does_not_clear_an_existing_recor
 
     _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
     our_context = Context()
-    await hass.services.async_call(
-        DOMAIN,
-        "apply_lighting",
-        {
-            "entities": ["light.a"],
-            "brightness": 180,
-            "color_temp_kelvin": 3200,
-            "transition": 2,
-            "owner_id": "automation.room",
-        },
-        blocking=True,
+    await _apply(
+        hass,
+        ['light.a'],
+        brightness=180,
+        color_temp_kelvin=3200,
+        transition=2,
+        owner_id='automation.room',
         context=our_context,
     )
     assert len(turn_on_calls) == 1
