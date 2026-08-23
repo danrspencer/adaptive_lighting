@@ -20,6 +20,7 @@ namespace-loop Jinja.
 """
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Callable, Optional
 
 try:
@@ -80,6 +81,18 @@ class EntityLookup:
     # unrelated context" apart from a genuine external change - see its
     # own docstring.
     pending_target: Callable[[str], Optional[dict]]
+    # ISO 8601 timestamp of when the pending claim was recorded, or
+    # None. Lets externally_set() give a just-issued write a brief grace
+    # period before concluding "overridden" - see override_protection's
+    # PENDING_GRACE_SECONDS.
+    pending_recorded_at: Callable[[str], Optional[str]]
+    # Zero-arg callable returning the current time (injected rather than
+    # read directly, same reasoning as every other HA-touching piece
+    # here - keeps this module deterministic and testable). Returning
+    # None (the default a test's fake lookup can supply) disables the
+    # grace period entirely, matching classify()'s own "no now -> no
+    # leniency" behaviour.
+    now: Callable[[], Optional[datetime]]
 
     def reachable(self, entity_id: str) -> bool:
         """False for anything HA already knows it can't reach - no point commanding it."""
@@ -179,6 +192,28 @@ class EntityLookup:
            follow. Deliberately checked against `pending` (the most
            recent attempt) rather than `confirmed` - `pending` is what
            this specific echo would be confirming.
+        5. If even that value-rescue doesn't match, but `pending` was
+           recorded very recently (PENDING_GRACE_SECONDS, in
+           override_protection.py) - still not externally set. A
+           genuinely still-in-flight device round-trip is
+           indistinguishable, at this exact instant, from a real
+           external touch: neither its context nor its value have
+           changed *yet*. Without this, a mass simultaneous write (e.g.
+           a whole room at a phase transition, a dozen-plus devices on
+           one Zigbee mesh at once) reliably misjudges "overridden" for
+           any device whose confirmation hasn't landed within a single
+           tick - and that one early misjudgment becomes permanent, not
+           transient: `build_groups()` (grouping.py) excludes anything
+           this method calls externally-set from `needing_update`, and
+           `write_tracker.async_record()` (write_tracking.py) is only
+           ever called for entities actually written - so an excluded
+           entity's `confirmed`/`pending` are frozen from that point on,
+           with nothing left to ever re-examine them except an unrelated
+           event (the light turning off, going unavailable and
+           reconnecting, or a manual force/clear_ownership). Confirmed
+           live: a Night->Day transition locked out a dozen-plus
+           kitchen/dining lights simultaneously this way, recoverable
+           only via clear_ownership.
 
         The owner check, wherever a context matches: a claim's owner_id
         of None doesn't count against anyone (no claim was ever made);
@@ -216,6 +251,7 @@ class EntityLookup:
                 "context_id": pending_ctx,
                 "owner_id": self.pending_owner_id(entity_id),
                 "target": self.pending_target(entity_id),
+                "recorded_at": self.pending_recorded_at(entity_id),
             }
             if pending_ctx is not None
             else None
@@ -232,6 +268,7 @@ class EntityLookup:
             brightness_tolerance,
             color_temp_tolerance,
             rgb_color_tolerance,
+            now=self.now(),
         )
         return is_blocked(status, claim_owner, owner_id, force)
 
