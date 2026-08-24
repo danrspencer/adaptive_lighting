@@ -135,7 +135,7 @@ class _AdaptiveLightingSensor(_ScheduleSensorBase):
 
 
 class _WriteTrackingSensor(SensorEntity):
-    """Diagnostic view into write_tracking.py's confirmed/pending
+    """Diagnostic view into write_tracking.py's observed/latest
     override-protection claims - otherwise a black box only inspectable
     indirectly by probing compute_lighting_groups, which tells you
     *whether* a light is currently excluded, never *why*.
@@ -209,8 +209,8 @@ class _WriteTrackingSensor(SensorEntity):
         for entity_id, record in self._write_tracker.snapshot().items():
             state = self.hass.states.get(entity_id)
             live_context_id = state.context.id if state is not None else None
-            confirmed = record.get("confirmed")
-            pending = record.get("pending")
+            observed = record.get("observed")
+            latest = record.get("latest")
             claim_owner = None
             matched_via = None
             if state is None or state.state in ("unavailable", "unknown"):
@@ -230,8 +230,8 @@ class _WriteTrackingSensor(SensorEntity):
                 # docstring.
                 raw_status, claim_owner, matched_via = classify(
                     state.state == "on",
-                    confirmed,
-                    pending,
+                    observed,
+                    latest,
                     live_context_id,
                     state.attributes.get("brightness"),
                     state.attributes.get("color_temp_kelvin"),
@@ -250,7 +250,7 @@ class _WriteTrackingSensor(SensorEntity):
                 # off/unavailable/unclaimed/overridden, where there's
                 # nothing to attribute) - classify()'s own second return
                 # value, surfaced directly so a viewer doesn't have to
-                # cross-reference confirmed/pending themselves to answer
+                # cross-reference observed/latest themselves to answer
                 # "who owns this light right now".
                 "owner_id": claim_owner,
                 # "context" or "value" for pending/controlled (how the
@@ -260,7 +260,7 @@ class _WriteTrackingSensor(SensorEntity):
                 # the dashboard card's "why" explanation.
                 "matched_via": matched_via,
                 "live_context_id": live_context_id,
-                "confirmed": confirmed,
-                "pending": pending,
+                "observed": observed,
+                "latest": latest,
             }
         return {"entities": entities}

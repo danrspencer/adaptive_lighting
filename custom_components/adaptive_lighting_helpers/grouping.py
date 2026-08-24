@@ -65,34 +65,34 @@ class EntityLookup:
     labels: Callable[[str], list]
     context_id: Callable[[str], Optional[str]]
     # Two independent claims per entity, not one - see write_tracking.py's
-    # module docstring for why. "confirmed" is a write some earlier call
-    # actually observed landing; "pending" is the most recent attempt,
+    # module docstring for why. "observed" is a write some earlier call
+    # actually observed landing; "latest" is the most recent attempt,
     # not yet verified either way.
-    confirmed_context_id: Callable[[str], Optional[str]]
-    confirmed_owner_id: Callable[[str], Optional[str]]
-    pending_context_id: Callable[[str], Optional[str]]
-    pending_owner_id: Callable[[str], Optional[str]]
+    observed_context_id: Callable[[str], Optional[str]]
+    observed_owner_id: Callable[[str], Optional[str]]
+    latest_context_id: Callable[[str], Optional[str]]
+    latest_owner_id: Callable[[str], Optional[str]]
     # What each claim's write actually intended - {brightness,
     # color_temp_kelvin} or {brightness, rgb_color}, or None if that
     # claim isn't a real apply_lighting write (an off-command, or a
     # write_tracking-observed baseline rather than one we issued). Lets
     # externally_set() below tell "our own write, echoed back under an
     # unrelated context" apart from a genuine external change, checking
-    # both claims - not just pending's - since a light that genuinely
+    # both claims - not just latest's - since a light that genuinely
     # hasn't updated at all yet is, by definition, still showing exactly
-    # what confirmed itself asked for.
-    pending_target: Callable[[str], Optional[dict]]
-    confirmed_target: Callable[[str], Optional[dict]]
+    # what observed itself asked for.
+    latest_target: Callable[[str], Optional[dict]]
+    observed_target: Callable[[str], Optional[dict]]
     # The second context.id a two-step transition's own brightness-only
     # step gets (see write_tracking.py's async_record docstring) - None
     # for a combined write, which never has one. Lets externally_set()
     # recognise a two-step write's first step landing on its own, not
-    # just the final combined state. confirmed's own secondary context
-    # is whatever pending's was at the moment of promotion (see
+    # just the final combined state. observed's own secondary context
+    # is whatever latest's was at the moment of promotion (see
     # async_record) - carried forward automatically once accessed here,
-    # same as confirmed_target above.
-    pending_secondary_context_id: Callable[[str], Optional[str]]
-    confirmed_secondary_context_id: Callable[[str], Optional[str]]
+    # same as observed_target above.
+    latest_secondary_context_id: Callable[[str], Optional[str]]
+    observed_secondary_context_id: Callable[[str], Optional[str]]
 
     def reachable(self, entity_id: str) -> bool:
         """False for anything HA already knows it can't reach - no point commanding it."""
@@ -138,33 +138,33 @@ class EntityLookup:
 
         owner_id is the caller's own identity, entirely optional - None
         (the default) means "I don't care who touched this last"."""
-        confirmed_ctx = self.confirmed_context_id(entity_id)
-        confirmed = (
+        observed_ctx = self.observed_context_id(entity_id)
+        observed = (
             {
-                "context_id": confirmed_ctx,
-                "secondary_context_id": self.confirmed_secondary_context_id(entity_id),
-                "owner_id": self.confirmed_owner_id(entity_id),
-                "target": self.confirmed_target(entity_id),
+                "context_id": observed_ctx,
+                "secondary_context_id": self.observed_secondary_context_id(entity_id),
+                "owner_id": self.observed_owner_id(entity_id),
+                "target": self.observed_target(entity_id),
             }
-            if confirmed_ctx is not None
+            if observed_ctx is not None
             else None
         )
-        pending_ctx = self.pending_context_id(entity_id)
-        pending = (
+        latest_ctx = self.latest_context_id(entity_id)
+        latest = (
             {
-                "context_id": pending_ctx,
-                "secondary_context_id": self.pending_secondary_context_id(entity_id),
-                "owner_id": self.pending_owner_id(entity_id),
-                "target": self.pending_target(entity_id),
+                "context_id": latest_ctx,
+                "secondary_context_id": self.latest_secondary_context_id(entity_id),
+                "owner_id": self.latest_owner_id(entity_id),
+                "target": self.latest_target(entity_id),
             }
-            if pending_ctx is not None
+            if latest_ctx is not None
             else None
         )
 
         status, claim_owner, _matched_via = classify(
             self.is_state(entity_id, "on"),
-            confirmed,
-            pending,
+            observed,
+            latest,
             self.context_id(entity_id),
             self.state_attr(entity_id, "brightness"),
             self.state_attr(entity_id, "color_temp_kelvin"),

@@ -83,9 +83,9 @@ async def test_the_sensor_surfaces_classifys_three_return_values(
     await write_tracker.async_record(["light.a"], {"light.a": None}, our_context.id, "automation.room")
 
     record = sensor_entity.extra_state_attributes["entities"]["light.a"]
-    assert record["status"] == "pending"
+    assert record["status"] == "controlled"
     assert record["owner_id"] == "automation.room"
-    assert record["matched_via"] == "context"
+    assert record["matched_via"] == "latest-context"
     assert record["live_context_id"] == our_context.id
 
 
@@ -123,11 +123,11 @@ async def test_pending_claim_carries_a_recorded_at_timestamp(
     await write_tracker.async_record(["light.a"], {"light.a": None}, "ctx-1", "automation.room")
 
     record = sensor_entity.extra_state_attributes["entities"]["light.a"]
-    assert record["pending"]["recorded_at"] is not None
+    assert record["latest"]["recorded_at"] is not None
     # A real, parseable ISO 8601 timestamp - not just any truthy value.
     from homeassistant.util import dt as dt_util
 
-    assert dt_util.parse_datetime(record["pending"]["recorded_at"]) is not None
+    assert dt_util.parse_datetime(record["latest"]["recorded_at"]) is not None
 
 
 async def test_synthetic_first_write_baseline_has_no_recorded_at(
@@ -141,8 +141,8 @@ async def test_synthetic_first_write_baseline_has_no_recorded_at(
     await write_tracker.async_record(["light.a"], {"light.a": pre_write_context}, "ctx-1", "automation.room")
 
     record = sensor_entity.extra_state_attributes["entities"]["light.a"]
-    assert record["confirmed"] is not None
-    assert record["confirmed"]["recorded_at"] is None
+    assert record["observed"] is not None
+    assert record["observed"]["recorded_at"] is None
 
 
 async def test_updates_push_via_dispatcher_signal_without_waiting_for_a_poll(
@@ -194,9 +194,9 @@ async def test_a_poll_refreshes_status_even_when_write_tracking_itself_has_not_c
     # cached copy is now stale, still showing the pre-write snapshot.
     _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], context=Context(id="ctx-1"))
     stale = hass.states.get("sensor.adaptive_lighting_write_tracking").attributes["entities"]["light.a"]
-    assert stale["status"] != "pending", "test premise broken: expected the pre-poll snapshot to be stale"
+    assert stale["status"] != "controlled", "test premise broken: expected the pre-poll snapshot to be stale"
 
     await sensor_entity.async_update_ha_state(force_refresh=True)
 
     fresh = hass.states.get("sensor.adaptive_lighting_write_tracking").attributes["entities"]["light.a"]
-    assert fresh["status"] == "pending"
+    assert fresh["status"] == "controlled"

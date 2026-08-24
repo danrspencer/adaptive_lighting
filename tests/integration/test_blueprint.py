@@ -102,6 +102,14 @@ def light_turn_off_calls(hass: HomeAssistant):
 
 
 @pytest.fixture(autouse=True)
+def clear_ownership_calls(hass: HomeAssistant):
+    """Autouse because the blueprint releases handed-off lights on every
+    tick that has any, in rooms these tests aren't otherwise asserting
+    about - an unmocked service call would fail those runs outright."""
+    return async_mock_service(hass, "adaptive_lighting_helpers", "clear_ownership")
+
+
+@pytest.fixture(autouse=True)
 def _sensor(hass: HomeAssistant):
     """The adaptive sensor every test automation points at - a plain
     state, no real adaptive_lighting_helpers entity needed since the
@@ -951,6 +959,58 @@ class TestSceneHandoff:
         calls = apply_lighting_calls
         assert calls and calls[-1].data["entities"] == ["light.uncovered"]
 
+    async def test_scene_covered_lights_are_released_from_override_protection(
+        self, hass, apply_lighting_calls, scene_turn_on_calls, clear_ownership_calls
+    ):
+        """A light handed to a scene isn't written by apply_lighting, so its
+        override-protection claim would freeze at the last real write and be
+        reported as "overridden" - indistinguishable from someone grabbing it
+        by hand. Live, this had 8 kitchen lights flagged red for hours while
+        the automation was working perfectly. Releasing them says the truthful
+        thing: nothing is managing this light right now."""
+        _light(hass, "light.covered", "on")
+        _light(hass, "light.uncovered", "on")
+        hass.states.async_set("scene.evening_scene", "2024-01-01T00:00:00+00:00", {"entity_id": ["light.covered"]})
+        await hass.async_block_till_done()
+
+        await _setup_room_automation(
+            hass,
+            room_target={"entity_id": ["light.covered", "light.uncovered"]},
+            evening_scene="scene.evening_scene",
+        )
+        hass.states.async_set("sensor.test_adaptive", "Evening", {"brightness": 150, "color_temp": 3000})
+        await hass.async_block_till_done()
+
+        assert clear_ownership_calls
+        assert clear_ownership_calls[-1].data["entities"] == ["light.covered"]
+        # The uncovered light is still adaptively managed, so it must NOT
+        # be released.
+        assert apply_lighting_calls[-1].data["entities"] == ["light.uncovered"]
+
+    async def test_a_scene_reaching_outside_scope_releases_nothing(
+        self, hass, apply_lighting_calls, clear_ownership_calls
+    ):
+        """scene_active gates the release. A scene that exists but covers
+        something outside the room is treated as no scene at all - adaptive
+        still manages those lights, so releasing them would strip protection
+        from lights we are actively writing."""
+        _light(hass, "light.a", "on")
+        _light(hass, "light.outside_the_room", "on")
+        hass.states.async_set(
+            "scene.reaches_out", "2024-01-01T00:00:00+00:00",
+            {"entity_id": ["light.a", "light.outside_the_room"]},
+        )
+        await hass.async_block_till_done()
+
+        await _setup_room_automation(
+            hass, room_target={"entity_id": "light.a"}, evening_scene="scene.reaches_out"
+        )
+        hass.states.async_set("sensor.test_adaptive", "Evening", {"brightness": 150, "color_temp": 3000})
+        await hass.async_block_till_done()
+
+        assert clear_ownership_calls == []
+        assert apply_lighting_calls[-1].data["entities"] == ["light.a"]
+
     async def test_scene_recheck_is_skipped_on_a_same_phase_attribute_only_tick(
         self, hass, apply_lighting_calls, scene_turn_on_calls
     ):
@@ -1118,6 +1178,28 @@ class TestBrightnessScaling:
         turned_off = light_turn_off_calls[-1].data["entity_id"]
         assert "light.a" in turned_off
         assert "light.handed_off" not in turned_off
+
+    async def test_a_null_multiplier_light_is_released_from_override_protection(
+        self, hass, apply_lighting_calls, clear_ownership_calls
+    ):
+        """The other half of the handoff: a null multiplier means something
+        else owns this light, so its claim is released too. Live, this was
+        light.kitchen_strip_back sitting on a 145-minute-old claim, flagged
+        overridden, while its own gradient automation drove it perfectly."""
+        _light(hass, "light.a", "on")
+        _light(hass, "light.handed_off", "on")
+        await hass.async_block_till_done()
+
+        await _setup_room_automation(
+            hass,
+            room_target={"entity_id": ["light.a", "light.handed_off"]},
+            brightness_multiplier_template="{{ {'light.handed_off': None} }}",
+        )
+        async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=1))
+        await hass.async_block_till_done()
+
+        assert clear_ownership_calls
+        assert clear_ownership_calls[-1].data["entities"] == ["light.handed_off"]
 
     async def test_a_zero_multiplier_light_is_still_turned_off_when_occupancy_clears(
         self, hass, light_turn_off_calls

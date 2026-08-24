@@ -553,7 +553,7 @@ record_ownership:
 clear_ownership:
   name: Clear ownership
   description: >-
-    Discards entities' tracked confirmed/pending claims entirely - the
+    Discards entities' tracked observed/latest claims entirely - the
     manual escape hatch for an entity stuck reporting as overridden with
     no other way back (a claim can go permanently stale for an entity
     that's excluded from every future write once overridden, since

@@ -28,9 +28,18 @@ standalone `check_ownership` service. Keeping them on one implementation
 is the point - they previously drifted, and an off light was classified
 "overridden" in one and "not excluded" in the other.
 
-Each tracked entity has not one recorded write but two - `confirmed`
-(a write some *earlier* call actually observed landing) and `pending`
-(the most recent attempt, not yet verified either way). See
+Each tracked entity carries two claims - `observed` and `latest`.
+
+`observed` is a state we have seen and know is safe to write over. It
+gets there several ways, only one of which is a write of our own: a
+write an earlier call saw the bulb adopt, the pre-write baseline for an
+entity's first-ever write, the snapshot taken at startup, or the one
+taken when a device comes back from unavailable. What unites them is
+not authorship but confidence - nothing unexplained has happened to the
+light since.
+
+`latest` is the most recent write we sent, not yet independently
+re-observed. See
 write_tracking.py's own module docstring for the full reasoning behind
 the two-claim design, the first-write baseline, and the 5-second
 Entity._context-expiry rescue `target_matches_values` exists for -
@@ -79,8 +88,8 @@ class _ContextClaim(TypedDict):
 
 
 class _WriteRecord(TypedDict):
-    confirmed: Optional[_ContextClaim]
-    pending: Optional[_ContextClaim]
+    observed: Optional[_ContextClaim]
+    latest: Optional[_ContextClaim]
     # ISO 8601 - the last time this record was written or observed (a
     # real write, or a startup/recovery resync). Pure write_tracking.py
     # bookkeeping for its own staleness pruning (async_prune_stale) -
@@ -169,8 +178,8 @@ def target_matches_values(
 
 def classify(
     is_on: bool,
-    confirmed: Optional[dict],
-    pending: Optional[dict],
+    observed: Optional[dict],
+    latest: Optional[dict],
     current_context: Optional[str],
     current_brightness=None,
     current_color_temp_kelvin=None,
@@ -184,28 +193,35 @@ def classify(
 
     - `"off"` - not on. Override protection is moot; checked first,
       before any claim.
-    - `"unclaimed"` - no claim at all, or only a single unconfirmed
-      `pending` that doesn't match live state. Not enough evidence to
-      call it external, so free to manage. This is the one gap the
-      two-claim design doesn't close: a light's very first tracked
-      write, if that's the one that drops, is indistinguishable from a
-      genuine external change until a `confirmed` baseline exists.
-    - `"pending"` - live context matches the most recent attempt, not
-      yet independently reconfirmed.
-    - `"controlled"` - live context matches `confirmed`, OR matches
-      neither claim but the current value still matches what either
-      claim asked for (`pending`'s target first, then `confirmed`'s).
+    - `"untracked"` - no claim at all, or only a single unverified
+      `latest` attempt that doesn't match live state. Not enough
+      evidence to call it external, so free to manage. Also what a
+      light deliberately handed off to a scene or a hands-off
+      multiplier reads as, once the blueprint releases it. This is the
+      one gap the two-claim design doesn't close: a light's very first
+      tracked write, if that's the one that drops, is indistinguishable
+      from a genuine external change until an `observed` baseline
+      exists.
+    - `"controlled"` - we are in control. Either the live context
+      matches a claim, or it matches neither but the current value
+      still matches what a claim asked for (`latest` checked first,
+      then `observed`). Deliberately one status rather than two: from
+      any caller's point of view these are the same situation, and
+      `is_blocked()` has always treated them identically. Which claim
+      matched, and how, is reported separately in `matched_via` - that
+      is diagnostic detail, not a different outcome.
+
       Two separate reasons a context alone can't be trusted, one per
-      claim: `pending`, because Entity._context expires 5s after the
+      claim: `latest`, because Entity._context expires 5s after the
       call that set it, so a slow device confirms under an unrelated
-      context while echoing exactly what was asked; `confirmed`,
-      because a light that never adopted the latest write is by
-      definition still showing what the last landed write asked for.
-      Without both, such a light reads as external and - since nothing
-      un-marks it while it stays on - is excluded from every future
-      write the instant it next needs a different value.
-    - `"overridden"` - a `confirmed` exists and neither claim matches,
-      by context or by value.
+      context while echoing exactly what was asked; `observed`, because
+      a light that never adopted the latest write is by definition
+      still showing what the last landed write asked for. Without both,
+      such a light reads as external and - since nothing un-marks it
+      while it stays on - is excluded from every future write the
+      instant it next needs a different value.
+    - `"overridden"` - an `observed` claim exists and neither claim
+      matches, by context or by value.
 
     Context matching covers *either* of a claim's two context ids; most
     claims have one, a two-step transition's has two.
@@ -218,23 +234,26 @@ def classify(
     applies uniformly: a light whose value happens to match a
     *different* owner's target must not read as free-to-manage.
 
-    `matched_via` is `"context"` or `"value"` for the matched statuses,
-    `None` otherwise - purely for diagnostics (the write-tracking sensor
-    and card), never for decisions here or in `is_blocked()`. It carries
-    information `status` alone doesn't: both routes report
-    `"controlled"` identically."""
+    `matched_via` names which claim matched and how -
+    `"latest-context"`, `"latest-value"`, `"observed-context"` or
+    `"observed-value"` - and is `None` for every other status. Purely
+    diagnostic (the write-tracking sensor and card), never used for
+    decisions here or in `is_blocked()`. This is where the detail that
+    used to be split across two statuses now lives: `latest-*` means the
+    most recent write is what the bulb is showing, `observed-*` means it
+    isn't, and an older write is."""
     if not is_on:
         return "off", None, None
-    if confirmed is None and pending is None:
-        return "unclaimed", None, None
-    if _context_matches(pending, current_context):
-        return "pending", pending.get("owner_id"), "context"
-    if _context_matches(confirmed, current_context):
-        return "controlled", confirmed.get("owner_id"), "context"
-    if confirmed is None:
-        return "unclaimed", None, None
-    if pending is not None and target_matches_values(
-        pending.get("target"),
+    if observed is None and latest is None:
+        return "untracked", None, None
+    if _context_matches(latest, current_context):
+        return "controlled", latest.get("owner_id"), "latest-context"
+    if _context_matches(observed, current_context):
+        return "controlled", observed.get("owner_id"), "observed-context"
+    if observed is None:
+        return "untracked", None, None
+    if latest is not None and target_matches_values(
+        latest.get("target"),
         current_brightness,
         current_color_temp_kelvin,
         current_rgb_color,
@@ -242,9 +261,9 @@ def classify(
         color_temp_tolerance,
         rgb_color_tolerance,
     ):
-        return "controlled", pending.get("owner_id"), "value"
+        return "controlled", latest.get("owner_id"), "latest-value"
     if target_matches_values(
-        confirmed.get("target"),
+        observed.get("target"),
         current_brightness,
         current_color_temp_kelvin,
         current_rgb_color,
@@ -252,7 +271,7 @@ def classify(
         color_temp_tolerance,
         rgb_color_tolerance,
     ):
-        return "controlled", confirmed.get("owner_id"), "value"
+        return "controlled", observed.get("owner_id"), "observed-value"
     return "overridden", None, None
 
 
@@ -271,10 +290,10 @@ def is_blocked(status: str, claim_owner_id: Optional[str], owner_id: Optional[st
     omitted-owner_id distinction."""
     if force or owner_id is None:
         return False
-    if status in ("off", "unclaimed"):
+    if status in ("off", "untracked"):
         return False
     if status == "overridden":
         return True
-    # "pending" or "controlled" - blocked only if the matching claim
-    # belongs to someone else.
+    # "controlled" - blocked only if the matching claim belongs to
+    # someone else.
     return claim_owner_id is not None and claim_owner_id != owner_id

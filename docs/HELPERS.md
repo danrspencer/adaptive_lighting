@@ -46,8 +46,14 @@ feed into that check:
   carry a stable identity distinguishing "the Living Room automation" from "the Kitchen automation" - two
   calls that otherwise look identical to Home Assistant.
 
-Each entity keeps not one recorded write but two - `confirmed` (a write some *earlier* call actually observed
-landing) and `pending` (the most recent write attempted, not yet verified either way). This is what lets a
+Each entity keeps not one recorded write but two - `observed` and `latest`.
+
+`observed` is a state we have seen and know is safe to write over. It gets there four ways, only one of which
+we authored: a write an earlier call saw the bulb adopt, the pre-write baseline for a first-ever write, the
+snapshot taken at startup, and the snapshot taken when a device returns from unavailable. What unites them is
+confidence, not authorship - in each case nothing unexplained has happened to the light.
+
+`latest` is the most recent write we sent, not yet independently re-observed. Together they let a
 single dropped write self-heal instead of permanently locking the light out: `apply_lighting` records the
 `context.id` it *issued*, not the one the physical bulb actually adopted - those two calls are asynchronous,
 so nothing here waits to confirm a command really landed before recording it. If it silently failed, a
@@ -58,14 +64,14 @@ kitchen light dropped a colour-mode command at a phase boundary and sat stuck on
 for over an hour, excluded from every tick in between.)
 
 The fix doesn't need to know *why* a write failed, only to notice when one did and try again: on each call,
-if the light's live context matches `pending`, that previous attempt is now known to have landed and gets
-promoted (`confirmed <- pending`) before the new attempt overwrites `pending`. If live context instead still
-matches the *old* `confirmed`, that means `pending` never landed - `confirmed` is left exactly as it was and
-only `pending` is replaced. Either way the light is retried on the very next tick rather than locked out;
-`confirmed` is only ever replaced by an *observed* match, never by assumption, so it survives any number of
+if the light's live context matches `latest`, that previous attempt is now known to have landed and gets
+promoted (`observed <- latest`) before the new attempt overwrites `latest`. If live context instead still
+matches the *old* `observed`, that means `latest` never landed - `observed` is left exactly as it was and
+only `latest` is replaced. Either way the light is retried on the very next tick rather than locked out;
+`observed` is only ever replaced by a fresh observation, never by assumption, so it survives any number of
 consecutive dropped writes.
 
-A light's very first-ever write has no earlier `confirmed` to fall back on if it drops - so the context.id
+A light's very first-ever write has no earlier `observed` to fall back on if it drops - so the context.id
 live *before* that first write (almost certainly not this integration's own) is recorded as the baseline
 instead, with no owner attached. That's not claiming the pre-existing state as this caller's write; it's
 using "the light hasn't changed" as the same retry signal every later dropped write relies on - if the first
@@ -85,18 +91,18 @@ The check itself asks, in this order, for one specific light:
 2. **Was `force: true` passed?** Free to manage, unconditionally (the write is still recorded normally - see
    below).
 3. **Was `owner_id` omitted?** Free to manage, unconditionally (recorded with `owner_id: null`).
-4. **Is there no `confirmed` and no `pending` claim at all for this light?** A genuinely brand new entity,
+4. **Is there no `observed` and no `latest` claim at all for this light?** A genuinely brand new entity,
    never yet considered - free to manage.
-5. **Does the light's current `context.id` match `pending`?** Its owner claims it, unless that owner is a
+5. **Does the light's current `context.id` match `latest`?** Its owner claims it, unless that owner is a
    *different* `owner_id` than the one asking now - in which case, externally set.
-6. **Otherwise, does it match `confirmed`?** Same check: that claim's owner decides it, a different
+6. **Otherwise, does it match `observed`?** Same check: that claim's owner decides it, a different
    `owner_id` (including the synthetic first-write baseline's, which claims nobody) means the write is free
    to proceed.
-7. **Neither matches, and a `confirmed` claim exists.** Something has touched this light since either
+7. **Neither matches, and an `observed` claim exists.** Something has touched this light since either
    recorded write - externally set; left alone. Unless *either* claim recorded what its write actually asked
    for (brightness/colour-temperature, or brightness/RGB) and the light's *current* value still matches that,
-   within the same tolerance `apply_lighting` uses to decide "already correct" - `pending`'s target is
-   checked first, then `confirmed`'s. See below for why neither counts as external.
+   within the same tolerance `apply_lighting` uses to decide "already correct" - `latest`'s target is
+   checked first, then `observed`'s. See below for why neither counts as external.
 
 Steps 5 and 6 each compare against **either of that claim's context ids**, not just one. Most claims only
 have one; a claim recorded by a two-step transition has two, because that transition genuinely issues two
@@ -113,9 +119,9 @@ continuously on (only turning it off does) - it's excluded from every future tic
 until the phase next changes and it silently doesn't follow. Confirmed live: two kitchen spotlights sat
 excluded this way for over an hour, still correctly lit the entire time.
 
-`confirmed`'s target is checked for a different reason, and catches a different case: a light that never
+`observed`'s target is checked for a different reason, and catches a different case: a light that never
 adopted the most recent write *at all* is, by definition, still showing exactly what the last write that
-*did* land asked for. Checking only `pending` there would leave a genuinely dropped write looking like an
+*did* land asked for. Checking only `latest` there would leave a genuinely dropped write looking like an
 external change.
 
 Step 7's value comparison also recognises a colour-temperature match that a flat Kelvin tolerance alone would
@@ -188,9 +194,9 @@ data:
   entities: [light.kitchen_1]
   owner_id: "{{ this.entity_id }}"
 response_variable: ownership
-# ownership.results["light.kitchen_1"] -> {"blocked": false, "status": "controlled", "owner_id": "...", "matched_via": "context"}
+# ownership.results["light.kitchen_1"] -> {"blocked": false, "status": "controlled", "owner_id": "...", "matched_via": "latest-context"}
 # matched_via is "context" (a direct match on either of the claim's context ids) or "value" (the
-# delayed-echo/mired rescue above, against either claim's target) for a "pending"/"controlled" status, null
+# delayed-echo/mired rescue above, against either claim's target) for a `controlled` status, null
 # otherwise - useful for understanding *why* a light is considered ours, not just that it is.
 ```
 
@@ -211,7 +217,7 @@ itself records automatically on every write it makes.
 
 A third service, `clear_ownership`, is the manual escape hatch for a light stuck reporting `overridden` with no
 other way back - possible because `apply_lighting`/`compute_lighting_groups` never call `record_ownership`
-internally for anything already excluded, so an overridden light's own `pending` claim can go permanently stale
+internally for anything already excluded, so an overridden light's own `latest` claim can go permanently stale
 (most concretely: during a ramping curve, once its recorded target drifts more than a tick or two away from
 where the curve has since moved on to):
 
@@ -232,11 +238,11 @@ next writes to that entity.
 `sensor.adaptive_lighting_write_tracking` makes the mechanism above inspectable directly, rather than only
 indirectly through `compute_lighting_groups`'s `combined`/`needing_off` output (which tells you *whether* a
 light is currently excluded, never *why*). Its state is the number of lights currently tracked; its `entities`
-attribute holds, per light, the raw `confirmed`/`pending` claims plus a computed `status` and `owner_id` -
+attribute holds, per light, the raw `observed`/`latest` claims plus a computed `status` and `owner_id` -
 whichever claim's owner actually matched to produce that `status` (`null` for `off`/`unavailable`/`overridden`/a
 claimless `controlled`, since there's nothing to attribute in those cases - the same value `check_ownership`
 returns for a given entity, surfaced here without needing to ask on anyone's behalf), plus `matched_via` -
-`"context"` or `"value"` for a `pending`/`controlled` status, `null` otherwise - saying *how* that match was
+`"latest-context"`, `"latest-value"`, `"observed-context"` or `"observed-value"` for a `latest`/`controlled` status, `null` otherwise - saying *how* that match was
 determined, so a viewer doesn't have to guess whether a light is "controlled" because its own reported
 context.id matched directly, or because it was rescued via the delayed-echo/mired-equivalence value comparison
 described above. The **Adaptive Lighting Write Tracking** dashboard card shows this as a small annotation
@@ -244,18 +250,17 @@ under each status badge.
 
 Records are discarded automatically once they've gone a full day without being written or observed - not just
 for lights that are still around but quiet, which is harmless (see the numbered check above: no record at all
-reads the same as `unclaimed`, never blocked, so a pruned-too-early record for a still-real light simply
+reads the same as `untracked`, never blocked, so a pruned-too-early record for a still-real light simply
 re-establishes itself on its next write), but specifically for an entity *deleted from Home Assistant outright*
 (a Zigbee2MQTT group removed at the source, say) - the one case none of the recovery/restart handling above can
 ever detect, since there's no state left in Home Assistant to observe going away. Runs once at startup and
 hourly while running; nothing to configure.
 
-- `controlled` — the light's live `context.id` matches the `confirmed` claim, settled; or it matches neither
-  claim's `context.id` but its current value still matches what `pending`'s or `confirmed`'s own `target`
+- `controlled` — we are in control: the live `context.id` matches a claim, or it matches neither
+  claim's `context.id` but its current value still matches what `latest`'s or `observed`'s own `target`
   asked for - almost certainly a delayed confirmation landing under an unrelated context (HA's
   `Entity._context` expires 5s after the service call that set it), or a write that never landed leaving the
   light on the previous one, not a real external change. Either way, not excluded from the next tick.
-- `pending` — matches `pending` only, not yet independently reconfirmed by a later tick.
 - `overridden` — matches neither claim's `context.id`, and the current value doesn't match either claim's own
   target either. Something has genuinely touched this light since either recorded write - whether that means
   "externally set" for a given caller also depends on `owner_id` (see the numbered check above), which this
@@ -263,7 +268,7 @@ hourly while running; nothing to configure.
 - `unavailable` — the entity currently has no live state to compare against.
 - `off` — the light's live state is `off` (not `unavailable`/`unknown`). Override protection is moot for a
   light that isn't on (see the `is_state(entity_id, "on")` precondition at the very top of the numbered check
-  above) - it will be freely managed the next time it's turned on, regardless of any `confirmed`/`pending`
+  above) - it will be freely managed the next time it's turned on, regardless of any `observed`/`latest`
   claim recorded while it was last on.
 
 This entity is entry-scoped, not tied to any one schedule instance (it exists even with zero "Add Sensor"

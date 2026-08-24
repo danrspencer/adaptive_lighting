@@ -16,84 +16,84 @@ from override_protection import _color_temp_matches, _context_matches, classify,
 
 
 def test_off_light_is_never_protected_regardless_of_claims():
-    # A light that isn't on is free to manage no matter what confirmed/
-    # pending say - this is the exact precondition sensor.py's status
+    # A light that isn't on is free to manage no matter what observed/
+    # latest say - this is the exact precondition sensor.py's status
     # classification used to fail to mirror (a real, live-found bug: a
     # light turned off by a code path outside apply_lighting fell
     # through to "overridden" despite this precondition).
     status, owner, matched_via = classify(
         is_on=False,
-        confirmed={"context_id": "ctx-confirmed", "owner_id": "automation.a"},
-        pending={"context_id": "ctx-pending", "owner_id": "automation.a"},
+        observed={"context_id": "ctx-observed", "owner_id": "automation.a"},
+        latest={"context_id": "ctx-latest", "owner_id": "automation.a"},
         current_context="ctx-something-else-entirely",
     )
     assert (status, owner, matched_via) == ("off", None, None)
 
 
-def test_no_claim_at_all_is_unclaimed():
-    status, owner, matched_via = classify(is_on=True, confirmed=None, pending=None, current_context="ctx-anything")
-    assert (status, owner, matched_via) == ("unclaimed", None, None)
+def test_no_claim_at_all_is_untracked():
+    status, owner, matched_via = classify(is_on=True, observed=None, latest=None, current_context="ctx-anything")
+    assert (status, owner, matched_via) == ("untracked", None, None)
 
 
-def test_a_single_unconfirmed_pending_that_does_not_match_is_unclaimed():
+def test_a_single_unverified_latest_that_does_not_match_is_untracked():
     # The one gap the two-claim design doesn't close: a light's very
     # first tracked write, if dropped, is indistinguishable from a
     # genuinely external change until a confirmed baseline exists.
     status, owner, matched_via = classify(
         is_on=True,
-        confirmed=None,
-        pending={"context_id": "ctx-first-attempt", "owner_id": "automation.a"},
+        observed=None,
+        latest={"context_id": "ctx-first-attempt", "owner_id": "automation.a"},
         current_context="ctx-whatever-this-light-had-before",
     )
-    assert (status, owner, matched_via) == ("unclaimed", None, None)
+    assert (status, owner, matched_via) == ("untracked", None, None)
 
 
-def test_context_matches_pending():
+def test_context_matches_latest():
     status, owner, matched_via = classify(
         is_on=True,
-        confirmed={"context_id": "ctx-confirmed", "owner_id": "automation.a"},
-        pending={"context_id": "ctx-pending", "owner_id": "automation.b"},
-        current_context="ctx-pending",
+        observed={"context_id": "ctx-observed", "owner_id": "automation.a"},
+        latest={"context_id": "ctx-latest", "owner_id": "automation.b"},
+        current_context="ctx-latest",
     )
-    assert (status, owner, matched_via) == ("pending", "automation.b", "context")
+    assert (status, owner, matched_via) == ("controlled", "automation.b", "latest-context")
 
 
-def test_context_matches_confirmed():
+def test_context_matches_observed():
     status, owner, matched_via = classify(
         is_on=True,
-        confirmed={"context_id": "ctx-confirmed", "owner_id": "automation.a"},
-        pending={"context_id": "ctx-pending", "owner_id": "automation.a"},
-        current_context="ctx-confirmed",
+        observed={"context_id": "ctx-observed", "owner_id": "automation.a"},
+        latest={"context_id": "ctx-latest", "owner_id": "automation.a"},
+        current_context="ctx-observed",
     )
-    assert (status, owner, matched_via) == ("controlled", "automation.a", "context")
+    assert (status, owner, matched_via) == ("controlled", "automation.a", "observed-context")
 
 
-def test_context_matches_pendings_secondary_context():
+def test_context_matches_latests_secondary_context():
     # A two-step transition's brightness-only step lands under its own
     # context (see __init__.py's _two_step_turn_on) - matching that
     # secondary context is just as much "ours" as matching the primary
     # (colour step's) one.
     status, owner, matched_via = classify(
         is_on=True,
-        confirmed={"context_id": "ctx-confirmed", "owner_id": "automation.a"},
-        pending={"context_id": "ctx-pending-colour", "secondary_context_id": "ctx-pending-brightness", "owner_id": "automation.b"},
-        current_context="ctx-pending-brightness",
+        observed={"context_id": "ctx-observed", "owner_id": "automation.a"},
+        latest={"context_id": "ctx-latest-colour", "secondary_context_id": "ctx-latest-brightness", "owner_id": "automation.b"},
+        current_context="ctx-latest-brightness",
     )
-    assert (status, owner, matched_via) == ("pending", "automation.b", "context")
+    assert (status, owner, matched_via) == ("controlled", "automation.b", "latest-context")
 
 
-def test_context_matches_confirmeds_secondary_context():
+def test_context_matches_observeds_secondary_context():
     # confirmed inherits secondary_context_id automatically once
     # promoted (async_record just carries the whole old pending dict
     # forward) - this proves classify() actually checks it there too,
     # not just on pending.
     status, owner, matched_via = classify(
         is_on=True,
-        confirmed={"context_id": "ctx-confirmed-colour", "secondary_context_id": "ctx-confirmed-brightness", "owner_id": "automation.a"},
-        pending={"context_id": "ctx-pending", "owner_id": "automation.a"},
-        current_context="ctx-confirmed-brightness",
+        observed={"context_id": "ctx-observed-colour", "secondary_context_id": "ctx-observed-brightness", "owner_id": "automation.a"},
+        latest={"context_id": "ctx-latest", "owner_id": "automation.a"},
+        current_context="ctx-observed-brightness",
     )
-    assert (status, owner, matched_via) == ("controlled", "automation.a", "context")
+    assert (status, owner, matched_via) == ("controlled", "automation.a", "observed-context")
 
 
 def test_secondary_context_absent_does_not_accidentally_match_none():
@@ -109,10 +109,10 @@ def test_secondary_context_absent_does_not_accidentally_match_none():
 def test_context_matching_neither_primary_nor_secondary_falls_through_to_value_rescue():
     status, owner, matched_via = classify(
         is_on=True,
-        confirmed={"context_id": "ctx-confirmed", "owner_id": "automation.a"},
-        pending={
-            "context_id": "ctx-pending-colour",
-            "secondary_context_id": "ctx-pending-brightness",
+        observed={"context_id": "ctx-observed", "owner_id": "automation.a"},
+        latest={
+            "context_id": "ctx-latest-colour",
+            "secondary_context_id": "ctx-latest-brightness",
             "owner_id": "automation.a",
             "target": {"brightness": 200, "color_temp_kelvin": 3000},
         },
@@ -120,16 +120,16 @@ def test_context_matching_neither_primary_nor_secondary_falls_through_to_value_r
         current_brightness=200,
         current_color_temp_kelvin=3000,
     )
-    assert (status, owner, matched_via) == ("controlled", "automation.a", "value")
+    assert (status, owner, matched_via) == ("controlled", "automation.a", "latest-value")
 
 
-def test_context_matches_neither_but_value_matches_pendings_target():
+def test_context_matches_neither_but_value_matches_latests_target():
     # The delayed-echo rescue - see classify()'s own docstring for why
     # a context mismatch alone doesn't prove an external touch.
     status, owner, matched_via = classify(
         is_on=True,
-        confirmed={"context_id": "ctx-confirmed", "owner_id": "automation.a"},
-        pending={"context_id": "ctx-pending", "owner_id": "automation.b", "target": {"brightness": 200, "color_temp_kelvin": 3000}},
+        observed={"context_id": "ctx-observed", "owner_id": "automation.a"},
+        latest={"context_id": "ctx-latest", "owner_id": "automation.b", "target": {"brightness": 200, "color_temp_kelvin": 3000}},
         current_context="ctx-device-echo-unrelated",
         current_brightness=200,
         current_color_temp_kelvin=3000,
@@ -138,10 +138,10 @@ def test_context_matches_neither_but_value_matches_pendings_target():
     # the bundled correctness fix: this used to skip the owner check
     # entirely for the rescue case. matched_via distinguishes this from
     # the context-matched "controlled" case above.
-    assert (status, owner, matched_via) == ("controlled", "automation.b", "value")
+    assert (status, owner, matched_via) == ("controlled", "automation.b", "latest-value")
 
 
-def test_context_matches_neither_but_value_matches_confirmeds_own_target():
+def test_context_matches_neither_but_value_matches_observeds_own_target():
     # The other half of the value-rescue, checking both claims was
     # always the point of keeping two - a light that genuinely hasn't
     # updated at all yet is, by definition, still showing exactly what
@@ -152,35 +152,35 @@ def test_context_matches_neither_but_value_matches_confirmeds_own_target():
     # this only passes if confirmed's target is actually being checked.
     status, owner, matched_via = classify(
         is_on=True,
-        confirmed={"context_id": "ctx-confirmed", "owner_id": "automation.a", "target": {"brightness": 50, "color_temp_kelvin": 2700}},
-        pending={"context_id": "ctx-pending", "owner_id": "automation.b", "target": {"brightness": 10, "color_temp_kelvin": 2000}},
+        observed={"context_id": "ctx-observed", "owner_id": "automation.a", "target": {"brightness": 50, "color_temp_kelvin": 2700}},
+        latest={"context_id": "ctx-latest", "owner_id": "automation.b", "target": {"brightness": 10, "color_temp_kelvin": 2000}},
         current_context="ctx-something-unrelated",
         current_brightness=50,
         current_color_temp_kelvin=2700,
     )
-    assert (status, owner, matched_via) == ("controlled", "automation.a", "value")
+    assert (status, owner, matched_via) == ("controlled", "automation.a", "observed-value")
 
 
-def test_pending_value_rescue_is_checked_before_confirmeds():
+def test_latest_value_rescue_is_checked_before_observeds():
     # When both would technically match, pending (the more recent claim)
     # takes precedence - matching classify()'s existing context-check
     # ordering (pending before confirmed).
     status, owner, matched_via = classify(
         is_on=True,
-        confirmed={"context_id": "ctx-confirmed", "owner_id": "automation.a", "target": {"brightness": 200, "color_temp_kelvin": 3000}},
-        pending={"context_id": "ctx-pending", "owner_id": "automation.b", "target": {"brightness": 200, "color_temp_kelvin": 3000}},
+        observed={"context_id": "ctx-observed", "owner_id": "automation.a", "target": {"brightness": 200, "color_temp_kelvin": 3000}},
+        latest={"context_id": "ctx-latest", "owner_id": "automation.b", "target": {"brightness": 200, "color_temp_kelvin": 3000}},
         current_context="ctx-something-unrelated",
         current_brightness=200,
         current_color_temp_kelvin=3000,
     )
-    assert (status, owner, matched_via) == ("controlled", "automation.b", "value")
+    assert (status, owner, matched_via) == ("controlled", "automation.b", "latest-value")
 
 
 def test_rescue_does_not_apply_when_neither_claims_target_matches():
     status, owner, matched_via = classify(
         is_on=True,
-        confirmed={"context_id": "ctx-confirmed", "owner_id": "automation.a", "target": {"brightness": 50, "color_temp_kelvin": 2700}},
-        pending={"context_id": "ctx-pending", "owner_id": "automation.a", "target": {"brightness": 200, "color_temp_kelvin": 3000}},
+        observed={"context_id": "ctx-observed", "owner_id": "automation.a", "target": {"brightness": 50, "color_temp_kelvin": 2700}},
+        latest={"context_id": "ctx-latest", "owner_id": "automation.a", "target": {"brightness": 200, "color_temp_kelvin": 3000}},
         current_context="ctx-someone-else",
         current_brightness=40,
         current_color_temp_kelvin=6000,
@@ -191,8 +191,8 @@ def test_rescue_does_not_apply_when_neither_claims_target_matches():
 def test_rescue_does_not_apply_when_values_dont_match():
     status, owner, matched_via = classify(
         is_on=True,
-        confirmed={"context_id": "ctx-confirmed", "owner_id": "automation.a"},
-        pending={"context_id": "ctx-pending", "owner_id": "automation.a", "target": {"brightness": 200, "color_temp_kelvin": 3000}},
+        observed={"context_id": "ctx-observed", "owner_id": "automation.a"},
+        latest={"context_id": "ctx-latest", "owner_id": "automation.a", "target": {"brightness": 200, "color_temp_kelvin": 3000}},
         current_context="ctx-someone-else",
         current_brightness=40,
         current_color_temp_kelvin=6000,
@@ -200,11 +200,11 @@ def test_rescue_does_not_apply_when_values_dont_match():
     assert (status, owner, matched_via) == ("overridden", None, None)
 
 
-def test_rescue_does_not_apply_when_pending_has_no_recorded_target():
+def test_rescue_does_not_apply_when_latest_has_no_recorded_target():
     status, owner, matched_via = classify(
         is_on=True,
-        confirmed={"context_id": "ctx-confirmed", "owner_id": "automation.a"},
-        pending={"context_id": "ctx-pending", "owner_id": "automation.a", "target": None},
+        observed={"context_id": "ctx-observed", "owner_id": "automation.a"},
+        latest={"context_id": "ctx-latest", "owner_id": "automation.a", "target": None},
         current_context="ctx-someone-else",
         current_brightness=200,
         current_color_temp_kelvin=3000,
@@ -212,11 +212,11 @@ def test_rescue_does_not_apply_when_pending_has_no_recorded_target():
     assert (status, owner, matched_via) == ("overridden", None, None)
 
 
-def test_genuinely_overridden_when_confirmed_exists_and_nothing_matches():
+def test_genuinely_overridden_when_observed_exists_and_nothing_matches():
     status, owner, matched_via = classify(
         is_on=True,
-        confirmed={"context_id": "ctx-confirmed", "owner_id": "automation.a"},
-        pending=None,
+        observed={"context_id": "ctx-observed", "owner_id": "automation.a"},
+        latest=None,
         current_context="ctx-someone-else",
     )
     assert (status, owner, matched_via) == ("overridden", None, None)
@@ -264,9 +264,9 @@ def test_is_blocked_no_owner_id_bypasses():
     assert is_blocked("overridden", None, owner_id=None) is False
 
 
-def test_is_blocked_off_and_unclaimed_never_block():
+def test_is_blocked_off_and_untracked_never_block():
     assert is_blocked("off", None, "ours") is False
-    assert is_blocked("unclaimed", None, "ours") is False
+    assert is_blocked("untracked", None, "ours") is False
 
 
 def test_is_blocked_overridden_always_blocks():
@@ -276,7 +276,7 @@ def test_is_blocked_overridden_always_blocks():
 def test_is_blocked_matched_claim_blocks_only_for_a_different_owner():
     assert is_blocked("controlled", "ours", "ours") is False
     assert is_blocked("controlled", "theirs", "ours") is True
-    assert is_blocked("pending", None, "ours") is False  # unowned claim blocks nobody
+    assert is_blocked("controlled", None, "ours") is False  # unowned claim blocks nobody
 
 
 def test_color_temp_matches_within_flat_kelvin_tolerance():

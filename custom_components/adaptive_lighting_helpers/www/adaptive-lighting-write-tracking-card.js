@@ -3,7 +3,7 @@
  *
  * A UI for sensor.adaptive_lighting_write_tracking's `entities` attribute
  * (see sensor.py's _WriteTrackingSensor and write_tracking.py) - one row
- * per tracked light, showing the confirmed/pending override-protection
+ * per tracked light, showing the observed/latest override-protection
  * claims and a computed status. This card does no resolution logic of
  * its own beyond what the sensor already computes; its one added value
  * is "trace" - resolving a claim's raw context.id into what actually
@@ -32,50 +32,58 @@ const DEFAULT_ENTITY = 'sensor.adaptive_lighting_write_tracking';
 
 const STATUS_LABEL = {
   controlled: 'Controlled',
-  pending: 'Pending',
   overridden: 'Overridden',
+  untracked: 'Not tracked',
   unavailable: 'Unavailable',
   off: 'Off',
 };
 
 // Shown as hover text on each status badge - what the word actually
 // means, since "Controlled" vs "Overridden" isn't self-explanatory
-// without knowing how the confirmed/pending mechanism behind it works.
+// without knowing how the observed/latest mechanism behind it works.
 const STATUS_TOOLTIP = {
-  controlled: 'This light is under adaptive control - its current value matches a write we made (or, even if its ' +
-    'reported context differs, still matches what we last asked for). It will be updated normally on the next tick.',
-  pending: "Our most recent write hasn't been reconfirmed by a later tick yet - still effectively under control, " +
-    'just not yet double-checked.',
+  controlled: 'Under adaptive control - the light matches a write we made, or still matches what we last asked ' +
+    'for even if its reported context differs. It will be updated normally on the next tick.',
   overridden: "Something else changed this light since our last write, and its current value doesn't match what " +
     'we asked for either - left alone until it turns off, goes unavailable and reconnects, or you force an update.',
+  untracked: 'Nothing is currently managing this light - either it is brand new, or it has been deliberately ' +
+    'handed off to a scene or a hands-off brightness multiplier. Not a problem, and not something being ' +
+    'protected: the next write from anyone starts a fresh record.',
   unavailable: "This light isn't reporting a state right now (offline, unreachable, or reconnecting).",
   off: "This light is currently off - override protection doesn't apply to it. It'll be freely managed the next " +
     'time it turns on.',
 };
 
 // Short, human explanation of matched_via - only meaningful for
-// pending/controlled (classify() returns null otherwise, nothing to
+// a controlled status (classify() returns null otherwise, nothing to
 // explain). Shown as a small inline annotation next to the status
 // badge, so "why" is visible without needing to hover - the tooltip
 // text alone was easy to miss.
 const MATCHED_VIA_LABEL = {
-  context: 'context matched',
-  value: 'colour/brightness matched',
+  'latest-context': 'latest write matched',
+  'latest-value': 'latest write, colour/brightness matched',
+  'observed-context': 'earlier write matched',
+  'observed-value': 'earlier write, colour/brightness matched',
 };
 
 const MATCHED_VIA_TOOLTIP = {
-  context: "The light's own reported context.id is exactly the one we wrote it with - a direct, unambiguous match.",
-  value: "The light's reported context.id doesn't match anything we recorded, but its current brightness/colour " +
-    'still matches exactly what we last asked for - almost certainly the device\'s own delayed confirmation ' +
-    "landing under a new context (Home Assistant only reuses our context.id for up to 5 seconds), not a real touch.",
+  'latest-context': "The light is reporting exactly the context we wrote it with on our most recent write - the " +
+    'ordinary healthy case.',
+  'latest-value': "The light's context doesn't match anything we recorded, but its brightness/colour still match " +
+    'what we last asked for - almost certainly the device\'s own delayed confirmation landing under a new context ' +
+    '(Home Assistant only reuses our context.id for up to 5 seconds), not a real touch.',
+  'observed-context': 'Our most recent write is NOT what the light is showing - but an earlier one we know landed ' +
+    'is. The newest command was probably dropped; it will be retried on the next tick.',
+  'observed-value': "The light's context matches nothing we recorded, but it still matches what an earlier write " +
+    'asked for - so the most recent write has not taken effect yet.',
 };
 
 // Kept in the same rough "most interesting first" order a user
 // debugging an override issue would actually want, without hardcoding
-// entity order - lights with nothing surprising going on (controlled)
-// sink to the bottom, and off lights sink lowest of all (more inert
-// even than controlled - nothing is being actively managed at all).
-const STATUS_ORDER = ['overridden', 'pending', 'unavailable', 'controlled', 'off'];
+// entity order - lights under normal control sink below anything
+// surprising, and lights nothing is managing at all (not tracked, off)
+// sink lowest, since there is nothing to act on there.
+const STATUS_ORDER = ['overridden', 'unavailable', 'controlled', 'untracked', 'off'];
 
 function relativeTime(iso) {
   if (!iso) return null;
@@ -120,7 +128,7 @@ class AdaptiveLightingWriteTrackingCard extends HTMLElement {
     this._entityId = this._config.entity || DEFAULT_ENTITY;
     this._cacheKey = null;
     this._filter = '';
-    // entity_id|slot ("confirmed"/"pending") -> resolved logbook text,
+    // entity_id|slot ("observed"/"latest") -> resolved logbook text,
     // or 'loading', or an Error. Cleared whenever the underlying claim's
     // own context_id changes, so a stale trace from a previous claim on
     // the same light can never be shown as if it were current.
@@ -325,7 +333,7 @@ class AdaptiveLightingWriteTrackingCard extends HTMLElement {
     const rows = Object.entries(entities)
       .filter(([entityId, record]) => {
         if (!filter) return true;
-        const haystack = `${entityId} ${record.owner_id || ''} ${(record.confirmed && record.confirmed.owner_id) || ''} ${(record.pending && record.pending.owner_id) || ''}`.toLowerCase();
+        const haystack = `${entityId} ${record.owner_id || ''} ${(record.observed && record.observed.owner_id) || ''} ${(record.latest && record.latest.owner_id) || ''}`.toLowerCase();
         return haystack.includes(filter);
       })
       .sort(([aId, a], [bId, b]) => {
@@ -361,8 +369,8 @@ class AdaptiveLightingWriteTrackingCard extends HTMLElement {
               ${matchedViaLabel ? `<div class="matched-via muted" title="${MATCHED_VIA_TOOLTIP[record.matched_via] || ''}">${matchedViaLabel}</div>` : ''}
             </td>
             <td>${ownerCell}</td>
-            <td>${this._claimCell(entityId, 'confirmed', record.confirmed)}</td>
-            <td>${this._claimCell(entityId, 'pending', record.pending)}</td>
+            <td>${this._claimCell(entityId, 'observed', record.observed)}</td>
+            <td>${this._claimCell(entityId, 'latest', record.latest)}</td>
             <td>
               <button class="clear-btn" data-entity="${entityId}" ${clearing ? 'disabled' : ''}>${clearing ? 'Clearing…' : 'Clear'}</button>
               ${clearError ? `<div class="trace-error">${clearError}</div>` : ''}
@@ -423,7 +431,7 @@ class AdaptiveLightingWriteTrackingCard extends HTMLElement {
           cursor: help;
         }
         .status-controlled { background: var(--success-color, #43a047); color: white; }
-        .status-pending { background: var(--warning-color, #ffa726); color: white; }
+        .status-untracked { background: var(--disabled-color, #9e9e9e); color: white; }
         .status-overridden { background: var(--error-color, #e53935); color: white; }
         .status-unavailable { background: var(--disabled-color, #9e9e9e); color: white; }
         .status-off { background: var(--state-icon-off-color, #44739e); color: white; }
@@ -481,9 +489,9 @@ class AdaptiveLightingWriteTrackingCard extends HTMLElement {
                 <tr>
                   <th>Light</th>
                   <th title="Whether this light is currently under adaptive control - see each status badge for what it means.">Status</th>
-                  <th title="Whichever claim (confirmed or pending) currently matches this light - who's in control of it right now. Blank when nothing currently matches (off/unavailable/unclaimed/overridden).">Owner</th>
-                  <th title="The last write to this light that a later tick actually observed landing.">Confirmed</th>
-                  <th title="The most recent write attempted for this light, not yet reconfirmed by a later tick.">Pending</th>
+                  <th title="Whichever claim (observed or latest) currently matches this light - who's in control of it right now. Blank when nothing currently matches (off/unavailable/not tracked/overridden).">Owner</th>
+                  <th title="A state we have seen and know is safe to write over - a write a later tick saw land, or a baseline taken at startup, on first write, or when the device came back from unavailable.">Observed</th>
+                  <th title="The most recent write we sent to this light, not yet independently re-observed by a later tick.">Latest</th>
                   <th title="Manually discard this light's tracked record entirely - the escape hatch for a light stuck Overridden with no other way back.">Actions</th>
                 </tr>
               </thead>

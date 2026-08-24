@@ -24,8 +24,16 @@ look externally set.
 
 Two claims per entity, not one
 ------------------------------
-- `confirmed` - a write some earlier call actually observed landing.
-- `pending`   - the most recent attempt, not yet verified either way.
+- `observed` - a state we have seen and know is safe to write over.
+- `latest`   - the most recent write we sent, not yet re-observed.
+
+`observed` is deliberately not "a write of ours". It is populated four
+ways, only one of which we authored: a write an earlier call saw the
+bulb adopt, the pre-write baseline for a first-ever write, the startup
+snapshot, and the snapshot taken when a device returns from
+unavailable. What they share is confidence, not authorship - in each
+case nothing unexplained has happened to the light, so writing over it
+is safe.
 
 apply_lighting records the context it *issued*; nothing waits to confirm
 the bulb adopted it. With a single record, one dropped write locks a
@@ -36,20 +44,19 @@ dropped a colour command at a phase boundary and sat excluded for over
 an hour, correctly lit the whole time.)
 
 Two slots fix that without needing a growing history. If the live
-context matches `pending`, that attempt is now known-good and is
-promoted (`confirmed <- pending`) before the new attempt overwrites
-`pending`. If it still matches the old `confirmed`, `pending` never
-landed and `confirmed` is left exactly as it was. Either way the light
-is still recognised as ours and retried next tick. `confirmed` is only
-ever evicted by an *observed* match, so it survives any number of
-consecutive dropped writes.
+context matches `latest`, that attempt is now known-good and is promoted
+(`observed <- latest`) before the new attempt overwrites `latest`. If it
+still matches the old `observed`, `latest` never landed and `observed`
+is left exactly as it was. Either way the light is still recognised as
+ours and retried next tick. `observed` is only ever evicted by a fresh
+observation, so it survives any number of consecutive dropped writes.
 
-An entity's very first write has no `confirmed` to fall back on, so the
-context.id live *before* that write is recorded as `confirmed` instead.
-That isn't claiming ownership of it - it's reusing the same "the light
-hasn't changed" retry signal every later dropped write relies on, since
-a dropped first write leaves the context at exactly that value. See
-async_record.
+An entity's very first write has no `observed` to fall back on, so the
+context.id live *before* that write is recorded as `observed` instead.
+That isn't claiming ownership of it - it's the same "nothing
+unexplained has happened" signal every later dropped write relies on,
+since a dropped first write leaves the context at exactly that value.
+See async_record.
 
 Why a context mismatch still isn't proof
 -----------------------------------------
@@ -69,7 +76,7 @@ state write with no explicit context does - core.py).
 async_start_listening() watches both directions of the
 unavailable/unknown boundary: it clears an entity's record when it is
 observed dropping from a real on/off state, and snapshots the
-newly-observed context as a fresh `confirmed` baseline when it comes
+newly-observed context as a fresh `observed` baseline when it comes
 back. async_resync_to_live_state performs the same snapshot once at
 startup for whatever is already reporting by then.
 
@@ -127,7 +134,7 @@ SIGNAL_WRITE_TRACKING_UPDATED = "adaptive_lighting_helpers_write_tracking_update
 
 
 class LastWriteTracker:
-    """entity_id -> {confirmed, pending} claims for the last two writes
+    """entity_id -> {observed, latest} claims for the last two writes
     this integration issued for it, across every apply_lighting call
     regardless of which automation made it - see the module docstring
     for why exactly two, not one and not a growing history."""
@@ -153,12 +160,23 @@ class LastWriteTracker:
         for entity_id, value in raw.items():
             if not isinstance(value, dict):
                 continue
+            # Records written before the claims were renamed carry the
+            # old key names. Mapped straight across - the shapes are
+            # identical, only the words changed - so an upgrade doesn't
+            # silently drop every light's protection and reopen "no
+            # record -> free" across the whole house.
             if "confirmed" in value and "pending" in value:
-                # Older confirmed/pending records (pre-recorded_at) are
+                value = {
+                    "observed": value["confirmed"],
+                    "latest": value["pending"],
+                    "last_seen": value.get("last_seen"),
+                }
+            if "observed" in value and "latest" in value:
+                # Older observed/latest records (pre-recorded_at) are
                 # missing the key entirely - .setdefault below back-fills
                 # None on load rather than needing every reader to
                 # handle a missing key as well as an explicit None.
-                for claim in (value.get("confirmed"), value.get("pending")):
+                for claim in (value.get("observed"), value.get("latest")):
                     if claim is not None:
                         claim.setdefault("recorded_at", None)
                         claim.setdefault("target", None)
@@ -181,22 +199,22 @@ class LastWriteTracker:
                 data[entity_id] = value  # already this shape
             elif "context_id" in value:
                 # The single-record format this integration shipped with
-                # before confirmed/pending existed - one {context_id,
+                # before two claims existed - one {context_id,
                 # owner_id} per entity. Treated as an already-established
-                # confirmed baseline with nothing pending, not dropped
+                # observed baseline with nothing latest, not dropped
                 # outright - an upgrade shouldn't itself reopen "no
                 # record -> free" for every currently-protected light in
                 # the house, the same class of incident the restart-blip
                 # fix above exists to prevent.
                 data[entity_id] = {
-                    "confirmed": {
+                    "observed": {
                         "context_id": value["context_id"],
                         "secondary_context_id": None,
                         "owner_id": value.get("owner_id"),
                         "recorded_at": None,
                         "target": None,
                     },
-                    "pending": None,
+                    "latest": None,
                     "last_seen": now_iso,
                 }
             # Anything else (the even older bare-string format, or
@@ -215,7 +233,7 @@ class LastWriteTracker:
         every already-tracked light would look permanently overridden
         after any restart.
 
-        Snapshots each tracked entity's live context as a new `confirmed`
+        Snapshots each tracked entity's live context as a new `observed`
         baseline (owner_id/recorded_at None - observed, not written, the
         same convention async_record's first-write baseline uses). An
         entity still unavailable here isn't skipped forever:
@@ -227,19 +245,19 @@ class LastWriteTracker:
             state = hass.states.get(entity_id)
             if state is None or state.state in ("unavailable", "unknown"):
                 continue
-            self._snapshot_confirmed(entity_id, state.context.id)
+            self._snapshot_observed(entity_id, state.context.id)
             changed = True
         if changed:
             await self._store.async_save(self._data)
             async_dispatcher_send(self._hass, SIGNAL_WRITE_TRACKING_UPDATED)
 
-    def _snapshot_confirmed(self, entity_id: str, context_id: str) -> None:
-        """Replace `confirmed` with a fresh baseline built from a live
+    def _snapshot_observed(self, entity_id: str, context_id: str) -> None:
+        """Replace `observed` with a fresh baseline built from a live
         context.id just observed for this entity - owner_id=None and
         recorded_at=None, since this is merely *observed*, not a write
         this integration actually made (the same convention
         async_record's synthetic first-write baseline uses - see its own
-        docstring). `pending` is left untouched: a claim from before
+        docstring). `latest` is left untouched: a claim from before
         this observation can never match this fresh context either way,
         so it's simply inert until the next real write overwrites it.
         Shared by async_resync_to_live_state's startup pass and
@@ -247,55 +265,55 @@ class LastWriteTracker:
         operation, triggered two different ways."""
         record = self._data.get(entity_id)
         self._data[entity_id] = {
-            "confirmed": {
+            "observed": {
                 "context_id": context_id,
                 "secondary_context_id": None,
                 "owner_id": None,
                 "recorded_at": None,
                 "target": None,
             },
-            "pending": record.get("pending") if record else None,
+            "latest": record.get("latest") if record else None,
             "last_seen": dt_util.utcnow().isoformat(),
         }
 
-    def confirmed_context_id(self, entity_id: str) -> str | None:
+    def observed_context_id(self, entity_id: str) -> str | None:
         record = self._data.get(entity_id)
-        claim = record.get("confirmed") if record else None
+        claim = record.get("observed") if record else None
         return claim["context_id"] if claim else None
 
-    def confirmed_owner_id(self, entity_id: str) -> str | None:
+    def observed_owner_id(self, entity_id: str) -> str | None:
         record = self._data.get(entity_id)
-        claim = record.get("confirmed") if record else None
+        claim = record.get("observed") if record else None
         return claim.get("owner_id") if claim else None
 
-    def confirmed_target(self, entity_id: str) -> dict | None:
+    def observed_target(self, entity_id: str) -> dict | None:
         record = self._data.get(entity_id)
-        claim = record.get("confirmed") if record else None
+        claim = record.get("observed") if record else None
         return claim.get("target") if claim else None
 
-    def confirmed_secondary_context_id(self, entity_id: str) -> str | None:
+    def observed_secondary_context_id(self, entity_id: str) -> str | None:
         record = self._data.get(entity_id)
-        claim = record.get("confirmed") if record else None
+        claim = record.get("observed") if record else None
         return claim.get("secondary_context_id") if claim else None
 
-    def pending_context_id(self, entity_id: str) -> str | None:
+    def latest_context_id(self, entity_id: str) -> str | None:
         record = self._data.get(entity_id)
-        claim = record.get("pending") if record else None
+        claim = record.get("latest") if record else None
         return claim["context_id"] if claim else None
 
-    def pending_owner_id(self, entity_id: str) -> str | None:
+    def latest_owner_id(self, entity_id: str) -> str | None:
         record = self._data.get(entity_id)
-        claim = record.get("pending") if record else None
+        claim = record.get("latest") if record else None
         return claim.get("owner_id") if claim else None
 
-    def pending_target(self, entity_id: str) -> dict | None:
+    def latest_target(self, entity_id: str) -> dict | None:
         record = self._data.get(entity_id)
-        claim = record.get("pending") if record else None
+        claim = record.get("latest") if record else None
         return claim.get("target") if claim else None
 
-    def pending_secondary_context_id(self, entity_id: str) -> str | None:
+    def latest_secondary_context_id(self, entity_id: str) -> str | None:
         record = self._data.get(entity_id)
-        claim = record.get("pending") if record else None
+        claim = record.get("latest") if record else None
         return claim.get("secondary_context_id") if claim else None
 
     async def async_clear(self, entity_ids: list[str]) -> None:
@@ -308,12 +326,12 @@ class LastWriteTracker:
         "overridden" without ever actually going unavailable, and so
         has no other way back: build_groups() (grouping.py) never calls
         async_record for anything externally_set() already excludes, so
-        an overridden light's own `pending` target only gets staler
+        an overridden light's own `latest` target only gets staler
         over time and can never refresh itself on a ramping curve -
         confirmed live, several kitchen lights during a Day-phase Kelvin
         ramp, correctly lit the whole time but permanently excluded once
         the live colour temperature drifted a single Kelvin past the
-        rescue tolerance of a `pending` claim that was itself frozen the
+        rescue tolerance of a `latest` claim that was itself frozen the
         moment exclusion began. A no-op for an entity with no record."""
         changed = False
         for entity_id in entity_ids:
@@ -342,16 +360,16 @@ class LastWriteTracker:
         *before* any of this call's writes were dispatched. It cannot be
         read fresh in here - by the time this runs the writes have been
         awaited, so a light's live context may already reflect the very
-        write about to be recorded as `pending`, making every write look
+        write about to be recorded as `latest`, making every write look
         like it promoted itself instantly.
 
         This is the one and only place promotion happens: if the previous
-        `pending` claim matches what was live just before this write went
-        out, that attempt is proven landed and becomes `confirmed`.
-        Otherwise `confirmed` is left untouched and only `pending` is
+        `latest` claim matches what was live just before this write went
+        out, that attempt is proven landed and becomes `observed`.
+        Otherwise `observed` is left untouched and only `latest` is
         replaced. The exception is an entity's first-ever write, which has
-        no `confirmed` to fall back on - the pre-write context is recorded
-        as `confirmed` with owner_id=None, so a dropped first write still
+        no `observed` to fall back on - the pre-write context is recorded
+        as `observed` with owner_id=None, so a dropped first write still
         has a retry signal, and that synthetic baseline never blocks
         anyone else's claim.
 
@@ -372,16 +390,16 @@ class LastWriteTracker:
         context_id_overrides = context_id_overrides or {}
         for entity_id in entity_ids:
             old = self._data.get(entity_id)
-            confirmed: Optional[_ContextClaim]
+            observed: Optional[_ContextClaim]
             if old is not None:
-                old_pending = old.get("pending")
-                if _context_matches(old_pending, live_context_before_write.get(entity_id)):
-                    confirmed = old_pending
+                old_latest = old.get("latest")
+                if _context_matches(old_latest, live_context_before_write.get(entity_id)):
+                    observed = old_latest
                 else:
-                    confirmed = old.get("confirmed")
+                    observed = old.get("observed")
             else:
                 baseline_context = live_context_before_write.get(entity_id)
-                confirmed = (
+                observed = (
                     {
                         "context_id": baseline_context,
                         "secondary_context_id": None,
@@ -393,8 +411,8 @@ class LastWriteTracker:
                     else None
                 )
             self._data[entity_id] = {
-                "confirmed": confirmed,
-                "pending": {
+                "observed": observed,
+                "latest": {
                     "context_id": context_id_overrides.get(entity_id, context_id),
                     "secondary_context_id": secondary_context_ids.get(entity_id),
                     "owner_id": owner_id,
@@ -450,7 +468,7 @@ class LastWriteTracker:
           can't intercept, since it isn't a service call at all - finds
           no claim to conflict with.
         - **Recovery** (unavailable/unknown, or no prior state, -> a real
-          state): snapshots the observed context as the new `confirmed`
+          state): snapshots the observed context as the new `observed`
           baseline, the same operation async_resync_to_live_state does at
           startup, triggered by the live event that pass can miss.
 
@@ -490,7 +508,7 @@ class LastWriteTracker:
             if old_available and new_explicitly_unavailable:
                 del self._data[entity_id]
             elif not old_available and new_available:
-                self._snapshot_confirmed(entity_id, new_state.context.id)
+                self._snapshot_observed(entity_id, new_state.context.id)
             else:
                 return
 
