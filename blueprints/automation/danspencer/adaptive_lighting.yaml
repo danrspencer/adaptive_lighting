@@ -627,6 +627,19 @@ variables:
   # The scene only counts as usable if every entity it covers is within our scope
   scene_valid: "{{ scene_covered_entities | reject('in', scope_entities) | list | length == 0 }}"
   scene_active: "{{ desired_scene | length > 0 and scene_valid }}"
+  # Lights this tick has deliberately handed off - to an active scene,
+  # or to whatever owns them via a null/false multiplier. apply_lighting
+  # never writes these, so their override-protection claims would freeze
+  # at the last real write and get reported as "overridden", which is
+  # indistinguishable from someone grabbing a light by hand. The action
+  # step below releases them instead.
+  #
+  # scene_active gates the scene half deliberately: a scene that exists
+  # but reaches outside scope has a non-empty scene_covered_entities
+  # while adaptive still manages those lights - releasing them there
+  # would be wrong.
+  handed_off_entities: >
+    {{ ((scene_covered_entities if scene_active else []) + hands_off_entities) | unique | list }}
   # Whether the "Activate matching scene" step below should call
   # scene.turn_on again this tick. Scenes carry none of apply_lighting's
   # tolerance/override protections, so re-issuing it every minute would
@@ -774,6 +787,21 @@ action:
               entity_id: "{{ desired_scene }}"
             data:
               transition: "{{ script_transition }}"
+      # Releasing says the truthful thing: nothing is managing these
+      # lights right now. Nothing is given up by it - they aren't being
+      # written, so there is no protection to lose, and the next tick
+      # that does manage them re-establishes a claim through the
+      # ordinary first-write path. clear_ownership is a no-op for an
+      # entity with no record, so this costs nothing on the ticks where
+      # it changes nothing.
+      - alias: "Release lights handed off to a scene or another owner"
+        if:
+          - condition: template
+            value_template: "{{ handed_off_entities | length > 0 }}"
+        then:
+          - action: adaptive_lighting_helpers.clear_ownership
+            data:
+              entities: "{{ handed_off_entities }}"
       # Reachability, multiplier bucketing, tolerance checks, override
       # protection, two-step/combined routing and RGB-vs-colour-temp
       # dispatch all live in the Adaptive Lighting Helpers integration

@@ -227,7 +227,7 @@ async def test_compute_lighting_groups_accepts_an_explicit_null_rgb_color(setup_
     assert result["groups"][0]["combined"] == ["light.a"]
 
 
-async def test_check_ownership_reports_unclaimed_for_a_brand_new_entity(setup_integration: HomeAssistant):
+async def test_check_ownership_reports_untracked_for_a_brand_new_entity(setup_integration: HomeAssistant):
     """check_ownership is genuinely standalone - no apply_lighting call,
     no sensor, just a light and the write-tracking mechanism."""
     hass = setup_integration
@@ -241,7 +241,7 @@ async def test_check_ownership_reports_unclaimed_for_a_brand_new_entity(setup_in
         return_response=True,
     )
 
-    assert result["results"]["light.a"] == {"blocked": False, "status": "unclaimed", "owner_id": None, "matched_via": None}
+    assert result["results"]["light.a"] == {"blocked": False, "status": "untracked", "owner_id": None, "matched_via": None}
 
 
 async def test_check_ownership_and_record_ownership_round_trip(setup_integration: HomeAssistant):
@@ -261,11 +261,11 @@ async def test_check_ownership_and_record_ownership_round_trip(setup_integration
     )
 
     # Immediately after, still under the same context - not blocked, and
-    # attributed to us. "pending" (not "controlled") because this is the
-    # entity's first-ever tracked write: the synthetic first-write
-    # baseline records the pre-write context as `confirmed` too, so both
-    # claims happen to share the same context.id here - pending is
-    # checked first, matching classify()'s own precedence.
+    # attributed to us. matched_via is latest-context because this is the
+    # entity's first-ever tracked write: the synthetic baseline records
+    # the pre-write context as `observed` too, so both claims share a
+    # context.id here - `latest` is checked first, matching classify()'s
+    # own precedence.
     result = await hass.services.async_call(
         DOMAIN,
         "check_ownership",
@@ -275,9 +275,9 @@ async def test_check_ownership_and_record_ownership_round_trip(setup_integration
     )
     assert result["results"]["light.a"] == {
         "blocked": False,
-        "status": "pending",
+        "status": "controlled",
         "owner_id": "automation.test_room",
-        "matched_via": "context",
+        "matched_via": "latest-context",
     }
 
     # Someone else changes it - a different context, different values.
@@ -305,9 +305,9 @@ async def test_check_ownership_and_record_ownership_round_trip(setup_integration
     )
     assert result["results"]["light.a"] == {
         "blocked": True,
-        "status": "pending",
+        "status": "controlled",
         "owner_id": "automation.test_room",
-        "matched_via": "context",
+        "matched_via": "latest-context",
     }
 
 
@@ -401,7 +401,7 @@ async def test_clear_ownership_frees_a_light_stuck_overridden(setup_integration:
         blocking=True,
         return_response=True,
     )
-    assert result["results"]["light.a"] == {"blocked": False, "status": "unclaimed", "owner_id": None, "matched_via": None}
+    assert result["results"]["light.a"] == {"blocked": False, "status": "untracked", "owner_id": None, "matched_via": None}
 
 
 async def test_clear_ownership_is_a_noop_for_an_untracked_entity(setup_integration: HomeAssistant):
@@ -602,8 +602,8 @@ async def test_two_step_transition_generates_two_distinct_contexts(setup_integra
 
     tracker = LastWriteTracker(hass)
     await tracker.async_load()
-    assert tracker.pending_context_id("light.a") == color_call.context.id
-    assert tracker.pending_secondary_context_id("light.a") == brightness_call.context.id
+    assert tracker.latest_context_id("light.a") == color_call.context.id
+    assert tracker.latest_secondary_context_id("light.a") == brightness_call.context.id
 
 
 async def test_two_step_brightness_step_landing_alone_is_recognised_as_ours(setup_integration: HomeAssistant):
@@ -643,9 +643,9 @@ async def test_two_step_brightness_step_landing_alone_is_recognised_as_ours(setu
     )
     assert result["results"]["light.a"] == {
         "blocked": False,
-        "status": "pending",
+        "status": "controlled",
         "owner_id": "automation.room",
-        "matched_via": "context",
+        "matched_via": "latest-context",
     }
 
 
@@ -667,8 +667,8 @@ async def test_two_step_promotion_recognises_a_match_via_the_secondary_context(s
 
     tracker = LastWriteTracker(hass)
     await tracker.async_load()
-    brightness_ctx_1 = tracker.pending_secondary_context_id("light.a")
-    color_ctx_1 = tracker.pending_context_id("light.a")
+    brightness_ctx_1 = tracker.latest_secondary_context_id("light.a")
+    color_ctx_1 = tracker.latest_context_id("light.a")
     assert brightness_ctx_1 is not None and color_ctx_1 is not None
 
     # The device only ever confirms the brightness step - the colour
@@ -692,8 +692,8 @@ async def test_two_step_promotion_recognises_a_match_via_the_secondary_context(s
     # `confirmed`, proven via the secondary (brightness) context match,
     # not the primary (colour) one - the light never reported the
     # colour step's context at all.
-    assert tracker_after.confirmed_context_id("light.a") == color_ctx_1
-    assert tracker_after.confirmed_secondary_context_id("light.a") == brightness_ctx_1
+    assert tracker_after.observed_context_id("light.a") == color_ctx_1
+    assert tracker_after.observed_secondary_context_id("light.a") == brightness_ctx_1
 
 
 async def test_a_dropped_first_write_self_heals_on_the_next_tick_with_no_interference(
@@ -897,8 +897,8 @@ async def test_a_restart_resyncs_confirmed_to_live_context_so_an_on_light_stays_
     await resynced_tracker.async_load()
     await resynced_tracker.async_resync_to_live_state(hass)
 
-    assert resynced_tracker.confirmed_context_id("light.a") == restart_context.id
-    assert resynced_tracker.confirmed_owner_id("light.a") is None
+    assert resynced_tracker.observed_context_id("light.a") == restart_context.id
+    assert resynced_tracker.observed_owner_id("light.a") is None
 
     # The real, end-to-end proof: a plain, non-forced check from the
     # same owner still manages the light afterward, rather than finding
@@ -1021,8 +1021,8 @@ async def test_resync_leaves_a_genuinely_unavailable_light_untouched(hass: HomeA
     # Untouched - still exactly the pending claim just recorded, not
     # None (which would mean it was wrongly cleared) and not a bogus
     # confirmed claim manufactured from the "unavailable" state.
-    assert tracker_after_load.confirmed_context_id("light.a") is None
-    assert tracker_after_load.pending_context_id("light.a") == "ctx-1"
+    assert tracker_after_load.observed_context_id("light.a") is None
+    assert tracker_after_load.latest_context_id("light.a") == "ctx-1"
 
 
 async def test_resync_preserves_the_pending_claim(setup_integration: HomeAssistant):
@@ -1037,7 +1037,7 @@ async def test_resync_preserves_the_pending_claim(setup_integration: HomeAssista
     await _apply(hass, ['light.a'], brightness=180, color_temp_kelvin=3200, transition=2, owner_id='automation.room')
     tracker_before = LastWriteTracker(hass)
     await tracker_before.async_load()
-    original_pending_context = tracker_before.pending_context_id("light.a")
+    original_pending_context = tracker_before.latest_context_id("light.a")
     assert original_pending_context is not None
 
     _set_light(
@@ -1048,7 +1048,7 @@ async def test_resync_preserves_the_pending_claim(setup_integration: HomeAssista
     await resynced_tracker.async_load()
     await resynced_tracker.async_resync_to_live_state(hass)
 
-    assert resynced_tracker.pending_context_id("light.a") == original_pending_context
+    assert resynced_tracker.latest_context_id("light.a") == original_pending_context
 
 
 async def test_async_load_backfills_last_seen_for_legacy_records_without_it(hass: HomeAssistant):
@@ -1067,8 +1067,8 @@ async def test_async_load_backfills_last_seen_for_legacy_records_without_it(hass
     await legacy_store.async_save(
         {
             "light.a": {
-                "confirmed": {"context_id": "ctx-old", "owner_id": "automation.room"},
-                "pending": None,
+                "observed": {"context_id": "ctx-old", "owner_id": "automation.room"},
+                "latest": None,
                 # no last_seen key at all - the pre-upgrade shape.
             }
         }
@@ -1141,8 +1141,8 @@ async def test_prune_stale_leaves_a_record_with_no_last_seen_alone(hass: HomeAss
     tracker = LastWriteTracker(hass)
     await tracker.async_load()
     tracker._data["light.a"] = {  # bypassing the public API is deliberate here - this shape shouldn't occur naturally
-        "confirmed": {"context_id": "ctx-old", "owner_id": "automation.room", "recorded_at": None, "target": None},
-        "pending": None,
+        "observed": {"context_id": "ctx-old", "owner_id": "automation.room", "recorded_at": None, "target": None},
+        "latest": None,
         "last_seen": None,
     }
 
@@ -1292,3 +1292,44 @@ async def test_a_restart_style_unavailable_blip_does_not_clear_an_existing_recor
         return_response=True,
     )
     assert "light.a" not in result["groups"][0]["combined"]
+
+
+async def test_async_load_migrates_pre_rename_confirmed_pending_records(setup_integration: HomeAssistant):
+    """The claims were renamed confirmed/pending -> observed/latest. A
+    record written before that rename must map straight across, not be
+    dropped as an unrecognised shape - dropping it would reopen "no
+    record means free to manage" for every already-protected light in
+    the house on the upgrade tick."""
+    hass = setup_integration
+    tracker = LastWriteTracker(hass)
+    await tracker._store.async_save(
+        {
+            "light.a": {
+                "confirmed": {
+                    "context_id": "ctx-old-observed",
+                    "secondary_context_id": "ctx-old-observed-brightness",
+                    "owner_id": "automation.room",
+                    "recorded_at": "2026-08-01T00:00:00+00:00",
+                    "target": {"brightness": 200, "color_temp_kelvin": 3000},
+                },
+                "pending": {
+                    "context_id": "ctx-old-latest",
+                    "secondary_context_id": None,
+                    "owner_id": "automation.room",
+                    "recorded_at": "2026-08-01T00:01:00+00:00",
+                    "target": {"brightness": 210, "color_temp_kelvin": 3100},
+                },
+                "last_seen": "2026-08-01T00:01:00+00:00",
+            }
+        }
+    )
+
+    migrated = LastWriteTracker(hass)
+    await migrated.async_load()
+
+    assert migrated.observed_context_id("light.a") == "ctx-old-observed"
+    assert migrated.observed_secondary_context_id("light.a") == "ctx-old-observed-brightness"
+    assert migrated.observed_target("light.a") == {"brightness": 200, "color_temp_kelvin": 3000}
+    assert migrated.observed_owner_id("light.a") == "automation.room"
+    assert migrated.latest_context_id("light.a") == "ctx-old-latest"
+    assert migrated.latest_target("light.a") == {"brightness": 210, "color_temp_kelvin": 3100}

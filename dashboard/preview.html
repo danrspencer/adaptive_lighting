@@ -131,28 +131,28 @@
             'light.living_room_pendant_1': {
               status: 'controlled',
               owner_id: 'automation.living_room_lights_new',
-              matched_via: 'context',
+              matched_via: 'latest-context',
               live_context_id: '01M0FGWR11K8K1KDE56JJRJ94C',
-              confirmed: {
+              observed: {
                 context_id: '01M0FGWR11K8K1KDE56JJRJ94C',
                 owner_id: 'automation.living_room_lights_new',
                 recorded_at: minutesAgo(12),
                 target: { brightness: 200, color_temp_kelvin: 4000 },
               },
-              pending: null,
+              latest: null,
             },
             'light.kitchen_pendant_1': {
-              status: 'pending',
+              status: 'controlled',
               owner_id: 'automation.kitchen_lights',
-              matched_via: 'context',
+              matched_via: 'latest-context',
               live_context_id: '01M0FTMHAJTQH94ZKP6DRSN2MK',
-              confirmed: {
+              observed: {
                 context_id: '01M0FTHVWMJ0DRSNB5RT92ZXVC',
                 owner_id: 'automation.kitchen_lights',
                 recorded_at: minutesAgo(6),
                 target: { brightness: 255, color_temp_kelvin: 5000 },
               },
-              pending: {
+              latest: {
                 context_id: '01M0FTMHAJTQH94ZKP6DRSN2MK',
                 owner_id: 'automation.kitchen_lights',
                 recorded_at: minutesAgo(1),
@@ -166,18 +166,18 @@
             // context that matches, not the primary. Exercises the card's
             // two-trace rendering.
             'light.extension_right_1': {
-              status: 'pending',
+              status: 'controlled',
               owner_id: 'automation.kitchen_lights',
-              matched_via: 'context',
+              matched_via: 'latest-context',
               live_context_id: '01M0FTMHBRIGHTNESSSTEP0001',
-              confirmed: {
+              observed: {
                 context_id: '01M0FTHVWMJ0DRSNB5RT92ZXVC',
                 secondary_context_id: null,
                 owner_id: 'automation.kitchen_lights',
                 recorded_at: minutesAgo(9),
                 target: { brightness: 255, color_temp_kelvin: 4000 },
               },
-              pending: {
+              latest: {
                 context_id: '01M0FTMHCOLOURSTEP00000001',
                 secondary_context_id: '01M0FTMHBRIGHTNESSSTEP0001',
                 owner_id: 'automation.kitchen_lights',
@@ -185,24 +185,35 @@
                 target: { brightness: 255, color_temp_kelvin: 4000 },
               },
             },
+            // Deliberately handed off - covered by an active scene, so the
+            // blueprint released its claims. Nothing is managing it, which
+            // is not a fault: it reads as untracked rather than overridden.
+            'light.extension_left_2': {
+              status: 'untracked',
+              owner_id: null,
+              matched_via: null,
+              live_context_id: '01M0FTSCENEHANDOFF00000001',
+              observed: null,
+              latest: null,
+            },
             'light.kitchen_3': {
               // Controlled via the value-match rescue, not a context
               // match - the device's own delayed confirmation landed
               // under an unrelated context (HA's Entity._context expires
               // 5s after the service call that set it), but still
-              // reports exactly what pending asked for. See
+              // reports exactly what latest asked for. See
               // grouping.py's externally_set() docstring.
               status: 'controlled',
               owner_id: 'automation.kitchen_lights',
-              matched_via: 'value',
+              matched_via: 'latest-value',
               live_context_id: '01M0DEVICEECHO000000001',
-              confirmed: {
+              observed: {
                 context_id: '01M0EARLIERCONFIRMED00001',
                 owner_id: 'automation.kitchen_lights',
                 recorded_at: minutesAgo(75),
                 target: { brightness: 255, color_temp_kelvin: 6535 },
               },
-              pending: {
+              latest: {
                 context_id: '01M0LATERPENDING0000001',
                 owner_id: 'automation.kitchen_lights',
                 recorded_at: minutesAgo(64),
@@ -214,26 +225,26 @@
               owner_id: null,
               matched_via: null,
               live_context_id: '01M0EXTERNALCHANGE0000001',
-              confirmed: {
+              observed: {
                 context_id: '01M0F1953BZB75V27GJNXH3ABW',
                 owner_id: 'automation.study_lights',
                 recorded_at: minutesAgo(90),
                 target: { brightness: 180, color_temp_kelvin: 3200 },
               },
-              pending: null,
+              latest: null,
             },
             'light.ensuite_spots': {
               status: 'unavailable',
               owner_id: null,
               matched_via: null,
               live_context_id: null,
-              confirmed: {
+              observed: {
                 context_id: '01M00S8AVPV6BDQEJ22A04R3NM',
                 owner_id: 'automation.ensuite_lights',
                 recorded_at: minutesAgo(240),
                 target: { brightness: 200, color_temp_kelvin: 2700 },
               },
-              pending: null,
+              latest: null,
             },
             'light.dining_room_1': {
               // Legitimately off - turned off by the blueprint's own
@@ -245,13 +256,13 @@
               owner_id: null,
               matched_via: null,
               live_context_id: '01M0MOTIONOFF00000000001',
-              confirmed: {
+              observed: {
                 context_id: '01M0FGWR22K8K1KDE56JJRJ95D',
                 owner_id: 'automation.dining_room_lighting',
                 recorded_at: minutesAgo(18),
                 target: { brightness: 255, color_temp_kelvin: 6153 },
               },
-              pending: {
+              latest: {
                 context_id: '01M0FGWR33K8K1KDE56JJRJ96E',
                 owner_id: 'automation.dining_room_lighting',
                 recorded_at: minutesAgo(13),

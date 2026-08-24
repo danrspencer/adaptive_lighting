@@ -209,14 +209,14 @@ def _build_lookup(hass: HomeAssistant, tracker: LastWriteTracker) -> EntityLooku
         device_id=device_id,
         labels=labels,
         context_id=context_id,
-        confirmed_context_id=tracker.confirmed_context_id,
-        confirmed_owner_id=tracker.confirmed_owner_id,
-        pending_context_id=tracker.pending_context_id,
-        pending_owner_id=tracker.pending_owner_id,
-        pending_target=tracker.pending_target,
-        confirmed_target=tracker.confirmed_target,
-        pending_secondary_context_id=tracker.pending_secondary_context_id,
-        confirmed_secondary_context_id=tracker.confirmed_secondary_context_id,
+        observed_context_id=tracker.observed_context_id,
+        observed_owner_id=tracker.observed_owner_id,
+        latest_context_id=tracker.latest_context_id,
+        latest_owner_id=tracker.latest_owner_id,
+        latest_target=tracker.latest_target,
+        observed_target=tracker.observed_target,
+        latest_secondary_context_id=tracker.latest_secondary_context_id,
+        observed_secondary_context_id=tracker.observed_secondary_context_id,
     )
 
 
@@ -576,7 +576,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # nothing async has run yet since build_groups() returned (the
         # gather below is the first await point), so this is a true
         # walking-in value. write_tracker needs it to tell whether the
-        # *previous* pending write actually landed, which can only be
+        # *previous* latest write actually landed, which can only be
         # judged against state as it was before this call's own writes -
         # reading it after would risk comparing a light's context against
         # the very write about to be recorded, if it happened to land
@@ -618,11 +618,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         Returns: {"results": {entity_id: {"blocked": bool, "status":
         str, "owner_id": str|None, "matched_via": str|None}, ...}} -
-        "status" is one of "off", "unclaimed", "pending", "controlled",
+        "status" is one of "off", "unclaimed", "latest", "controlled",
         "overridden" (see override_protection.classify()'s own
         docstring); "owner_id" is whichever claim's owner matched, or
         null if none did; "matched_via" is "context" or "value" for a
-        "pending"/"controlled" status (null otherwise) - see
+        "latest"/"controlled" status (null otherwise) - see
         services.yaml for field docs.
         """
         owner_id = call.data.get("owner_id")
@@ -633,32 +633,32 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         results: dict[str, Any] = {}
         for entity_id in call.data["entities"]:
             state = hass.states.get(entity_id)
-            confirmed_ctx = write_tracker.confirmed_context_id(entity_id)
-            confirmed = (
+            observed_ctx = write_tracker.observed_context_id(entity_id)
+            observed = (
                 {
-                    "context_id": confirmed_ctx,
-                    "secondary_context_id": write_tracker.confirmed_secondary_context_id(entity_id),
-                    "owner_id": write_tracker.confirmed_owner_id(entity_id),
-                    "target": write_tracker.confirmed_target(entity_id),
+                    "context_id": observed_ctx,
+                    "secondary_context_id": write_tracker.observed_secondary_context_id(entity_id),
+                    "owner_id": write_tracker.observed_owner_id(entity_id),
+                    "target": write_tracker.observed_target(entity_id),
                 }
-                if confirmed_ctx is not None
+                if observed_ctx is not None
                 else None
             )
-            pending_ctx = write_tracker.pending_context_id(entity_id)
-            pending = (
+            latest_ctx = write_tracker.latest_context_id(entity_id)
+            latest = (
                 {
-                    "context_id": pending_ctx,
-                    "secondary_context_id": write_tracker.pending_secondary_context_id(entity_id),
-                    "owner_id": write_tracker.pending_owner_id(entity_id),
-                    "target": write_tracker.pending_target(entity_id),
+                    "context_id": latest_ctx,
+                    "secondary_context_id": write_tracker.latest_secondary_context_id(entity_id),
+                    "owner_id": write_tracker.latest_owner_id(entity_id),
+                    "target": write_tracker.latest_target(entity_id),
                 }
-                if pending_ctx is not None
+                if latest_ctx is not None
                 else None
             )
             status, claim_owner, matched_via = classify(
                 state is not None and state.state == "on",
-                confirmed,
-                pending,
+                observed,
+                latest,
                 state.context.id if state is not None else None,
                 state.attributes.get("brightness") if state is not None else None,
                 state.attributes.get("color_temp_kelvin") if state is not None else None,
@@ -704,7 +704,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     async def clear_ownership(call: ServiceCall) -> ServiceResponse:
         """adaptive_lighting_helpers.clear_ownership
 
-        Discards `entities`' tracked confirmed/pending claims entirely -
+        Discards `entities`' tracked observed/latest claims entirely -
         the manual escape hatch for a light stuck "overridden" with no
         other way back (see write_tracking.py's async_clear docstring
         for why that can happen on its own for a light that never
