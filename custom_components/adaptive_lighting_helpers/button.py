@@ -82,9 +82,7 @@ class _OwnerClearButton(ButtonEntity):
         self._owner_id = owner_id
         self._attr_device_info = device_info
         # Keyed on the *full* owner_id for the same reason
-        # _OwnerCountSensor is - see its comment. The shared
-        # "<entry_id>_owner_" prefix is what setup_owner_entities'
-        # disable-path sweep matches on.
+        # _OwnerCountSensor is - see its comment.
         self._attr_unique_id = f"{entry.entry_id}_owner_{owner_id}_clear"
         slug = owner_slug(owner_id)
         # entity_id stays explicit so an existing install's ids don't
