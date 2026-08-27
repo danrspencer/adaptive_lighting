@@ -270,21 +270,22 @@ trigger:
     event_type: adaptive_lighting_helpers_light_overridden
 ```
 
-### Per-owner count sensors (optional)
+### Per-owner entities (optional)
 
 Reading the global sensor above needs the custom **Adaptive Lighting Write Tracking** card, because everything
 is in one `entities` attribute that no stock card can usefully render. If you'd rather stay in plain Home
-Assistant UI, turn on **Create a sensor pair per owner** in the integration's options (Settings → Devices &
+Assistant UI, turn on **Create per-owner entities** in the integration's options (Settings → Devices &
 Services → Adaptive Lighting Helpers → Configure).
 
-That adds two counters for each `owner_id` that has written lights through this integration:
+That adds three entities for each `owner_id` that has written lights through this integration:
 
 | entity | state |
 |---|---|
 | `sensor.<owner>_adaptive_controlled` | how many of its lights it is currently driving |
 | `sensor.<owner>_adaptive_overridden` | how many are currently held by something else |
+| `button.<owner>_adaptive_clear` | press to discard that owner's tracked state |
 
-Both carry `owner_id`, `lights` (the entity_ids making up that count) and `total_tracked`. They're plain
+The two sensors carry `owner_id`, `lights` (the entity_ids making up that count) and `total_tracked`. They're plain
 numbers, so they graph, get long-term statistics, and work in any entity card:
 
 ```yaml
@@ -292,7 +293,21 @@ type: entities
 entities:
   - sensor.kitchen_lights_adaptive_controlled
   - sensor.kitchen_lights_adaptive_overridden
+  - button.kitchen_lights_adaptive_clear
 ```
+
+**The Clear button** is `clear_ownership` for a whole room, and the stock-UI equivalent of the write-tracking
+card's per-light **Clear** - the escape hatch for a light stuck `overridden` with no other way back. Pressing
+it discards **every** record belonging to that owner, not only the overridden ones: it's meant to be a
+guaranteed reset rather than one that depends on agreeing about which lights are stuck, which is exactly what
+you can't rely on when you reach for it.
+
+The cost of that is worth knowing. The owner's healthy lights lose their claims too, so each one is
+unprotected until its next write, which is treated like a brand-new entity's first write. For a live room
+automation that's a single tick. If you want to clear just one light, use the card, or call `clear_ownership`
+with that entity. The button's `tracked` attribute says how many records a press would discard, and because
+it's a button its state is the last-pressed timestamp - so "when did I last reset this room" ends up in
+history for free.
 
 **A light being overridden is a supported outcome, not a fault** - something else deliberately took it and
 adaptive lighting correctly stepped back. These sensors report who currently holds what; they aren't a health
@@ -301,8 +316,8 @@ check, and a non-zero `overridden` count doesn't mean anything is wrong.
 The two counts deliberately don't sum to `total_tracked`: a light that's off or unavailable is in neither,
 because override protection doesn't apply to it at all.
 
-Off by default, because a busy house gains a couple of dozen entities. Owners are derived from the tracked
-records themselves, so nothing extra is stored and a restart brings the same sensors back. An owner whose
+Off by default, because a busy house gains a few dozen entities. Owners are derived from the tracked
+records themselves, so nothing extra is stored and a restart brings the same entities back. An owner whose
 records all age out (nothing written for a day) keeps its sensors, reporting 0, rather than having them
 vanish and reappear every time a room goes unused - delete a genuinely dead one from the entity registry, or
 toggle the option off and on. Turning the option off removes them all.

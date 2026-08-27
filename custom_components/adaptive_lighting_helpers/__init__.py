@@ -74,7 +74,18 @@ from .scenes import SceneLookup, compute_scene_coverage
 from .two_step_check import async_start_watching
 from .write_tracking import PRUNE_CHECK_INTERVAL, LastWriteTracker
 
-SCHEDULE_PLATFORMS = [Platform.SENSOR, Platform.SELECT, Platform.NUMBER, Platform.TIME, Platform.SWITCH]
+# Named for the per-schedule-instance entities that make up most of it,
+# but no longer only those: sensor and button also carry the
+# entry-scoped write-tracking and per-owner entities, which exist even
+# on an entry with zero schedule instances.
+SCHEDULE_PLATFORMS = [
+    Platform.SENSOR,
+    Platform.SELECT,
+    Platform.NUMBER,
+    Platform.TIME,
+    Platform.SWITCH,
+    Platform.BUTTON,
+]
 
 
 COMPUTE_LIGHTING_GROUPS_SCHEMA = vol.Schema(
