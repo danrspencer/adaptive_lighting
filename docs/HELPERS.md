@@ -233,6 +233,43 @@ Tracking** dashboard card exposes this as a "Clear" button on every row, no conf
 diagnostic bookkeeping entry, not the light itself, and a fresh claim gets re-established the moment anything
 next writes to that entity.
 
+### Per-owner count sensors (optional)
+
+Reading the global sensor above needs the custom **Adaptive Lighting Write Tracking** card, because everything
+is in one `entities` attribute that no stock card can usefully render. If you'd rather stay in plain Home
+Assistant UI, turn on **Create a sensor pair per owner** in the integration's options (Settings → Devices &
+Services → Adaptive Lighting Helpers → Configure).
+
+That adds two counters for each `owner_id` that has written lights through this integration:
+
+| entity | state |
+|---|---|
+| `sensor.<owner>_adaptive_controlled` | how many of its lights it is currently driving |
+| `sensor.<owner>_adaptive_overridden` | how many are currently held by something else |
+
+Both carry `owner_id`, `lights` (the entity_ids making up that count) and `total_tracked`. They're plain
+numbers, so they graph, get long-term statistics, and work in any entity card:
+
+```yaml
+type: entities
+entities:
+  - sensor.kitchen_lights_adaptive_controlled
+  - sensor.kitchen_lights_adaptive_overridden
+```
+
+**A light being overridden is a supported outcome, not a fault** - something else deliberately took it and
+adaptive lighting correctly stepped back. These sensors report who currently holds what; they aren't a health
+check, and a non-zero `overridden` count doesn't mean anything is wrong.
+
+The two counts deliberately don't sum to `total_tracked`: a light that's off or unavailable is in neither,
+because override protection doesn't apply to it at all.
+
+Off by default, because a busy house gains a couple of dozen entities. Owners are derived from the tracked
+records themselves, so nothing extra is stored and a restart brings the same sensors back. An owner whose
+records all age out (nothing written for a day) keeps its sensors, reporting 0, rather than having them
+vanish and reappear every time a room goes unused - delete a genuinely dead one from the entity registry, or
+toggle the option off and on. Turning the option off removes them all.
+
 ### Inspecting write-tracking state
 
 `sensor.adaptive_lighting_write_tracking` makes the mechanism above inspectable directly, rather than only

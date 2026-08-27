@@ -14,3 +14,9 @@ SUBENTRY_TYPE_SENSOR = "sensor"
 # pre-populated with DEFAULT_TWO_STEP_MODEL_PATTERNS so what ships and
 # what you add are the same editable thing (see two_step.py).
 CONF_TWO_STEP_MODELS = "two_step_models"
+
+# Options key for the optional per-owner count sensors (sensor.py's
+# _OwnerCountSensor). Off by default: they're derived entirely from data
+# the global write-tracking sensor already exposes, so enabling them is a
+# choice about how many entities you want, not about what's tracked.
+CONF_OWNER_SENSORS = "owner_sensors"

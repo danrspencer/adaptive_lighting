@@ -47,15 +47,17 @@ from __future__ import annotations
 
 from typing import Any
 
-from homeassistant.components.sensor import SensorEntity
+from homeassistant.components.sensor import SensorEntity, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
+from homeassistant.util import slugify
 
-from .const import DOMAIN
+from .const import CONF_OWNER_SENSORS, DOMAIN
 from .coordinator import ScheduleCoordinator, ScheduleInstance, schedule_instances
 from .override_protection import classify
 from .write_tracking import SIGNAL_WRITE_TRACKING_UPDATED, LastWriteTracker
@@ -70,10 +72,204 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     write_tracker: LastWriteTracker = hass.data[DOMAIN][entry.entry_id]
     async_add_entities([_WriteTrackingSensor(hass, entry, write_tracker)])
 
+    _setup_owner_sensors(hass, entry, write_tracker, async_add_entities)
+
     for instance in schedule_instances(entry):
         coordinator: ScheduleCoordinator = hass.data[DOMAIN][instance.subentry_id]
         entities = [_AdaptiveLightingSensor(coordinator, instance)]
         async_add_entities(entities, config_subentry_id=instance.subentry_id)
+
+
+
+def _setup_owner_sensors(
+    hass: HomeAssistant, entry: ConfigEntry, write_tracker: LastWriteTracker, async_add_entities: AddEntitiesCallback
+) -> None:
+    """Creates a controlled/overridden pair per owner, and keeps up with
+    owners that appear later.
+
+    Off by default (CONF_OWNER_SENSORS): these are derived entirely from
+    what the global write-tracking sensor already exposes, so turning
+    them on is a choice about how many entities you want, not about what
+    gets tracked. Enabling on a house this size adds a couple of dozen.
+
+    When disabled, any previously-created ones are removed from the
+    registry outright rather than left as restored-but-never-recreated
+    rows - that kind of litter outlives the feature that made it, and
+    toggling off should actually mean off.
+
+    Owners are derived from the write-tracking records themselves, which
+    are already persisted, so nothing extra needs storing and a restart
+    comes back with the same sensors before any write happens. The flip
+    side: an owner whose records all prune away (nothing written for
+    STALE_RECORD_MAX_AGE_DAYS) stops being derivable. Its sensors are
+    deliberately left in place reporting 0 rather than removed, because a
+    room whose lights are simply off for a day would otherwise have them
+    vanish and reappear, breaking history continuity for no reason."""
+    if not entry.options.get(CONF_OWNER_SENSORS, False):
+        registry = er.async_get(hass)
+        prefix = f"{entry.entry_id}_owner_"
+        for existing in er.async_entries_for_config_entry(registry, entry.entry_id):
+            if existing.unique_id.startswith(prefix):
+                registry.async_remove(existing.entity_id)
+        return
+
+    known: set[tuple[str, str]] = set()
+
+    @callback
+    def _sync() -> None:
+        new = []
+        for owner in sorted(_owners(write_tracker.snapshot())):
+            for status in ("controlled", "overridden"):
+                if (owner, status) in known:
+                    continue
+                known.add((owner, status))
+                new.append(_OwnerCountSensor(hass, entry, write_tracker, owner, status))
+        if new:
+            async_add_entities(new)
+
+    _sync()
+    # write_tracking.py already fires this on every record, clear, resync
+    # and prune, so a brand-new owner's first write brings its sensors
+    # into existence with no polling.
+    entry.async_on_unload(async_dispatcher_connect(hass, SIGNAL_WRITE_TRACKING_UPDATED, _sync))
+
+
+def _classify_tracked(hass: HomeAssistant, entity_id: str, record: dict) -> tuple[str, Any, Any, Any]:
+    """One light's current status, shared by every sensor in this module
+    so they can't drift apart - this integration has already had one bug
+    from two separate copies of this comparison disagreeing (see
+    override_protection.py's module docstring).
+
+    Returns (status, claim_owner_id, matched_via, live_context_id).
+    "unavailable" is this layer's own case: classify() only ever sees a
+    real on/off, so it has no equivalent."""
+    state = hass.states.get(entity_id)
+    live_context_id = state.context.id if state is not None else None
+    if state is None or state.state in ("unavailable", "unknown"):
+        return "unavailable", None, None, live_context_id
+    raw_status, claim_owner, matched_via = classify(
+        state.state == "on",
+        record.get("observed"),
+        record.get("latest"),
+        live_context_id,
+        state.attributes.get("brightness"),
+        state.attributes.get("color_temp_kelvin"),
+        state.attributes.get("rgb_color"),
+    )
+    # "untracked" (no claim at all, or only one unverified attempt)
+    # displays as "controlled": from a viewer's point of view both mean
+    # "not excluded from the next tick". The distinction only matters to
+    # externally_set()'s own owner-conflict logic.
+    return ("controlled" if raw_status == "untracked" else raw_status), claim_owner, matched_via, live_context_id
+
+
+def _owner_of(record: dict) -> str | None:
+    """Which owner a tracked record belongs to - the most recent write's,
+    falling back to the observed claim's.
+
+    Deliberately the *record's* owner rather than classify()'s
+    claim_owner: this answers "who last drove this light", which is the
+    grouping a per-room sensor wants, and stays stable even when the
+    light is currently held by someone else. A record whose claims carry
+    no owner at all (a force/anonymous write, or a resync baseline)
+    belongs to nobody and is skipped."""
+    for key in ("latest", "observed"):
+        claim = record.get(key)
+        if claim and claim.get("owner_id"):
+            return claim["owner_id"]
+    return None
+
+
+def _owners(snapshot: dict) -> set[str]:
+    return {owner for record in snapshot.values() if (owner := _owner_of(record)) is not None}
+
+
+def _owner_slug(owner_id: str) -> str:
+    """entity_id-safe form of an owner. Strips the domain first
+    (automation.kitchen_lights -> kitchen_lights), matching what the
+    dashboard card already does for display, so the result reads as the
+    room rather than repeating "automation" on every entity."""
+    return slugify(owner_id.split(".", 1)[-1] if "." in owner_id else owner_id)
+
+
+class _OwnerCountSensor(SensorEntity):
+    """How many of one owner's lights are currently in one status.
+
+    Two of these per owner - `controlled` and `overridden` - rather than
+    a single sensor carrying a status breakdown in its attributes: each
+    is then a plain number that graphs, gets long-term statistics, and
+    can be built on directly without digging through attributes for the
+    figure you actually wanted.
+
+    Note the two counts deliberately do NOT sum to `total_tracked`. A
+    light that is off or unavailable is in neither, because override
+    protection doesn't apply to it at all (see classify()'s own "off"
+    case). `total_tracked` is exposed on both so that gap is visible
+    rather than puzzling.
+
+    An overridden light is a supported outcome, not a fault - something
+    else deliberately took it and adaptive lighting correctly stepped
+    back. These sensors report who currently holds what; they are not a
+    health check.
+
+    Deliberately has no device_info, for the same reason
+    _WriteTrackingSensor doesn't - see its docstring."""
+
+    _attr_has_entity_name = False
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_state_class = SensorStateClass.MEASUREMENT
+    _attr_native_unit_of_measurement = "lights"
+
+    def __init__(
+        self, hass: HomeAssistant, entry: ConfigEntry, write_tracker: LastWriteTracker, owner_id: str, status: str
+    ) -> None:
+        self.hass = hass
+        self._write_tracker = write_tracker
+        self._owner_id = owner_id
+        self._status = status
+        self._attr_icon = "mdi:lightbulb-group" if status == "controlled" else "mdi:lightbulb-alert-outline"
+        # Keyed on the *full* owner_id, not the slug, so two owners that
+        # happen to strip to the same slug (automation.kitchen and
+        # script.kitchen) stay distinct in the registry - HA de-duplicates
+        # the entity_id itself.
+        self._attr_unique_id = f"{entry.entry_id}_owner_{owner_id}_{status}"
+        slug = _owner_slug(owner_id)
+        self.entity_id = f"sensor.{slug}_adaptive_{status}"
+        self._attr_name = f"{slug.replace('_', ' ').title()} Adaptive {status.title()}"
+
+    async def async_added_to_hass(self) -> None:
+        self.async_on_remove(
+            async_dispatcher_connect(self.hass, SIGNAL_WRITE_TRACKING_UPDATED, self._handle_update)
+        )
+
+    @callback
+    def _handle_update(self) -> None:
+        self.async_write_ha_state()
+
+    def _matching_lights(self) -> tuple[list[str], int]:
+        lights: list[str] = []
+        total = 0
+        for entity_id, record in self._write_tracker.snapshot().items():
+            if _owner_of(record) != self._owner_id:
+                continue
+            total += 1
+            status, _owner, _via, _ctx = _classify_tracked(self.hass, entity_id, record)
+            if status == self._status:
+                lights.append(entity_id)
+        return sorted(lights), total
+
+    @property
+    def native_value(self) -> int:
+        return len(self._matching_lights()[0])
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        lights, total = self._matching_lights()
+        # `lights` is a short list of entity_ids, a few hundred bytes even
+        # for a large room, so unlike _WriteTrackingSensor's `entities`
+        # blob it needs no recorder exclusion - and its history is
+        # genuinely useful (which lights, not just how many).
+        return {"owner_id": self._owner_id, "lights": lights, "total_tracked": total}
 
 
 class _ScheduleSensorBase(CoordinatorEntity[ScheduleCoordinator], SensorEntity):
@@ -207,43 +403,7 @@ class _WriteTrackingSensor(SensorEntity):
     def extra_state_attributes(self) -> dict[str, Any]:
         entities: dict[str, Any] = {}
         for entity_id, record in self._write_tracker.snapshot().items():
-            state = self.hass.states.get(entity_id)
-            live_context_id = state.context.id if state is not None else None
-            observed = record.get("observed")
-            latest = record.get("latest")
-            claim_owner = None
-            matched_via = None
-            if state is None or state.state in ("unavailable", "unknown"):
-                # No live state to classify at all - override_protection.classify()
-                # has no equivalent of this case (it only ever sees a real
-                # is_on/off), so it stays this sensor's own first check.
-                status = "unavailable"
-            else:
-                # Delegates to the exact same classifier grouping.py's
-                # externally_set() uses, rather than a second,
-                # separately-maintained copy of this comparison - that
-                # drift is exactly what let a merely-off light (never
-                # actually protected - see classify()'s own "off" case)
-                # fall through to "overridden" here despite
-                # externally_set() correctly saying "not excluded" for
-                # the same light. See override_protection.py's module
-                # docstring.
-                raw_status, claim_owner, matched_via = classify(
-                    state.state == "on",
-                    observed,
-                    latest,
-                    live_context_id,
-                    state.attributes.get("brightness"),
-                    state.attributes.get("color_temp_kelvin"),
-                    state.attributes.get("rgb_color"),
-                )
-                # "unclaimed" (no confirmed/pending at all, or only an
-                # unconfirmed first attempt) displays the same as
-                # "controlled" - both mean "nothing to worry about, this
-                # entity isn't excluded from the next tick" from a
-                # diagnostic viewer's perspective; the distinction only
-                # matters to externally_set()'s own owner-conflict logic.
-                status = "controlled" if raw_status == "unclaimed" else raw_status
+            status, claim_owner, matched_via, live_context_id = _classify_tracked(self.hass, entity_id, record)
             entities[entity_id] = {
                 "status": status,
                 # Whichever claim actually matched right now (None for
@@ -260,7 +420,7 @@ class _WriteTrackingSensor(SensorEntity):
                 # the dashboard card's "why" explanation.
                 "matched_via": matched_via,
                 "live_context_id": live_context_id,
-                "observed": observed,
-                "latest": latest,
+                "observed": record.get("observed"),
+                "latest": record.get("latest"),
             }
         return {"entities": entities}

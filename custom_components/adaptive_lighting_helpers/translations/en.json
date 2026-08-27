@@ -50,9 +50,10 @@
     "step": {
       "init": {
         "title": "Adaptive Lighting Helpers options",
-        "description": "Bulb models that need two-step transitions, one pattern per line. This is the complete list the check uses — the box starts pre-filled with the models shipped with the integration, and you can add to it or remove from it freely.\n\nPatterns are matched case-insensitively against “manufacturer model”, and * is a wildcard, e.g. *TRADFRI bulb* or IKEA*. Clearing the box entirely falls back to the shipped defaults; to stop being told about unlabelled bulbs, ignore the repair instead.\n\nOnce you save your own list it stays as you left it — a later release adding a newly discovered bulb won't change it.",
+        "description": "Bulb models that need two-step transitions, one pattern per line. This is the complete list the check uses — the box starts pre-filled with the models shipped with the integration, and you can add to it or remove from it freely.\n\nPatterns are matched case-insensitively against “manufacturer model”, and * is a wildcard, e.g. *TRADFRI bulb* or IKEA*. Clearing the box entirely falls back to the shipped defaults; to stop being told about unlabelled bulbs, ignore the repair instead.\n\nOnce you save your own list it stays as you left it — a later release adding a newly discovered bulb won't change it.\n\nPer-owner sensors (optional): for each automation that writes lights through this integration, adds two counters - how many of its lights it is currently driving, and how many are currently held by something else. Both are plain numbers you can put on any dashboard or build automations on, without the custom write-tracking card. A light being held elsewhere is a supported outcome, not a fault. Off by default because a busy house gains a couple of dozen entities; turning it off again removes them.",
         "data": {
-          "two_step_models": "Two-step bulb models"
+          "two_step_models": "Two-step bulb models",
+          "owner_sensors": "Create a sensor pair per owner"
         }
       }
     }

@@ -200,3 +200,194 @@ async def test_a_poll_refreshes_status_even_when_write_tracking_itself_has_not_c
 
     fresh = hass.states.get("sensor.adaptive_lighting_write_tracking").attributes["entities"]["light.a"]
     assert fresh["status"] == "controlled"
+
+
+# --- optional per-owner count sensors (CONF_OWNER_SENSORS) ----------------
+#
+# Derived entirely from the same records the global sensor exposes, so
+# these tests are about the wiring: does the right pair appear, for the
+# right owner, counting the right lights.
+
+
+async def _setup_sensor_platform(hass: HomeAssistant, *, owner_sensors: bool) -> list:
+    """Runs sensor.py's async_setup_entry with the option on or off,
+    capturing whatever it adds."""
+    from custom_components.adaptive_lighting_helpers.const import CONF_OWNER_SENSORS, DOMAIN
+    from custom_components.adaptive_lighting_helpers.sensor import async_setup_entry as sensor_setup
+
+    entry = MockConfigEntry(domain=DOMAIN, data={}, options={CONF_OWNER_SENSORS: owner_sensors})
+    entry.add_to_hass(hass)
+    tracker = LastWriteTracker(hass)
+    await tracker.async_load()
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = tracker
+
+    added: list = []
+    await sensor_setup(hass, entry, lambda entities, **kw: added.extend(entities))
+    return added, tracker
+
+
+async def _record(tracker: LastWriteTracker, entity_id: str, owner: str, context_id: str) -> None:
+    """A realistic record: a real pre-write context so the entity gets an
+    `observed` baseline. Without one, classify() returns "untracked" (not
+    enough evidence yet) for anything that doesn't match `latest`, which
+    is not the situation these tests are about."""
+    await tracker.async_record([entity_id], {entity_id: f"ctx-before-{entity_id}"}, context_id, owner)
+
+
+async def test_owner_sensors_are_not_created_by_default(hass: HomeAssistant):
+    ctx = Context()
+    _set_light(hass, "light.a", "on", brightness=200, color_temp_kelvin=3000, context=ctx)
+    added, tracker = await _setup_sensor_platform(hass, owner_sensors=False)
+    await _record(tracker, "light.a", "automation.room", ctx.id)
+
+    assert [e for e in added if type(e).__name__ == "_OwnerCountSensor"] == []
+
+
+async def test_owner_sensors_create_a_pair_per_owner_present_at_setup(hass: HomeAssistant):
+    ctx = Context()
+    _set_light(hass, "light.a", "on", brightness=200, color_temp_kelvin=3000, context=ctx)
+    _set_light(hass, "light.b", "on", brightness=200, color_temp_kelvin=3000, context=ctx)
+    seed = LastWriteTracker(hass)
+    await seed.async_load()
+    await _record(seed, "light.a", "automation.kitchen", ctx.id)
+    await _record(seed, "light.b", "automation.hall", ctx.id)
+
+    added, _ = await _setup_sensor_platform(hass, owner_sensors=True)
+    owner_sensors = [e for e in added if type(e).__name__ == "_OwnerCountSensor"]
+
+    assert sorted(e.entity_id for e in owner_sensors) == [
+        "sensor.hall_adaptive_controlled",
+        "sensor.hall_adaptive_overridden",
+        "sensor.kitchen_adaptive_controlled",
+        "sensor.kitchen_adaptive_overridden",
+    ]
+
+
+async def test_a_new_owner_appearing_later_gets_its_pair_and_an_existing_one_does_not_repeat(hass: HomeAssistant):
+    """write_tracking fires SIGNAL_WRITE_TRACKING_UPDATED on every record,
+    so a brand-new owner's first write brings its sensors into existence
+    with no polling - and a further write by an owner already seen must
+    not add a duplicate pair."""
+    ctx = Context()
+    _set_light(hass, "light.a", "on", brightness=200, color_temp_kelvin=3000, context=ctx)
+    added, tracker = await _setup_sensor_platform(hass, owner_sensors=True)
+    assert [e for e in added if type(e).__name__ == "_OwnerCountSensor"] == []
+
+    await _record(tracker, "light.a", "automation.kitchen", ctx.id)
+    await hass.async_block_till_done()
+    assert len([e for e in added if type(e).__name__ == "_OwnerCountSensor"]) == 2
+
+    # Same owner writing again - no new entities.
+    _set_light(hass, "light.b", "on", brightness=201, color_temp_kelvin=3000, context=ctx)
+    await _record(tracker, "light.b", "automation.kitchen", ctx.id)
+    await hass.async_block_till_done()
+    assert len([e for e in added if type(e).__name__ == "_OwnerCountSensor"]) == 2
+
+
+async def test_each_sensor_counts_only_its_own_status_and_its_own_owner(hass: HomeAssistant):
+    ours = Context()
+    _set_light(hass, "light.mine_ok", "on", brightness=200, color_temp_kelvin=3000, context=ours)
+    _set_light(hass, "light.mine_taken", "on", brightness=200, color_temp_kelvin=3000, context=ours)
+    _set_light(hass, "light.theirs", "on", brightness=200, color_temp_kelvin=3000, context=ours)
+    seed = LastWriteTracker(hass)
+    await seed.async_load()
+    await _record(seed, "light.mine_ok", "automation.kitchen", ours.id)
+    await _record(seed, "light.mine_taken", "automation.kitchen", ours.id)
+    await _record(seed, "light.theirs", "automation.hall", ours.id)
+    # Something else grabs one of the kitchen's lights, at a value that
+    # matches neither claim's target.
+    _set_light(hass, "light.mine_taken", "on", brightness=12, color_temp_kelvin=6500, context=Context())
+
+    added, _ = await _setup_sensor_platform(hass, owner_sensors=True)
+    by_id = {e.entity_id: e for e in added if type(e).__name__ == "_OwnerCountSensor"}
+
+    assert by_id["sensor.kitchen_adaptive_controlled"].native_value == 1
+    assert by_id["sensor.kitchen_adaptive_overridden"].native_value == 1
+    assert by_id["sensor.kitchen_adaptive_overridden"].extra_state_attributes["lights"] == ["light.mine_taken"]
+    assert by_id["sensor.kitchen_adaptive_overridden"].extra_state_attributes["total_tracked"] == 2
+    # The other owner's light is in neither of the kitchen's counts.
+    assert by_id["sensor.hall_adaptive_controlled"].native_value == 1
+
+
+async def test_an_off_light_is_in_neither_count_but_still_in_total_tracked(hass: HomeAssistant):
+    """The two counts deliberately don't sum to total_tracked - override
+    protection doesn't apply to a light that's off."""
+    ctx = Context()
+    _set_light(hass, "light.on_one", "on", brightness=200, color_temp_kelvin=3000, context=ctx)
+    _set_light(hass, "light.off_one", "on", brightness=200, color_temp_kelvin=3000, context=ctx)
+    seed = LastWriteTracker(hass)
+    await seed.async_load()
+    await _record(seed, "light.on_one", "automation.kitchen", ctx.id)
+    await _record(seed, "light.off_one", "automation.kitchen", ctx.id)
+    _set_light(hass, "light.off_one", "off", context=ctx)
+
+    added, _ = await _setup_sensor_platform(hass, owner_sensors=True)
+    by_id = {e.entity_id: e for e in added if type(e).__name__ == "_OwnerCountSensor"}
+
+    assert by_id["sensor.kitchen_adaptive_controlled"].native_value == 1
+    assert by_id["sensor.kitchen_adaptive_overridden"].native_value == 0
+    assert by_id["sensor.kitchen_adaptive_controlled"].extra_state_attributes["total_tracked"] == 2
+
+
+async def test_a_record_with_no_owner_creates_no_sensors(hass: HomeAssistant):
+    """Force/anonymous writes and the resync baselines carry no owner -
+    they belong to nobody, so there is no sensor for them to land on."""
+    ctx = Context()
+    _set_light(hass, "light.a", "on", brightness=200, color_temp_kelvin=3000, context=ctx)
+    seed = LastWriteTracker(hass)
+    await seed.async_load()
+    await seed.async_record(["light.a"], {"light.a": None}, ctx.id, None)
+
+    added, _ = await _setup_sensor_platform(hass, owner_sensors=True)
+    assert [e for e in added if type(e).__name__ == "_OwnerCountSensor"] == []
+
+
+async def test_turning_the_option_off_removes_the_entities(hass: HomeAssistant):
+    """Toggling off should actually mean off. Left alone, these would sit
+    in the registry as restored-but-never-recreated rows - litter that
+    outlives the feature that made it."""
+    from homeassistant.helpers import entity_registry as er
+
+    from custom_components.adaptive_lighting_helpers.const import CONF_OWNER_SENSORS, DOMAIN
+    from custom_components.adaptive_lighting_helpers.sensor import async_setup_entry as sensor_setup
+
+    entry = MockConfigEntry(domain=DOMAIN, data={}, options={CONF_OWNER_SENSORS: False})
+    entry.add_to_hass(hass)
+    tracker = LastWriteTracker(hass)
+    await tracker.async_load()
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = tracker
+
+    registry = er.async_get(hass)
+    stale = registry.async_get_or_create(
+        "sensor", DOMAIN, f"{entry.entry_id}_owner_automation.kitchen_controlled", config_entry=entry
+    )
+    # An unrelated entity on the same entry must survive the sweep.
+    keeper = registry.async_get_or_create("sensor", DOMAIN, f"{entry.entry_id}_write_tracking", config_entry=entry)
+
+    await sensor_setup(hass, entry, lambda entities, **kw: None)
+
+    assert registry.async_get(stale.entity_id) is None
+    assert registry.async_get(keeper.entity_id) is not None
+
+
+async def test_an_anonymous_write_does_not_orphan_a_light_from_its_owner(hass: HomeAssistant):
+    """A force/anonymous write records owner_id None, which becomes the
+    new `latest`, pushing the owned claim down into `observed`. The light
+    should stay with the owner that last identified itself rather than
+    dropping off that owner's sensors entirely - hence the fallback from
+    latest's owner to observed's."""
+    ctx = Context()
+    _set_light(hass, "light.a", "on", brightness=200, color_temp_kelvin=3000, context=ctx)
+    seed = LastWriteTracker(hass)
+    await seed.async_load()
+    await _record(seed, "light.a", "automation.kitchen", ctx.id)
+    # Now an anonymous write - no owner_id - on top of it.
+    later = Context()
+    _set_light(hass, "light.a", "on", brightness=201, color_temp_kelvin=3000, context=later)
+    await seed.async_record(["light.a"], {"light.a": ctx.id}, later.id, None)
+
+    added, _ = await _setup_sensor_platform(hass, owner_sensors=True)
+    by_id = {e.entity_id: e for e in added if type(e).__name__ == "_OwnerCountSensor"}
+
+    assert "sensor.kitchen_adaptive_controlled" in by_id
+    assert by_id["sensor.kitchen_adaptive_controlled"].extra_state_attributes["total_tracked"] == 1
