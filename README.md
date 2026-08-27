@@ -48,11 +48,13 @@ scene-coverage gap filling, as plain Home Assistant services — `compute_lighti
 `compute_scene_coverage` are pure planners that hand back data; `apply_lighting` wraps the same grouping logic
 and actually turns lights on and off. All usable from your own automations with no blueprint required.
 
-**The blueprint** is a per-room automation built on those services, and deliberately loosely coupled to them —
-it calls `apply_lighting` the same way it calls `light.turn_on`, without assuming anything about how that
-service is implemented. Brightness and colour temperature follow the phase schedule, motion controls on/off,
-scenes can take over partially or entirely, manual changes are respected, and lights that don't reach their
-target get corrected automatically.
+**The blueprint** is a ready-made room automation built on those services. It depends on them entirely and
+does nothing without them — it's a worked example rather than a separate product, wiring the services up the
+way most rooms want them so you can get going without writing anything. Brightness and colour temperature
+follow the phase schedule, motion controls on/off, scenes can take over partially or entirely, manual changes
+are respected, and lights that don't reach their target get corrected automatically. And because it's a
+blueprint it isn't a black box: take it, change it, or rip it apart to build something different on the same
+services.
 
 ## License
 

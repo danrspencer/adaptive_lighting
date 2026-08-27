@@ -11,6 +11,15 @@ render_with_liquid: false
 ---
 
 # Adaptive Lighting Helpers — service & sensor reference
+{: .no_toc }
+
+<details open markdown="block">
+  <summary>On this page</summary>
+  {: .text-delta }
+- TOC
+{:toc}
+</details>
+
 
 > Part of [Adaptive Lighting](../) — see there for why this project is shaped the way it is
 > (in particular, [why the schedule has four named phases](../#why-four-phases-not-a-continuous-curve)

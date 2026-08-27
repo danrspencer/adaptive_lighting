@@ -1,0 +1,62 @@
+/* The current page's headings, injected into the sidebar by
+   assets/js/section-nav.js. Styled to read as a subordinate level of
+   just-the-docs' own nav rather than as more pages: smaller, quieter,
+   and indented under the page it belongs to. */
+
+.section-nav-list {
+  margin: 0.1rem 0 0.4rem;
+  padding: 0;
+  list-style: none;
+  /* The rule doubles as the "you are inside this page" cue, which the
+     flat page list can't otherwise show. */
+  border-left: 1px solid #e6e1e8;
+  margin-left: 0.9rem;
+}
+
+.section-nav-item {
+  margin: 0;
+}
+
+/* Scoped three levels deep deliberately. just-the-docs styles its own
+   nav links with `.nav-list .nav-list-item .nav-list-link`, which
+   outranks a two-class selector - so a flatter rule here lost on the
+   top-level items while winning on the sub ones, and sub-sections ended
+   up LESS indented than the sections containing them. Matching its
+   specificity and coming later in the cascade fixes both consistently. */
+.section-nav-list .section-nav-item .section-nav-link {
+  padding: 0.2rem 0.6rem 0.2rem 0.8rem;
+  font-size: 0.72rem;
+  line-height: 1.35;
+  color: #5c5962;
+  /* Long headings wrap rather than being clipped: a truncated section
+     name is no use for deciding whether to jump to it. */
+  white-space: normal;
+  min-height: 0;
+}
+
+.section-nav-list .section-nav-item--sub .section-nav-link {
+  padding-left: 1.8rem;
+  font-size: 0.68rem;
+  color: #837e8a;
+}
+
+.section-nav-list .section-nav-item .section-nav-link:hover {
+  color: #27262b;
+  background-image: none;
+  background-color: #f2eefe;
+}
+
+/* The section currently being read. Marked with a weight and colour
+   change plus a bar on the guide line, so it doesn't rely on colour
+   alone. */
+.section-nav-list .section-nav-item .section-nav-link.is-current {
+  color: #5d3fd6;
+  font-weight: 600;
+  box-shadow: inset 2px 0 0 #7253ed;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+}

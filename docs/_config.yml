@@ -20,6 +20,14 @@ aux_links:
   'GitHub': https://github.com/danrspencer/adaptive_lighting
 aux_links_new_tab: true
 
+# Page indexes list sections and sub-sections but stop there. kramdown
+# ignores a per-TOC `levels` attribute - it only honours this global
+# option - and without it the longer references index their h4s too,
+# which makes the index as hard to scan as the page. 2..3 also matches
+# what assets/js/section-nav.js puts in the sidebar, so the two agree.
+kramdown:
+  toc_levels: 2..3
+
 plugins:
   - jekyll-seo-tag
 

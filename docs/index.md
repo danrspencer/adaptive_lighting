@@ -4,6 +4,15 @@ nav_order: 1
 ---
 
 # Adaptive Lighting
+{: .no_toc }
+
+<details open markdown="block">
+  <summary>On this page</summary>
+  {: .text-delta }
+- TOC
+{:toc}
+</details>
+
 
 Your lights, matched to the shape of your day — bright and cool to help you wake up, gradually warming
 through the afternoon, dimming to a relaxed glow as evening sets in, and low and warm once the house is
@@ -15,16 +24,21 @@ you're done with them, and anything a scene already has covered is left to the s
 [View on GitHub](https://github.com/danrspencer/adaptive_lighting){: .btn }
 
 
-Two pieces, installed separately and useful separately:
+Two pieces, installed separately:
 
 | Piece | What it is |
 |---|---|
-| **[Adaptive Lighting Helpers]({{ '/helpers/' | relative_url }})** | A Home Assistant integration. The phase schedule, per-light grouping, override protection, and scene gap-filling, exposed as plain services any automation can call. |
-| **[The blueprint]({{ '/blueprint/' | relative_url }})** | A per-room automation built on those services — triggers, occupancy, target resolution, scene handoff. |
+| **[Integration]({{ '/helpers/' | relative_url }})** | Where the work happens. The phase schedule, per-light grouping, override protection, and scene gap-filling, exposed as plain services any automation can call. |
+| **[Blueprint]({{ '/blueprint/' | relative_url }})** | A ready-made room automation built on those services — triggers, occupancy, target resolution, scene handoff. |
 
-They're deliberately loosely coupled: the blueprint calls `apply_lighting` the same way it calls
-`light.turn_on`, without assuming anything about how it's implemented. You can use the services on their
-own and never touch the blueprint.
+The integration is the part that stands on its own: the services are documented and useful from any
+automation you write yourself, with no blueprint involved.
+
+The blueprint is the opposite — it depends on the services entirely and does nothing without them. Think
+of it as a worked example rather than a separate product: it wires the services up the way most rooms
+want them, so you can get going without writing anything. And because it's a blueprint, it isn't a
+black box. Anyone can take it, change it, or rip it apart to build something quite different on the same
+services.
 
 ---
 

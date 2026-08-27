@@ -31,15 +31,24 @@ pyscript dependency and none of that machinery to go wrong. **pyscript
 is entirely gone from this repo now** - lesson 8 is kept only in case
 pyscript comes up again in some other project.
 
-**This repo is now two independent, loosely-coupled pieces** (see "The
-architectural split" below): the `adaptive_lighting_helpers` HACS
-integration (curve math + grouping logic, exposed as plain HA services
-anyone can call from their own automation) and the `adaptive_lighting`
-blueprint (triggers/conditions/target-resolution, built on top of
-those services but not assuming anything about how they're
-implemented). Keep them decoupled - services should be documented and
-useful on their own merits, not written as if the blueprint is their
-only consumer.
+**This repo is now two pieces, and the dependency between them runs one
+way** (see "The architectural split" below): the
+`adaptive_lighting_helpers` HACS integration (curve math + grouping
+logic, exposed as plain HA services anyone can call from their own
+automation) and the `adaptive_lighting` blueprint
+(triggers/conditions/target-resolution, built on top of those services).
+
+Be precise about that asymmetry, because it is easy to describe wrongly
+and the docs did for a while. The **integration** stands alone: the
+services are documented and useful from any automation, and should be
+written that way, not as if the blueprint is their only consumer. The
+**blueprint** does not stand alone - it depends on the services
+entirely and does nothing without them. What it is is a worked example:
+an off-the-shelf automation wiring the services up the way most rooms
+want them, which anyone can take, change, or rip apart to build
+something different on the same services. "Loosely coupled" is the
+wrong phrase for it, and "independently useful" is simply untrue of the
+blueprint half.
 
 This repo's blueprint is deliberately named `adaptive_lighting.yaml`
 (blueprint name "Adaptive Lighting"), not `adaptive_lighting_unified`
