@@ -50,9 +50,10 @@ from typing import Any
 
 from homeassistant.components.sensor import SensorEntity, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import EntityCategory, Platform
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -79,9 +80,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         entry,
         write_tracker,
         async_add_entities,
-        Platform.SENSOR,
-        lambda owner_id: [
-            _OwnerCountSensor(hass, entry, write_tracker, owner_id, status)
+        lambda owner_id, device_info: [
+            _OwnerCountSensor(hass, entry, write_tracker, owner_id, status, device_info)
             for status in ("controlled", "overridden")
         ],
     )
@@ -98,45 +98,34 @@ def setup_owner_entities(
     entry: ConfigEntry,
     write_tracker: LastWriteTracker,
     async_add_entities: AddEntitiesCallback,
-    platform: Platform,
-    factory: Callable[[str], list[Entity]],
+    factory: Callable[[str, DeviceInfo], list[Entity]],
 ) -> None:
     """Creates one platform's per-owner entities, and keeps up with
     owners that appear later.
 
     Shared by sensor.py (a controlled/overridden counter pair) and
-    button.py (a Clear button) rather than copied into each: the
-    disable-path cleanup below is exactly the kind of thing that drifts
-    once there are two copies of it.
+    button.py (a Clear button) rather than copied into each, so the
+    owner-set derivation and the device they hang off can't drift apart.
 
     Off by default (CONF_OWNER_SENSORS): these are derived entirely from
     what the global write-tracking sensor already exposes, so turning
     them on is a choice about how many entities you want, not about what
-    gets tracked. Enabling on a house this size adds a couple of dozen.
+    gets tracked.
 
-    When disabled, any previously-created ones are removed from the
-    registry outright rather than left as restored-but-never-recreated
-    rows - that kind of litter outlives the feature that made it, and
-    toggling off should actually mean off.
+    Turning it back off is handled once for the whole entry, by removing
+    the owner devices in __init__.py's async_setup_entry - a device
+    removal takes its entities with it, so it needs doing once rather
+    than once per platform.
 
     Owners are derived from the write-tracking records themselves, which
     are already persisted, so nothing extra needs storing and a restart
-    comes back with the same sensors before any write happens. The flip
+    comes back with the same entities before any write happens. The flip
     side: an owner whose records all prune away (nothing written for
-    STALE_RECORD_MAX_AGE_DAYS) stops being derivable. Its sensors are
+    STALE_RECORD_MAX_AGE_DAYS) stops being derivable. Its entities are
     deliberately left in place reporting 0 rather than removed, because a
     room whose lights are simply off for a day would otherwise have them
     vanish and reappear, breaking history continuity for no reason."""
     if not entry.options.get(CONF_OWNER_SENSORS, False):
-        registry = er.async_get(hass)
-        prefix = f"{entry.entry_id}_owner_"
-        for existing in er.async_entries_for_config_entry(registry, entry.entry_id):
-            # Filtering on the domain as well as the unique_id prefix
-            # matters now that more than one platform creates per-owner
-            # entities sharing that prefix - without it whichever
-            # platform set up second would delete the first's entities.
-            if existing.domain == platform.value and existing.unique_id.startswith(prefix):
-                registry.async_remove(existing.entity_id)
         return
 
     known: set[str] = set()
@@ -148,15 +137,72 @@ def setup_owner_entities(
             if owner in known:
                 continue
             known.add(owner)
-            new.extend(factory(owner))
+            new.extend(factory(owner, owner_device_info(hass, entry, owner)))
         if new:
             async_add_entities(new)
 
     _sync()
     # write_tracking.py already fires this on every record, clear, resync
-    # and prune, so a brand-new owner's first write brings its sensors
+    # and prune, so a brand-new owner's first write brings its entities
     # into existence with no polling.
     entry.async_on_unload(async_dispatcher_connect(hass, SIGNAL_WRITE_TRACKING_UPDATED, _sync))
+
+
+def owner_device_identifier(owner_id: str) -> tuple[str, str]:
+    """The one place the owner-device identity is spelled out - shared by
+    the entities that hang off it, the option-off sweep and the delete
+    hook, both in __init__.py."""
+    return (DOMAIN, f"owner_{owner_id}")
+
+
+def owner_device_info(hass: HomeAssistant, entry: ConfigEntry, owner_id: str) -> DeviceInfo:
+    """Registers (or finds) one owner's device and returns the DeviceInfo
+    its three entities attach to.
+
+    Grouping the per-owner entities under a device does three things a
+    bare set of entities can't: it gives them one place to be renamed
+    (with has_entity_name=True, HA composes "Kitchen Lights Controlled"
+    from the device name, so a rename retitles all three at once - the
+    same reasoning as ScheduleInstance.device_info in coordinator.py), it
+    carries the area, and it makes cleaning up a dead owner one delete
+    instead of hunting down three entities.
+
+    Created here rather than left to the entity platform so the area
+    below can be applied to a device that already exists.
+
+    Note this is deliberately NOT what _WriteTrackingSensor does - see
+    its docstring. That one really is global to the whole config entry
+    and belongs to no owner; these are owner-scoped by construction."""
+    registry = dr.async_get(hass)
+    slug = owner_slug(owner_id)
+    device = registry.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={owner_device_identifier(owner_id)},
+        name=slug.replace("_", " ").title(),
+        entry_type=DeviceEntryType.SERVICE,
+    )
+    _assign_owner_area(hass, registry, device, owner_id)
+    return DeviceInfo(identifiers={owner_device_identifier(owner_id)})
+
+
+def _assign_owner_area(hass: HomeAssistant, registry: dr.DeviceRegistry, device, owner_id: str) -> None:
+    """Puts an owner's device in the area of the entity its owner_id
+    names.
+
+    Only ever fills in a *blank* area, never overwrites one, so moving a
+    device by hand sticks. The flip side, accepted: an area deliberately
+    cleared back to nothing reads as never-set and gets refilled on the
+    next restart. Setting it to something else instead is both the more
+    likely intent and the case that's respected.
+
+    Deliberately not DeviceInfo's own suggested_area, which is deprecated
+    (breaks_in_ha_version 2026.9) and takes an area *name*, creating the
+    area as a side effect if it doesn't exist - see device_registry.py.
+    An area_id we resolved ourselves can't invent anything."""
+    if device.area_id is not None:
+        return
+    if (area_id := owner_area_id(hass, owner_id)) is not None:
+        registry.async_update_device(device.id, area_id=area_id)
 
 
 def _classify_tracked(hass: HomeAssistant, entity_id: str, record: dict) -> tuple[str, Any, Any, Any]:
@@ -209,6 +255,32 @@ def _owners(snapshot: dict) -> set[str]:
     return {owner for record in snapshot.values() if (owner := owner_of(record)) is not None}
 
 
+def owner_area_id(hass: HomeAssistant, owner_id: str) -> str | None:
+    """The area of whatever entity an owner_id names, if it names one.
+
+    An owner_id is an arbitrary caller-supplied string, but in practice
+    it's the calling automation's own entity_id - and that automation is
+    usually already assigned to the room it looks after. Following it
+    puts these entities in that same room for free, so they turn up
+    under the area rather than in an unsorted heap.
+
+    None whenever that can't be established - not an entity_id, not in
+    the registry, or the entity has no area of its own and no device to
+    inherit one from. The entities are simply left unassigned then,
+    which is what they did before this existed."""
+    if "." not in owner_id:
+        return None
+    registry = er.async_get(hass)
+    entry = registry.async_get(owner_id)
+    if entry is None:
+        return None
+    if entry.area_id:
+        return entry.area_id
+    if entry.device_id and (device := dr.async_get(hass).async_get(entry.device_id)) is not None:
+        return device.area_id
+    return None
+
+
 def owner_slug(owner_id: str) -> str:
     """entity_id-safe form of an owner. Strips the domain first
     (automation.kitchen_lights -> kitchen_lights), matching what the
@@ -237,21 +309,28 @@ class _OwnerCountSensor(SensorEntity):
     back. These sensors report who currently holds what; they are not a
     health check.
 
-    Deliberately has no device_info, for the same reason
-    _WriteTrackingSensor doesn't - see its docstring."""
+    Both sit on their owner's device, alongside that owner's Clear
+    button - see owner_device_info."""
 
-    _attr_has_entity_name = False
+    _attr_has_entity_name = True
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_native_unit_of_measurement = "lights"
 
     def __init__(
-        self, hass: HomeAssistant, entry: ConfigEntry, write_tracker: LastWriteTracker, owner_id: str, status: str
+        self,
+        hass: HomeAssistant,
+        entry: ConfigEntry,
+        write_tracker: LastWriteTracker,
+        owner_id: str,
+        status: str,
+        device_info: DeviceInfo,
     ) -> None:
         self.hass = hass
         self._write_tracker = write_tracker
         self._owner_id = owner_id
         self._status = status
+        self._attr_device_info = device_info
         self._attr_icon = "mdi:lightbulb-group" if status == "controlled" else "mdi:lightbulb-alert-outline"
         # Keyed on the *full* owner_id, not the slug, so two owners that
         # happen to strip to the same slug (automation.kitchen and
@@ -259,8 +338,11 @@ class _OwnerCountSensor(SensorEntity):
         # the entity_id itself.
         self._attr_unique_id = f"{entry.entry_id}_owner_{owner_id}_{status}"
         slug = owner_slug(owner_id)
+        # entity_id stays explicit (rather than composed from the
+        # device name) so an existing install's ids don't churn, and a
+        # later device rename moves only the display name.
         self.entity_id = f"sensor.{slug}_adaptive_{status}"
-        self._attr_name = f"{slug.replace('_', ' ').title()} Adaptive {status.title()}"
+        self._attr_name = status.title()
 
     async def async_added_to_hass(self) -> None:
         self.async_on_remove(
@@ -361,21 +443,27 @@ class _WriteTrackingSensor(SensorEntity):
     indirectly by probing compute_lighting_groups, which tells you
     *whether* a light is currently excluded, never *why*.
 
-    Deliberately has no device_info. This data is global to the whole
-    config entry (one LastWriteTracker shared across every apply_lighting
-    call, from every room automation - see write_tracking.py's module
-    docstring), not scoped to any one schedule instance, so there's no
-    single device it naturally belongs on. Giving it a new device of its
-    own would risk reintroducing the "Add Integration creates a device"
-    popup this integration's main entry deliberately avoids (see
-    CLAUDE.md's "Auto-seeded Default sensor" entry) - confirmed against
-    home-assistant/frontend's step-flow-create-entry.ts that the
-    device-rename/area-picker dialog is gated purely on whether *any*
-    device exists for the config entry at render time (a live registry
-    read against `device.primary_config_entry`, not something scoped to
-    just the flow that's completing), for every flow type including
-    options/subentry flows - so an entity with no device at all can never
-    trigger it, regardless of when or how it's created.
+    Deliberately has no device_info - but for its own reason, not the
+    one an earlier version of this docstring gave. This data is global to
+    the whole config entry (one LastWriteTracker shared across every
+    apply_lighting call, from every room automation - see
+    write_tracking.py's module docstring), belonging to no schedule
+    instance and no owner, so there is no device it naturally sits on.
+    The per-owner entities are owner-scoped by construction and do get
+    one - see owner_device_info.
+
+    The claim this docstring used to make - that any device on the entry
+    reintroduces HA's device-rename/area-picker dialog, "for every flow
+    type including options/subentry flows" - was overstated, and led to
+    a wrong conclusion once already. Re-checked against
+    home-assistant/frontend: the dialog is gated on the flow's own
+    `showDevices`, and show-dialog-options-flow.ts sets it **false**, so
+    an options flow never renders it however many devices exist.
+    dialog-data-entry-flow.ts then filters `hass.devices` by
+    `device.config_entries.includes(entry_id)` taken from the flow
+    result, so only the main config flow (showDevices true, at entry
+    creation) is affected - and every schedule subentry already creates a
+    device anyway, so the entry is never device-free in practice.
 
     Push-updated via SIGNAL_WRITE_TRACKING_UPDATED for instant feedback
     right when write_tracking.py actually mutates something (a real

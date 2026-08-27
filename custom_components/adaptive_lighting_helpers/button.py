@@ -25,8 +25,9 @@ from typing import Any
 
 from homeassistant.components.button import ButtonEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import EntityCategory, Platform
+from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
@@ -42,8 +43,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         entry,
         write_tracker,
         async_add_entities,
-        Platform.BUTTON,
-        lambda owner_id: [_OwnerClearButton(hass, entry, write_tracker, owner_id)],
+        lambda owner_id, device_info: [_OwnerClearButton(hass, entry, write_tracker, owner_id, device_info)],
     )
 
 
@@ -61,27 +61,36 @@ class _OwnerClearButton(ButtonEntity):
     is treated exactly like a brand-new entity's first write. For a live
     room automation that is one tick.
 
-    Deliberately has no device_info, for the same reason
-    _WriteTrackingSensor doesn't - see its docstring."""
+    Sits on its owner's device alongside that owner's two counters, so
+    deleting a dead owner is one device delete rather than three separate
+    entity deletions - see sensor.py's owner_device_info."""
 
-    _attr_has_entity_name = False
+    _attr_has_entity_name = True
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_icon = "mdi:broom"
 
     def __init__(
-        self, hass: HomeAssistant, entry: ConfigEntry, write_tracker: LastWriteTracker, owner_id: str
+        self,
+        hass: HomeAssistant,
+        entry: ConfigEntry,
+        write_tracker: LastWriteTracker,
+        owner_id: str,
+        device_info: DeviceInfo,
     ) -> None:
         self.hass = hass
         self._write_tracker = write_tracker
         self._owner_id = owner_id
+        self._attr_device_info = device_info
         # Keyed on the *full* owner_id for the same reason
         # _OwnerCountSensor is - see its comment. The shared
         # "<entry_id>_owner_" prefix is what setup_owner_entities'
         # disable-path sweep matches on.
         self._attr_unique_id = f"{entry.entry_id}_owner_{owner_id}_clear"
         slug = owner_slug(owner_id)
+        # entity_id stays explicit so an existing install's ids don't
+        # churn; a later device rename moves only the display name.
         self.entity_id = f"button.{slug}_adaptive_clear"
-        self._attr_name = f"{slug.replace('_', ' ').title()} Adaptive Clear"
+        self._attr_name = "Clear"
 
     async def async_added_to_hass(self) -> None:
         self.async_on_remove(

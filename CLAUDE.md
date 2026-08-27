@@ -442,14 +442,32 @@ excluded entity never gets a refreshed claim.
 
 The config entry registers services only and carries no schedule.
 "Add Integration" creates **zero devices and zero entities** - that's
-deliberate: HA's own "integration added" dialog
-(`step-flow-create-entry.ts`) shows an unconditional device-rename +
-area-picker form whenever a flow creates at least one device, with no
-way to suppress it, and that dialog is also the only place HA ever
-auto-renames entity_ids to match a device name. Auto-seeding a device
-therefore popped a rename prompt for something the user hadn't asked
-for, and a later rename via Settings → Devices silently didn't
-propagate to entity_ids.
+deliberate: HA's "integration added" dialog
+(`step-flow-create-entry.ts`) shows a device-rename + area-picker form
+whenever the completing flow has devices, with no way to suppress it,
+and that dialog is also the only place HA ever auto-renames entity_ids
+to match a device name. Auto-seeding a device therefore popped a rename
+prompt for something the user hadn't asked for, and a later rename via
+Settings → Devices silently didn't propagate to entity_ids.
+
+**That constraint is narrower than it was once written up here**, and
+the overstated version caused a wrong call once - re-verified against
+home-assistant/frontend rather than recalled:
+
+- The dialog is gated on the flow's own `showDevices`.
+  `show-dialog-options-flow.ts` sets it **false**, so an options flow
+  never renders it however many devices exist. The main config flow and
+  `config_subentries_flow` set it true.
+- `dialog-data-entry-flow.ts` then filters `hass.devices` by
+  `device.config_entries.includes(entry_id)`, with `entry_id` taken from
+  the flow *result* - so it is the completing flow's own entry, not any
+  device anywhere.
+
+Net: only the **main config flow, at entry creation** is affected, which
+is exactly what the zero-devices rule above protects. Devices created
+later are fine - and every schedule subentry already creates one, so the
+entry is never device-free in practice. This is why the per-owner
+entities (sensor.py's `owner_device_info`) do get a device each.
 
 Every schedule is a named "sensor" subentry (Settings → Devices &
 Services → Add Sensor). `schedule_instances(entry)` in `coordinator.py`

@@ -65,12 +65,13 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
 from homeassistant.helpers.typing import ConfigType
 
-from .const import DOMAIN
+from .const import CONF_OWNER_SENSORS, DOMAIN
 from .coordinator import CURVE_KEYS, ScheduleCoordinator, schedule_instances
 from .curve import phase_at, targets_for_phase
 from .grouping import EntityLookup, Group, build_groups
 from .override_protection import classify, is_blocked
 from .scenes import SceneLookup, compute_scene_coverage
+from .sensor import owner_of
 from .two_step_check import async_start_watching
 from .write_tracking import PRUNE_CHECK_INTERVAL, LastWriteTracker
 
@@ -844,6 +845,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # global copy of a refresh the entity already owns.
         entry.async_on_unload(async_track_state_change_event(hass, ["sun.sun"], _refresh_all))
 
+    _async_remove_owner_devices_if_disabled(hass, entry)
+
     # Unconditional, not gated on instances - the write-tracking sensor
     # (sensor.py) is entry-scoped and should exist even with zero
     # schedule instances configured. Harmless when instances is empty:
@@ -884,4 +887,72 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         hass.data.get(DOMAIN, {}).pop(instance.subentry_id, None)
     return unloaded
 
+    return True
+
+
+def _owner_devices(hass: HomeAssistant, entry: ConfigEntry) -> list[dr.DeviceEntry]:
+    """Every per-owner device on this entry - i.e. everything except the
+    schedule-instance devices (coordinator.py's ScheduleInstance.
+    device_info), which are keyed on a subentry_id instead."""
+    return [
+        device
+        for device in dr.async_entries_for_config_entry(dr.async_get(hass), entry.entry_id)
+        if any(domain == DOMAIN and key.startswith("owner_") for domain, key in device.identifiers)
+    ]
+
+
+@callback
+def _async_remove_owner_devices_if_disabled(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Toggling CONF_OWNER_SENSORS off should actually mean off. Left
+    alone these would sit in the registry as restored-but-never-recreated
+    rows - litter that outlives the feature that made it.
+
+    Done here, once for the whole entry, rather than in each platform's
+    own setup: removing a device takes its entities with it, so the three
+    per-owner entities go together and no platform can race another into
+    deleting entities it doesn't own."""
+    if entry.options.get(CONF_OWNER_SENSORS, False):
+        return
+    registry = dr.async_get(hass)
+    for device in _owner_devices(hass, entry):
+        registry.async_remove_device(device.id)
+
+
+async def async_remove_config_entry_device(
+    hass: HomeAssistant, config_entry: ConfigEntry, device_entry: dr.DeviceEntry
+) -> bool:
+    """Lets a per-owner device be deleted from the UI - which is the
+    whole point of grouping the three per-owner entities onto one:
+    cleaning up an owner_id that no longer exists is one delete rather
+    than hunting down three separate entities.
+
+    That entity's tracked records are cleared as part of it, using the
+    same write_tracker.async_clear() the Clear button calls. Without
+    that, the device is rebuilt from those very records the next time
+    anything writes, and the delete silently undoes itself. With it,
+    deleting the device is exactly "press Clear, then remove".
+
+    Schedule-instance devices are refused - they belong to a subentry
+    and are removed by deleting that sensor instead. Accepted cost:
+    merely defining this function is what turns HA's Delete button on
+    for *every* device on the entry (config_entries.py discovers it with
+    hasattr), so those now offer a Delete that fails with HA's generic
+    "rejected by integration" message rather than not offering one at
+    all."""
+    owner_ids = {
+        key.removeprefix("owner_")
+        for domain, key in device_entry.identifiers
+        if domain == DOMAIN and key.startswith("owner_")
+    }
+    if not owner_ids:
+        return False
+    write_tracker: LastWriteTracker | None = hass.data.get(DOMAIN, {}).get(config_entry.entry_id)
+    if write_tracker is not None:
+        stale = [
+            entity_id
+            for entity_id, record in write_tracker.snapshot().items()
+            if owner_of(record) in owner_ids
+        ]
+        if stale:
+            await write_tracker.async_clear(stale)
     return True
