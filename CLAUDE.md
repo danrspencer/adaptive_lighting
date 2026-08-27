@@ -763,6 +763,11 @@ HA derives the id from the name at creation.
 
 ### Deployment / operational notes
 
+- **Versioning**: `manifest.json`'s `version` is what HACS reports, and
+  it must match the release tag - enforced by `tests/test_version.py`
+  and again by `.github/workflows/release.yml`, which refuses to publish
+  a mismatch. `CHANGELOG.md` must carry a section for the version.
+  Releasing is bump + changelog + tag; see docs/contributing.md.
 - **Integration**: HACS. `update_information` then `download`, confirm
   the deployed file matches the merge with `ha_read_file` before
   restarting (see lesson 12), then restart.
