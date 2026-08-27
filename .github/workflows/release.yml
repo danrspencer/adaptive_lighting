@@ -1,0 +1,42 @@
+name: release
+
+# Cutting a release is pushing a tag. The workflow's job is to make sure
+# the tag and the manifest can't disagree: HACS reads the version out of
+# manifest.json, not out of the tag, so a mismatch means the version
+# people see installed isn't the version they downloaded.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The tag and manifest.json must agree
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          manifest=$(python -c "import json; print(json.load(open('custom_components/adaptive_lighting_helpers/manifest.json'))['version'])")
+          if [ "$tag" != "$manifest" ]; then
+            echo "::error::tag is v$tag but manifest.json says $manifest - bump the manifest and re-tag"
+            exit 1
+          fi
+
+      - name: The changelog must describe this version
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          if ! grep -q "^## \[$tag\]" CHANGELOG.md; then
+            echo "::error::CHANGELOG.md has no '## [$tag]' section"
+            exit 1
+          fi
+
+      # gh is preinstalled on the runner, so this needs no third-party
+      # action to review or keep up to date.
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes
