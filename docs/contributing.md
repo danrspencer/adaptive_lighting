@@ -11,6 +11,15 @@ render_with_liquid: false
 ---
 
 # Contributing
+{: .no_toc }
+
+<details open markdown="block">
+  <summary>On this page</summary>
+  {: .text-delta }
+- TOC
+{:toc}
+</details>
+
 
 Not needed just to install and use this — see [README.md](../) for that. This is for working on the
 code itself.
