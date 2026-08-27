@@ -24,7 +24,7 @@ concrete rather than generalised to arbitrary entity attributes.
 
 Three consumers share this one decision table: grouping.py's
 `EntityLookup.externally_set()`, sensor.py's diagnostic status, and the
-standalone `check_ownership` service. Keeping them on one implementation
+standalone `check_control` service. Keeping them on one implementation
 is the point - they previously drifted, and an off light was classified
 "overridden" in one and "not excluded" in the other.
 
@@ -278,7 +278,7 @@ def classify(
 def is_blocked(status: str, force: bool = False) -> bool:
     """Turns classify()'s raw status into the actual yes/no "should this
     write be blocked" decision - the one remaining step both grouping.py's
-    EntityLookup.externally_set() and the check_ownership service need on
+    EntityLookup.externally_set() and the check_control service need on
     top of the shared classification, kept here so neither re-derives it.
 
     There is no longer any owner comparison to make. A light's claims

@@ -314,7 +314,7 @@ class ClaimRegistry:
         deliberately invoked, unlike every other path that removes a
         record (async_start_listening's drop-detection, which only ever
         fires on an *observed* unavailable transition). Backs the
-        clear_ownership service and the write-tracking dashboard card's
+        clear_claims service and the write-tracking dashboard card's
         "Clear" action - the escape hatch for a light that's landed in
         "overridden" without ever actually going unavailable, and so
         has no other way back: build_groups() (grouping.py) never calls

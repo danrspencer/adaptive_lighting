@@ -159,24 +159,23 @@ APPLY_LIGHTING_SCHEMA = vol.Schema(
     }
 )
 
-CHECK_OWNERSHIP_SCHEMA = vol.Schema(
+CHECK_CONTROL_SCHEMA = vol.Schema(
     {
         vol.Required("entities"): [cv.entity_id],
-        vol.Optional("force", default=False): cv.boolean,
         vol.Optional("brightness_tolerance", default=2): vol.Coerce(int),
         vol.Optional("color_temp_tolerance", default=10): vol.Coerce(int),
         vol.Optional("rgb_color_tolerance", default=10): vol.Coerce(int),
     }
 )
 
-RECORD_OWNERSHIP_SCHEMA = vol.Schema(
+RECORD_WRITE_SCHEMA = vol.Schema(
     {
         vol.Required("entities"): [cv.entity_id],
         vol.Optional("targets", default=dict): dict,
     }
 )
 
-CLEAR_OWNERSHIP_SCHEMA = vol.Schema({vol.Required("entities"): [cv.entity_id]})
+CLEAR_CLAIMS_SCHEMA = vol.Schema({vol.Required("entities"): [cv.entity_id]})
 
 
 def _build_lookup(hass: HomeAssistant, tracker: ClaimRegistry) -> EntityLookup:
@@ -658,29 +657,32 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         return _groups_response(groups)
 
-    async def check_ownership(call: ServiceCall) -> ServiceResponse:
-        """adaptive_lighting_helpers.check_ownership
+    async def check_control(call: ServiceCall) -> ServiceResponse:
+        """adaptive_lighting_helpers.check_control
 
         For each of `entities`, decides whether a write should currently
-        be blocked for `owner_id` - the exact same override-protection
-        mechanism apply_lighting uses internally (grouping.py's
+        be blocked - the exact same override-protection mechanism
+        apply_lighting uses internally (grouping.py's
         EntityLookup.externally_set(), itself a thin wrapper over
         override_protection.classify()/is_blocked()), exposed standalone
         so any caller can ask "should I write this entity" without any
         of this integration's brightness/curve logic at all - see
-        docs/helpers.md's "Override protection" section for the full
-        contract this mirrors.
+        docs/helpers.md's "Override protection" section.
+
+        Takes no `force`: forcing is something a *write* does, and as a
+        question it has only one possible answer (is_blocked returns
+        False for everything when force is set), so asking it is never
+        informative.
 
         Returns: {"results": {entity_id: {"blocked": bool, "status":
-        str, "matched_via": str|None}, ...}} -
-        "status" is one of "off", "unclaimed", "latest", "controlled",
-        "overridden" (see override_protection.classify()'s own
-        docstring); "matched_via" is how it matched, or
-        null if none did; "matched_via" is "context" or "value" for a
-        "latest"/"controlled" status (null otherwise) - see
-        services.yaml for field docs.
+        str, "matched_via": str|None, "scope": str|None}, ...}}.
+        "status" is one of "off", "untracked", "controlled",
+        "overridden"; "matched_via" is "latest-context",
+        "latest-value", "observed-context" or "observed-value" for a
+        "controlled" status and null otherwise; "scope" names the state
+        device tracking this light, or null when none does. See
+        override_protection.classify() and services.yaml.
         """
-        force = call.data["force"]
         brightness_tolerance = call.data["brightness_tolerance"]
         color_temp_tolerance = call.data["color_temp_tolerance"]
         rgb_color_tolerance = call.data["rgb_color_tolerance"]
@@ -720,28 +722,36 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 rgb_color_tolerance,
             )
             results[entity_id] = {
-                "blocked": is_blocked(status, force),
+                "blocked": is_blocked(status),
                 "status": status,
                 "matched_via": matched_via,
+                # Which state device tracks this light, or null when
+                # none does - the only way for a caller to tell "adaptive
+                # lighting is leaving this alone" apart from "nothing is
+                # tracking it at all", which look identical otherwise.
+                "scope": (scope.title if (scope := write_tracker.scope_for(entity_id)) else None),
             }
         return {"results": results}
 
-    async def record_ownership(call: ServiceCall) -> ServiceResponse:
-        """adaptive_lighting_helpers.record_ownership
+    async def record_write(call: ServiceCall) -> ServiceResponse:
+        """adaptive_lighting_helpers.record_write
 
-        Records that `owner_id` (this call's own context.id, from
-        call.context) just wrote `entities`, optionally with what each
-        write actually asked for (`targets`) - a thin wrapper around
-        write_tracker.async_record(), exposed standalone so a caller
-        using check_ownership on its own can also participate in the
-        same override-protection bookkeeping apply_lighting uses,
-        without going through apply_lighting's brightness/curve logic
-        at all. Call this *after* actually issuing whatever write you
-        decided on, the same way apply_lighting itself does - recording
-        a write that didn't happen would make a later check_ownership
-        call see a claim with nothing behind it.
+        Records that this call's own context just wrote `entities`,
+        optionally with what each write actually asked for (`targets`) -
+        a thin wrapper around write_tracker.async_record(), exposed
+        standalone so a caller using check_control on its own can
+        participate in the same bookkeeping apply_lighting uses, without
+        going through apply_lighting's brightness/curve logic. Call this
+        *after* actually issuing whatever write you decided on, the same
+        way apply_lighting does - recording a write that didn't happen
+        would make a later check_control see a claim with nothing behind
+        it.
 
-        Returns: {"recorded": [...]} - the entity_ids actually recorded.
+        Returns: {"recorded": [...]} - the entity_ids that were actually
+        recorded, which is **not** necessarily everything passed in: a
+        light matching no state device isn't tracked at all, and is
+        skipped. Reporting the request back verbatim would tell a caller
+        their write was tracked when nothing had happened.
         """
         entities = call.data["entities"]
         targets = call.data.get("targets", {})
@@ -749,10 +759,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             e: (state.context.id if (state := hass.states.get(e)) is not None else None) for e in entities
         }
         await write_tracker.async_record(entities, live_context_before_write, call.context.id, targets=targets)
-        return {"recorded": entities}
+        tracked = write_tracker.all_records()
+        return {"recorded": [e for e in entities if e in tracked]}
 
-    async def clear_ownership(call: ServiceCall) -> ServiceResponse:
-        """adaptive_lighting_helpers.clear_ownership
+    async def clear_claims(call: ServiceCall) -> ServiceResponse:
+        """adaptive_lighting_helpers.clear_claims
 
         Discards `entities`' tracked observed/latest claims entirely -
         the manual escape hatch for a light stuck "overridden" with no
@@ -821,23 +832,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
         hass.services.async_register(
             DOMAIN,
-            "check_ownership",
-            check_ownership,
-            schema=CHECK_OWNERSHIP_SCHEMA,
+            "check_control",
+            check_control,
+            schema=CHECK_CONTROL_SCHEMA,
             supports_response=SupportsResponse.ONLY,
         )
         hass.services.async_register(
             DOMAIN,
-            "record_ownership",
-            record_ownership,
-            schema=RECORD_OWNERSHIP_SCHEMA,
+            "record_write",
+            record_write,
+            schema=RECORD_WRITE_SCHEMA,
             supports_response=SupportsResponse.OPTIONAL,
         )
         hass.services.async_register(
             DOMAIN,
-            "clear_ownership",
-            clear_ownership,
-            schema=CLEAR_OWNERSHIP_SCHEMA,
+            "clear_claims",
+            clear_claims,
+            schema=CLEAR_CLAIMS_SCHEMA,
             supports_response=SupportsResponse.OPTIONAL,
         )
 
@@ -920,9 +931,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "compute_curve",
             "compute_scene_coverage",
             "apply_lighting",
-            "check_ownership",
-            "record_ownership",
-            "clear_ownership",
+            "check_control",
+            "record_write",
+            "clear_claims",
         ):
             hass.services.async_remove(DOMAIN, service)
         unloaded = await hass.config_entries.async_unload_platforms(entry, TRACKING_PLATFORMS)

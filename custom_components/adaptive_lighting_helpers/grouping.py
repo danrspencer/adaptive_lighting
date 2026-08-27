@@ -119,7 +119,7 @@ class EntityLookup:
         state and hands them to override_protection.classify() /
         is_blocked(), which hold the actual decision table and are shared
         with sensor.py's diagnostic status and the standalone
-        check_ownership service. Those two functions document what each
+        check_control service. Those two functions document what each
         status means and why a context mismatch alone isn't proof of an
         external touch; write_tracking.py's module docstring covers why
         there are two claims rather than one.

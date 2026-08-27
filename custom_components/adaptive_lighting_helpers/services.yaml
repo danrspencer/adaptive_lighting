@@ -416,16 +416,21 @@ compute_scene_coverage:
       selector:
         entity:
 
-check_ownership:
-  name: Check ownership
+check_control:
+  name: Check control
   description: >-
-    For each entity, decides whether a write should currently be blocked
-    for the state device tracking it - the exact override-protection mechanism
-    apply_lighting/compute_lighting_groups use internally, exposed
-    standalone so any automation can ask "should I write this" without
-    any of this integration's brightness/curve logic at all. Read-only -
-    call record_ownership afterward if you actually write the entity, so
-    a later check_ownership call recognises it as yours.
+    For each entity, reports whether adaptive lighting is currently in
+    control of it, and whether a write should be blocked - the exact
+    override-protection mechanism apply_lighting/compute_lighting_groups
+    use internally, exposed standalone so any automation can ask "should
+    I write this" without any of this integration's brightness/curve
+    logic at all. Read-only - call record_write afterwards if you do
+    write the entity, so a later check recognises that write.
+
+    Also reports which state device tracks each entity, or null when
+    none does. That distinction matters: an untracked light is never
+    blocked, but not because anything checked - nothing is watching it
+    at all.
   fields:
     entities:
       name: Entities
@@ -434,14 +439,6 @@ check_ownership:
       selector:
         entity:
           multiple: true
-    force:
-      name: Force
-      description: >-
-        Every entity reports not blocked, regardless of any
-        recorded claim. Off by default.
-      default: false
-      selector:
-        boolean:
     brightness_tolerance:
       name: Brightness tolerance
       description: >-
@@ -476,14 +473,18 @@ check_ownership:
           min: 0
           max: 100
 
-record_ownership:
-  name: Record ownership
+record_write:
+  name: Record write
   description: >-
-    Records that this call's own context just wrote entities -
-    call this immediately after actually issuing whatever write
-    check_ownership told you was allowed, so a later check_ownership call
-    recognises it as yours. A thin wrapper around the same bookkeeping
-    apply_lighting uses internally.
+    Records that this call's own context just wrote entities - call it
+    immediately after actually issuing whatever write check_control said
+    was allowed, so a later check recognises that write rather than
+    reading it as an external change. A thin wrapper around the same
+    bookkeeping apply_lighting uses internally.
+
+    Returns the entities actually recorded, which need not be everything
+    passed in: a light matching no state device isn't tracked, and is
+    skipped.
   fields:
     entities:
       name: Entities
@@ -498,7 +499,7 @@ record_ownership:
         Map of entity_id to what that write actually asked for -
         {"brightness": ..., "color_temp_kelvin": ...} or {"brightness":
         ..., "rgb_color": [...]}. Optional, but needed for
-        check_ownership's delayed-echo rescue to work for these entities
+        check_control's delayed-echo rescue to work for these entities
         later - without it, a context.id mismatch alone is always treated
         as external.
       example: '{"light.lamp": {"brightness": 200, "color_temp_kelvin": 3000}}'
@@ -506,8 +507,8 @@ record_ownership:
         object:
           multiple: true
 
-clear_ownership:
-  name: Clear ownership
+clear_claims:
+  name: Clear claims
   description: >-
     Discards entities' tracked observed/latest claims entirely - the
     manual escape hatch for an entity stuck reporting as overridden with

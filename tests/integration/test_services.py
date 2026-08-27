@@ -305,24 +305,24 @@ async def test_compute_lighting_groups_accepts_an_explicit_null_rgb_color(setup_
     assert result["groups"][0]["combined"] == ["light.a"]
 
 
-async def test_check_ownership_reports_untracked_for_a_brand_new_entity(setup_integration: HomeAssistant):
-    """check_ownership is genuinely standalone - no apply_lighting call,
+async def test_check_control_reports_untracked_for_a_brand_new_entity(setup_integration: HomeAssistant):
+    """check_control is genuinely standalone - no apply_lighting call,
     no sensor, just a light and the write-tracking mechanism."""
     hass = setup_integration
     _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=100, color_temp_kelvin=3000)
 
     result = await hass.services.async_call(
         DOMAIN,
-        "check_ownership",
+        "check_control",
         {"entities": ["light.a"]},
         blocking=True,
         return_response=True,
     )
 
-    assert result["results"]["light.a"] == {"blocked": False, "status": "untracked", "matched_via": None}
+    assert result["results"]["light.a"] == {"blocked": False, "status": "untracked", "matched_via": None, "scope": "Test Scope"}
 
 
-async def test_check_ownership_and_record_ownership_round_trip(setup_integration: HomeAssistant):
+async def test_check_control_and_record_write_round_trip(setup_integration: HomeAssistant):
     """The two services used together, standalone - no apply_lighting
     involved at all, matching how an independent automation would use
     this mechanism on its own light.turn_on calls."""
@@ -332,7 +332,7 @@ async def test_check_ownership_and_record_ownership_round_trip(setup_integration
 
     await hass.services.async_call(
         DOMAIN,
-        "record_ownership",
+        "record_write",
         {"entities": ["light.a"], "targets": {"light.a": {"brightness": 100, "color_temp_kelvin": 3000}}},
         blocking=True,
         context=our_context,
@@ -346,7 +346,7 @@ async def test_check_ownership_and_record_ownership_round_trip(setup_integration
     # own precedence.
     result = await hass.services.async_call(
         DOMAIN,
-        "check_ownership",
+        "check_control",
         {"entities": ["light.a"]},
         blocking=True,
         return_response=True,
@@ -355,6 +355,7 @@ async def test_check_ownership_and_record_ownership_round_trip(setup_integration
         "blocked": False,
         "status": "controlled",
         "matched_via": "latest-context",
+        "scope": "Test Scope",
     }
 
     # Someone else changes it - a different context, different values.
@@ -362,12 +363,12 @@ async def test_check_ownership_and_record_ownership_round_trip(setup_integration
 
     result = await hass.services.async_call(
         DOMAIN,
-        "check_ownership",
+        "check_control",
         {"entities": ["light.a"]},
         blocking=True,
         return_response=True,
     )
-    assert result["results"]["light.a"] == {"blocked": True, "status": "overridden", "matched_via": None}
+    assert result["results"]["light.a"] == {"blocked": True, "status": "overridden", "matched_via": None, "scope": "Test Scope"}
 
     # Another caller asking about the same still-matching claim sees it
     # as *not* blocked. There is no owner comparison any more: the claim
@@ -377,7 +378,7 @@ async def test_check_ownership_and_record_ownership_round_trip(setup_integration
     _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=100, color_temp_kelvin=3000, context=our_context)
     result = await hass.services.async_call(
         DOMAIN,
-        "check_ownership",
+        "check_control",
         {"entities": ["light.a"]},
         blocking=True,
         return_response=True,
@@ -386,39 +387,56 @@ async def test_check_ownership_and_record_ownership_round_trip(setup_integration
         "blocked": False,
         "status": "controlled",
         "matched_via": "latest-context",
+        "scope": "Test Scope",
     }
 
 
-async def test_check_ownership_force_bypasses_regardless_of_claims(setup_integration: HomeAssistant):
+async def test_check_control_reports_the_scope_that_tracks_each_light(setup_integration: HomeAssistant):
+    """A light matching no state device isn't tracked at all, which from
+    the outside looks identical to "tracked and currently fine". `scope`
+    is what tells those apart - without it a caller can't tell that
+    adaptive lighting simply isn't watching a light."""
     hass = setup_integration
-    our_context = Context()
-    _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=100, color_temp_kelvin=3000, context=our_context)
-    await hass.services.async_call(
-        DOMAIN,
-        "record_ownership",
-        {"entities": ["light.a"]},
-        blocking=True,
-        context=our_context,
-    )
-    _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=40, color_temp_kelvin=6000)
+    ctx = Context()
+    _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=100, color_temp_kelvin=3000, context=ctx)
+    # Registered in no area, so no state device covers it.
+    hass.states.async_set("light.unscoped", "on", {"brightness": 100, "color_temp_kelvin": 3000})
 
     result = await hass.services.async_call(
         DOMAIN,
-        "check_ownership",
-        {"entities": ["light.a"], "force": True},
+        "check_control",
+        {"entities": ["light.a", "light.unscoped"]},
         blocking=True,
         return_response=True,
     )
-    assert result["results"]["light.a"]["blocked"] is False
+
+    assert result["results"]["light.a"]["scope"] == "Test Scope"
+    assert result["results"]["light.unscoped"]["scope"] is None
 
 
-async def test_check_ownership_off_light_is_never_blocked(setup_integration: HomeAssistant):
+async def test_check_control_does_not_take_force(setup_integration: HomeAssistant):
+    """Forcing is something a write does. As a question it has exactly
+    one answer - is_blocked returns False for everything when force is
+    set - so accepting it would only invite callers to ask something
+    uninformative."""
+    hass = setup_integration
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(
+            DOMAIN,
+            "check_control",
+            {"entities": ["light.a"], "force": True},
+            blocking=True,
+            return_response=True,
+        )
+
+
+async def test_check_control_off_light_is_never_blocked(setup_integration: HomeAssistant):
     hass = setup_integration
     our_context = Context()
     _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=100, color_temp_kelvin=3000, context=our_context)
     await hass.services.async_call(
         DOMAIN,
-        "record_ownership",
+        "record_write",
         {"entities": ["light.a"]},
         blocking=True,
         context=our_context,
@@ -430,29 +448,29 @@ async def test_check_ownership_off_light_is_never_blocked(setup_integration: Hom
 
     result = await hass.services.async_call(
         DOMAIN,
-        "check_ownership",
+        "check_control",
         {"entities": ["light.a"]},
         blocking=True,
         return_response=True,
     )
-    assert result["results"]["light.a"] == {"blocked": False, "status": "off", "matched_via": None}
+    assert result["results"]["light.a"] == {"blocked": False, "status": "off", "matched_via": None, "scope": "Test Scope"}
 
 
-async def test_clear_ownership_frees_a_light_stuck_overridden(setup_integration: HomeAssistant):
+async def test_clear_claims_frees_a_light_stuck_overridden(setup_integration: HomeAssistant):
     """The manual escape hatch: an entity showing "overridden" (blocked
     for any caller) with no other way back - see write_tracking.py's
     async_clear docstring for why this can happen on its own (an
     excluded entity's own pending target goes stale forever, since
-    build_groups() never calls record_ownership/async_record for
-    anything already excluded). clear_ownership discards the record
-    outright; the very next check_ownership call then sees a brand-new
+    build_groups() never calls record_write/async_record for
+    anything already excluded). clear_claims discards the record
+    outright; the very next check_control call then sees a brand-new
     entity with nothing to compare against - unclaimed, never blocked."""
     hass = setup_integration
     our_context = Context()
     _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=100, color_temp_kelvin=3000, context=our_context)
     await hass.services.async_call(
         DOMAIN,
-        "record_ownership",
+        "record_write",
         {"entities": ["light.a"]},
         blocking=True,
         context=our_context,
@@ -463,29 +481,29 @@ async def test_clear_ownership_frees_a_light_stuck_overridden(setup_integration:
     _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=40, color_temp_kelvin=6000)
     result = await hass.services.async_call(
         DOMAIN,
-        "check_ownership",
+        "check_control",
         {"entities": ["light.a"]},
         blocking=True,
         return_response=True,
     )
     assert result["results"]["light.a"]["status"] == "overridden"
 
-    await hass.services.async_call(DOMAIN, "clear_ownership", {"entities": ["light.a"]}, blocking=True)
+    await hass.services.async_call(DOMAIN, "clear_claims", {"entities": ["light.a"]}, blocking=True)
 
     result = await hass.services.async_call(
         DOMAIN,
-        "check_ownership",
+        "check_control",
         {"entities": ["light.a"]},
         blocking=True,
         return_response=True,
     )
-    assert result["results"]["light.a"] == {"blocked": False, "status": "untracked", "matched_via": None}
+    assert result["results"]["light.a"] == {"blocked": False, "status": "untracked", "matched_via": None, "scope": "Test Scope"}
 
 
-async def test_clear_ownership_is_a_noop_for_an_untracked_entity(setup_integration: HomeAssistant):
+async def test_clear_claims_is_a_noop_for_an_untracked_entity(setup_integration: HomeAssistant):
     hass = setup_integration
     result = await hass.services.async_call(
-        DOMAIN, "clear_ownership", {"entities": ["light.never_tracked"]}, blocking=True, return_response=True
+        DOMAIN, "clear_claims", {"entities": ["light.never_tracked"]}, blocking=True, return_response=True
     )
     assert result == {"cleared": ["light.never_tracked"]}
 
@@ -622,7 +640,7 @@ async def test_a_devices_own_delayed_echo_does_not_permanently_lock_the_light_ou
     # state change, not a same-state "state_reported" re-set, so reusing
     # 200/3000 exactly here would leave the light's context untouched
     # and silently defeat this test (see the identical gotcha noted in
-    # test_force_bypasses_protection_and_reclaims_ownership above).
+    # test_force_bypasses_protection_and_reclaims_the_light above).
     _set_light(
         hass,
         "light.a",
@@ -709,7 +727,7 @@ async def test_two_step_brightness_step_landing_alone_is_recognised_as_ours(setu
 
     result = await hass.services.async_call(
         DOMAIN,
-        "check_ownership",
+        "check_control",
         {"entities": ["light.a"]},
         blocking=True,
         return_response=True,
@@ -718,6 +736,7 @@ async def test_two_step_brightness_step_landing_alone_is_recognised_as_ours(setu
         "blocked": False,
         "status": "controlled",
         "matched_via": "latest-context",
+        "scope": "Test Scope",
     }
 
 
@@ -811,7 +830,7 @@ async def test_a_dropped_first_write_self_heals_on_the_next_tick_with_no_interfe
     assert len(turn_on_calls) == 2
 
 
-async def test_force_bypasses_protection_and_reclaims_ownership(setup_integration: HomeAssistant):
+async def test_force_bypasses_protection_and_reclaims_the_light(setup_integration: HomeAssistant):
     """force=True writes through regardless, and still records the write
     - so a later, non-forced call under that same owner_id recognises it
     as its own rather than finding an orphaned record (the bug `force`
