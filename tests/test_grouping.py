@@ -275,7 +275,6 @@ def test_an_externally_set_light_is_excluded_from_the_update_group():
             }
         },
         observed_context_ids={"light.a": "ctx-ours"},
-        observed_owner_ids={"light.a": "ours"},
     )
     groups = build_groups(
         entities=["light.a"],
@@ -283,7 +282,6 @@ def test_an_externally_set_light_is_excluded_from_the_update_group():
         sensor_brightness=200,
         sensor_color_temp_kelvin=3000,
         lookup=lookup,
-        owner_id="ours",
     )
     assert groups[0].combined == []
 
@@ -294,7 +292,6 @@ def test_an_externally_set_light_is_excluded_from_the_off_group_too():
     lookup = make_lookup(
         states={"light.a": {"state": "on", "attributes": {}, "context_id": "ctx-someone-else"}},
         observed_context_ids={"light.a": "ctx-ours"},
-        observed_owner_ids={"light.a": "ours"},
     )
     groups = build_groups(
         entities=["light.a"],
@@ -302,7 +299,6 @@ def test_an_externally_set_light_is_excluded_from_the_off_group_too():
         sensor_brightness=200,
         sensor_color_temp_kelvin=3000,
         lookup=lookup,
-        owner_id="ours",
     )
     assert groups[0].needing_off == []
 
@@ -316,7 +312,6 @@ _CLAIM_FIELD_CASES = [
         "observed.target",
         dict(
             observed_context_ids={"light.a": "ctx-c"},
-            observed_owner_ids={"light.a": "ours"},
             observed_targets={"light.a": {"brightness": 200, "color_temp_kelvin": 3000}},
         ),
         "ctx-unrelated",
@@ -326,9 +321,7 @@ _CLAIM_FIELD_CASES = [
         "latest.target",
         dict(
             observed_context_ids={"light.a": "ctx-c"},
-            observed_owner_ids={"light.a": "ours"},
             latest_context_ids={"light.a": "ctx-p"},
-            latest_owner_ids={"light.a": "ours"},
             latest_targets={"light.a": {"brightness": 200, "color_temp_kelvin": 3000}},
         ),
         "ctx-unrelated",
@@ -338,7 +331,6 @@ _CLAIM_FIELD_CASES = [
         "observed.secondary_context_id",
         dict(
             observed_context_ids={"light.a": "ctx-c"},
-            observed_owner_ids={"light.a": "ours"},
             observed_secondary_context_ids={"light.a": "ctx-c-brightness-step"},
         ),
         "ctx-c-brightness-step",
@@ -348,33 +340,11 @@ _CLAIM_FIELD_CASES = [
         "latest.secondary_context_id",
         dict(
             observed_context_ids={"light.a": "ctx-c"},
-            observed_owner_ids={"light.a": "ours"},
             latest_context_ids={"light.a": "ctx-p"},
-            latest_owner_ids={"light.a": "ours"},
             latest_secondary_context_ids={"light.a": "ctx-p-brightness-step"},
         ),
         "ctx-p-brightness-step",
         ["light.a"],
-    ),
-    (
-        "observed.owner_id",
-        dict(
-            observed_context_ids={"light.a": "ctx-c"},
-            observed_owner_ids={"light.a": "someone-else"},
-        ),
-        "ctx-c",
-        [],
-    ),
-    (
-        "latest.owner_id",
-        dict(
-            observed_context_ids={"light.a": "ctx-c"},
-            observed_owner_ids={"light.a": "ours"},
-            latest_context_ids={"light.a": "ctx-p"},
-            latest_owner_ids={"light.a": "someone-else"},
-        ),
-        "ctx-p",
-        [],
     ),
 ]
 
@@ -401,13 +371,12 @@ def test_the_adapter_passes_every_claim_field_classify_reads(claim_kwargs, live_
         sensor_brightness=100,
         sensor_color_temp_kelvin=5000,
         lookup=lookup,
-        owner_id="ours",
     )
     assert groups[0].combined == expected
 
 
-@pytest.mark.parametrize(("owner_id", "force"), [(None, False), ("ours", True)], ids=["no owner_id", "force"])
-def test_the_adapter_passes_the_bypasses_through(owner_id, force):
+def test_the_adapter_passes_force_through():
+    force = True
     lookup = make_lookup(
         states={
             "light.a": {
@@ -417,7 +386,6 @@ def test_the_adapter_passes_the_bypasses_through(owner_id, force):
             }
         },
         observed_context_ids={"light.a": "ctx-ours"},
-        observed_owner_ids={"light.a": "someone-else"},
     )
     groups = build_groups(
         entities=["light.a"],
@@ -425,7 +393,6 @@ def test_the_adapter_passes_the_bypasses_through(owner_id, force):
         sensor_brightness=200,
         sensor_color_temp_kelvin=3000,
         lookup=lookup,
-        owner_id=owner_id,
         force=force,
     )
     assert groups[0].combined == ["light.a"]
@@ -446,9 +413,7 @@ def test_stale_target_still_updates_once_the_curve_moves():
             }
         },
         observed_context_ids={"light.a": "ctx-confirmed-stale"},
-        observed_owner_ids={"light.a": "ours"},
         latest_context_ids={"light.a": "ctx-pending-stale"},
-        latest_owner_ids={"light.a": "ours"},
         latest_targets={"light.a": {"brightness": 200, "color_temp_kelvin": 3000}},
     )
     groups = build_groups(
@@ -457,7 +422,6 @@ def test_stale_target_still_updates_once_the_curve_moves():
         sensor_brightness=120,
         sensor_color_temp_kelvin=4200,
         lookup=lookup,
-        owner_id="ours",
     )
     assert groups[0].combined == ["light.a"]
 
@@ -633,7 +597,6 @@ def test_rgb_external_override_and_reachability_still_apply():
             "light.unreachable": {"state": "unavailable", "attributes": {"supported_color_modes": ["rgb"]}},
         },
         observed_context_ids={"light.overridden": "ctx-ours"},
-        observed_owner_ids={"light.overridden": "ours"},
     )
     groups = build_groups(
         entities=["light.overridden", "light.unreachable"],
@@ -643,7 +606,6 @@ def test_rgb_external_override_and_reachability_still_apply():
         lookup=lookup,
         prefer_rgb_color=True,
         rgb_color=(255, 180, 107),
-        owner_id="ours",
     )
     assert groups[0].combined_rgb == []
     assert groups[0].two_step_rgb == []

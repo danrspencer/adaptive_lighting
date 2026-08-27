@@ -257,26 +257,24 @@ def test_target_matches_values_recognises_a_mired_equivalent_color_temp():
 
 
 def test_is_blocked_force_bypasses_regardless_of_status():
-    assert is_blocked("overridden", None, "ours", force=True) is False
-
-
-def test_is_blocked_no_owner_id_bypasses():
-    assert is_blocked("overridden", None, owner_id=None) is False
+    assert is_blocked("overridden", force=True) is False
 
 
 def test_is_blocked_off_and_untracked_never_block():
-    assert is_blocked("off", None, "ours") is False
-    assert is_blocked("untracked", None, "ours") is False
+    assert is_blocked("off") is False
+    assert is_blocked("untracked") is False
 
 
 def test_is_blocked_overridden_always_blocks():
-    assert is_blocked("overridden", None, "ours") is True
+    assert is_blocked("overridden") is True
 
 
-def test_is_blocked_matched_claim_blocks_only_for_a_different_owner():
-    assert is_blocked("controlled", "ours", "ours") is False
-    assert is_blocked("controlled", "theirs", "ours") is True
-    assert is_blocked("controlled", None, "ours") is False  # unowned claim blocks nobody
+def test_is_blocked_controlled_never_blocks():
+    """There is no owner comparison left to make. A light's claims live
+    on exactly one state device, resolved from configuration, so a
+    `controlled` claim is by construction the claim of the scope that
+    owns that light - two automations driving one room share it."""
+    assert is_blocked("controlled") is False
 
 
 def test_color_temp_matches_within_flat_kelvin_tolerance():

@@ -13,9 +13,7 @@ def make_lookup(
     device_of: Optional[dict] = None,
     labels_of: Optional[dict] = None,
     observed_context_ids: Optional[dict] = None,
-    observed_owner_ids: Optional[dict] = None,
     latest_context_ids: Optional[dict] = None,
-    latest_owner_ids: Optional[dict] = None,
     latest_targets: Optional[dict] = None,
     observed_targets: Optional[dict] = None,
     latest_secondary_context_ids: Optional[dict] = None,
@@ -26,12 +24,12 @@ def make_lookup(
                "context_id" is optional and defaults to None.
     device_of: {entity_id: device_id}
     labels_of: {entity_id_or_device_id: [label, ...]}
-    observed_context_ids / observed_owner_ids: {entity_id: value} - what
+    observed_context_ids: {entity_id: value} - what
                write_tracking.LastWriteTracker would report as the
                "observed" claim for that entity - a write some earlier
                call actually observed landing. Absent means no confirmed
                write yet for that entity.
-    latest_context_ids / latest_owner_ids: {entity_id: value} - the
+    latest_context_ids: {entity_id: value} - the
                "latest" claim - the most recent write attempted, not yet
                verified either way. Absent means no attempt is currently
                outstanding.
@@ -51,9 +49,7 @@ def make_lookup(
     device_of = device_of or {}
     labels_of = labels_of or {}
     observed_context_ids = observed_context_ids or {}
-    observed_owner_ids = observed_owner_ids or {}
     latest_context_ids = latest_context_ids or {}
-    latest_owner_ids = latest_owner_ids or {}
     latest_targets = latest_targets or {}
     observed_targets = observed_targets or {}
     latest_secondary_context_ids = latest_secondary_context_ids or {}
@@ -77,14 +73,8 @@ def make_lookup(
     def observed_context_id(entity_id):
         return observed_context_ids.get(entity_id)
 
-    def observed_owner_id(entity_id):
-        return observed_owner_ids.get(entity_id)
-
     def latest_context_id(entity_id):
         return latest_context_ids.get(entity_id)
-
-    def latest_owner_id(entity_id):
-        return latest_owner_ids.get(entity_id)
 
     def latest_target(entity_id):
         return latest_targets.get(entity_id)
@@ -105,9 +95,7 @@ def make_lookup(
         labels=labels,
         context_id=context_id,
         observed_context_id=observed_context_id,
-        observed_owner_id=observed_owner_id,
         latest_context_id=latest_context_id,
-        latest_owner_id=latest_owner_id,
         latest_target=latest_target,
         observed_target=observed_target,
         latest_secondary_context_id=latest_secondary_context_id,

@@ -65,15 +65,14 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
 from homeassistant.helpers.typing import ConfigType
 
-from .const import CONF_OWNER_SENSORS, DOMAIN
+from .const import DOMAIN
 from .coordinator import CURVE_KEYS, ScheduleCoordinator, schedule_instances
 from .curve import phase_at, targets_for_phase
 from .grouping import EntityLookup, Group, build_groups
 from .override_protection import classify, is_blocked
 from .scenes import SceneLookup, compute_scene_coverage
-from .sensor import owner_of
 from .two_step_check import async_start_watching
-from .write_tracking import PRUNE_CHECK_INTERVAL, LastWriteTracker
+from .write_tracking import PRUNE_CHECK_INTERVAL, ClaimRegistry
 
 # Named for the per-schedule-instance entities that make up most of it,
 # but no longer only those: sensor and button also carry the
@@ -109,7 +108,6 @@ COMPUTE_LIGHTING_GROUPS_SCHEMA = vol.Schema(
         # exact call shape was worked through for the blueprint change.
         vol.Optional("rgb_color"): vol.Any(None, vol.All([vol.Coerce(int)], vol.Length(min=3, max=3))),
         vol.Optional("rgb_color_tolerance", default=10): vol.Coerce(int),
-        vol.Optional("owner_id"): cv.string,
         vol.Optional("force", default=False): cv.boolean,
     }
 )
@@ -153,7 +151,6 @@ APPLY_LIGHTING_SCHEMA = vol.Schema(
         # why vol.Any(None, ...) rather than a bare vol.All(...).
         vol.Optional("rgb_color"): vol.Any(None, vol.All([vol.Coerce(int)], vol.Length(min=3, max=3))),
         vol.Optional("rgb_color_tolerance", default=10): vol.Coerce(int),
-        vol.Optional("owner_id"): cv.string,
         vol.Optional("force", default=False): cv.boolean,
     }
 )
@@ -161,7 +158,6 @@ APPLY_LIGHTING_SCHEMA = vol.Schema(
 CHECK_OWNERSHIP_SCHEMA = vol.Schema(
     {
         vol.Required("entities"): [cv.entity_id],
-        vol.Optional("owner_id"): cv.string,
         vol.Optional("force", default=False): cv.boolean,
         vol.Optional("brightness_tolerance", default=2): vol.Coerce(int),
         vol.Optional("color_temp_tolerance", default=10): vol.Coerce(int),
@@ -172,7 +168,6 @@ CHECK_OWNERSHIP_SCHEMA = vol.Schema(
 RECORD_OWNERSHIP_SCHEMA = vol.Schema(
     {
         vol.Required("entities"): [cv.entity_id],
-        vol.Optional("owner_id"): cv.string,
         vol.Optional("targets", default=dict): dict,
     }
 )
@@ -180,7 +175,7 @@ RECORD_OWNERSHIP_SCHEMA = vol.Schema(
 CLEAR_OWNERSHIP_SCHEMA = vol.Schema({vol.Required("entities"): [cv.entity_id]})
 
 
-def _build_lookup(hass: HomeAssistant, tracker: LastWriteTracker) -> EntityLookup:
+def _build_lookup(hass: HomeAssistant, tracker: ClaimRegistry) -> EntityLookup:
     """Adapts real HA state/registries to the plain EntityLookup
     interface grouping.py expects - the only HA-specific piece of this
     integration, everything else is the pure modules doing the work."""
@@ -222,9 +217,7 @@ def _build_lookup(hass: HomeAssistant, tracker: LastWriteTracker) -> EntityLooku
         labels=labels,
         context_id=context_id,
         observed_context_id=tracker.observed_context_id,
-        observed_owner_id=tracker.observed_owner_id,
         latest_context_id=tracker.latest_context_id,
-        latest_owner_id=tracker.latest_owner_id,
         latest_target=tracker.latest_target,
         observed_target=tracker.observed_target,
         latest_secondary_context_id=tracker.latest_secondary_context_id,
@@ -309,19 +302,17 @@ async def _two_step_turn_on(
 
 CARD_URL_BASE = "/adaptive_lighting_helpers_static"
 CARD_JS_PATH = "adaptive-lighting-curve-card.js"
-WRITE_TRACKING_CARD_JS_PATH = "adaptive-lighting-write-tracking-card.js"
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Serve www/adaptive-lighting-curve-card.js and
-    www/adaptive-lighting-write-tracking-card.js and auto-load both on
+    """Serve www/adaptive-lighting-curve-card.js and auto-load it on
     every frontend page - runs once for the whole domain, regardless of
     how many config entries/subentries exist, so the cards ship and
     update with the integration itself (via HACS) rather than needing
     a separate manual Lovelace resource registration step that can
     silently drift out of sync with them (see CLAUDE.md for the live
-    incident this replaced). One static path already serves the whole
-    www/ directory, so a second card needs only a second
+    incident this replaced). One static path serves the whole www/
+    directory, so a second card would need only a second
     add_extra_js_url call, not a second StaticPathConfig.
     cache_headers=False deliberately - neither file has a versioned URL,
     so aggressive caching here would just trade a stale-deployed-file
@@ -330,7 +321,6 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         [StaticPathConfig(CARD_URL_BASE, str(Path(__file__).parent / "www"), cache_headers=False)]
     )
     add_extra_js_url(hass, f"{CARD_URL_BASE}/{CARD_JS_PATH}")
-    add_extra_js_url(hass, f"{CARD_URL_BASE}/{WRITE_TRACKING_CARD_JS_PATH}")
     return True
 
 
@@ -338,16 +328,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Shared across every apply_lighting call, from whichever automation
     # made it - see write_tracking.py for why (grouping.py's
     # externally_set() check only cares "did adaptive control write this
-    # most recently", not which specific caller). Loaded once here so
-    # last-write provenance survives a HA restart.
-    write_tracker = LastWriteTracker(hass)
-    await write_tracker.async_load()
-    # A HA restart alone gives every entity a fresh context.id, which
-    # otherwise looks identical to a genuine external change - see
-    # async_resync_to_live_state's own docstring, and the dated CLAUDE.md
-    # entry for the live incident (light.kitchen_1, genuinely on, stuck
-    # excluded purely from a restart) that prompted this.
-    await write_tracker.async_resync_to_live_state(hass)
+    # most recently", not which specific caller). Deliberately not
+    # persisted - claims live on the state devices' tracking entities and
+    # die with a restart, which leaves every light manageable. See
+    # write_tracking.py's module docstring.
+    write_tracker = ClaimRegistry(hass, entry)
     # An entity deleted from HA outright (not just restarting - e.g. a
     # Zigbee2MQTT group removed at the source) never triggers the
     # unavailable-transition cleanup async_start_listening watches for,
@@ -394,7 +379,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             prefer_rgb_color=call.data["prefer_rgb_color"],
             rgb_color=tuple(rgb_color) if rgb_color else None,
             rgb_color_tolerance=call.data["rgb_color_tolerance"],
-            owner_id=call.data.get("owner_id"),
             force=call.data["force"],
         )
         return _groups_response(groups)
@@ -452,7 +436,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         normally afterward. See grouping.py's EntityLookup.externally_set()
         for the full semantics of both parameters together.
         """
-        owner_id = call.data.get("owner_id")
         force = call.data["force"]
         brightness = call.data["brightness"]
         color_temp_kelvin = call.data["color_temp_kelvin"]
@@ -471,7 +454,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             prefer_rgb_color=call.data["prefer_rgb_color"],
             rgb_color=rgb_color,
             rgb_color_tolerance=call.data["rgb_color_tolerance"],
-            owner_id=owner_id,
             force=force,
         )
 
@@ -607,7 +589,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 written_entities,
                 live_context_before_write,
                 call.context.id,
-                owner_id,
                 targets=write_targets,
                 secondary_context_ids=secondary_context_ids,
                 context_id_overrides=context_id_overrides,
@@ -629,15 +610,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         contract this mirrors.
 
         Returns: {"results": {entity_id: {"blocked": bool, "status":
-        str, "owner_id": str|None, "matched_via": str|None}, ...}} -
+        str, "matched_via": str|None}, ...}} -
         "status" is one of "off", "unclaimed", "latest", "controlled",
         "overridden" (see override_protection.classify()'s own
-        docstring); "owner_id" is whichever claim's owner matched, or
+        docstring); "matched_via" is how it matched, or
         null if none did; "matched_via" is "context" or "value" for a
         "latest"/"controlled" status (null otherwise) - see
         services.yaml for field docs.
         """
-        owner_id = call.data.get("owner_id")
         force = call.data["force"]
         brightness_tolerance = call.data["brightness_tolerance"]
         color_temp_tolerance = call.data["color_temp_tolerance"]
@@ -650,7 +630,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 {
                     "context_id": observed_ctx,
                     "secondary_context_id": write_tracker.observed_secondary_context_id(entity_id),
-                    "owner_id": write_tracker.observed_owner_id(entity_id),
                     "target": write_tracker.observed_target(entity_id),
                 }
                 if observed_ctx is not None
@@ -661,7 +640,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 {
                     "context_id": latest_ctx,
                     "secondary_context_id": write_tracker.latest_secondary_context_id(entity_id),
-                    "owner_id": write_tracker.latest_owner_id(entity_id),
                     "target": write_tracker.latest_target(entity_id),
                 }
                 if latest_ctx is not None
@@ -680,9 +658,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
                 rgb_color_tolerance,
             )
             results[entity_id] = {
-                "blocked": is_blocked(status, claim_owner, owner_id, force),
+                "blocked": is_blocked(status, force),
                 "status": status,
-                "owner_id": claim_owner,
                 "matched_via": matched_via,
             }
         return {"results": results}
@@ -705,12 +682,11 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         Returns: {"recorded": [...]} - the entity_ids actually recorded.
         """
         entities = call.data["entities"]
-        owner_id = call.data.get("owner_id")
         targets = call.data.get("targets", {})
         live_context_before_write = {
             e: (state.context.id if (state := hass.states.get(e)) is not None else None) for e in entities
         }
-        await write_tracker.async_record(entities, live_context_before_write, call.context.id, owner_id, targets=targets)
+        await write_tracker.async_record(entities, live_context_before_write, call.context.id, targets=targets)
         return {"recorded": entities}
 
     async def clear_ownership(call: ServiceCall) -> ServiceResponse:
@@ -845,7 +821,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # global copy of a refresh the entity already owns.
         entry.async_on_unload(async_track_state_change_event(hass, ["sun.sun"], _refresh_all))
 
-    _async_remove_owner_devices_if_disabled(hass, entry)
+    _async_remove_legacy_owner_devices(hass, entry)
 
     # Unconditional, not gated on instances - the write-tracking sensor
     # (sensor.py) is entry-scoped and should exist even with zero
@@ -902,57 +878,15 @@ def _owner_devices(hass: HomeAssistant, entry: ConfigEntry) -> list[dr.DeviceEnt
 
 
 @callback
-def _async_remove_owner_devices_if_disabled(hass: HomeAssistant, entry: ConfigEntry) -> None:
-    """Toggling CONF_OWNER_SENSORS off should actually mean off. Left
-    alone these would sit in the registry as restored-but-never-recreated
-    rows - litter that outlives the feature that made it.
+def _async_remove_legacy_owner_devices(hass: HomeAssistant, entry: ConfigEntry) -> None:
+    """Removes the devices from when tracking scopes were derived from
+    the calling automation's entity_id rather than configured.
 
-    Done here, once for the whole entry, rather than in each platform's
-    own setup: removing a device takes its entities with it, so the three
-    per-owner entities go together and no platform can race another into
-    deleting entities it doesn't own."""
-    if entry.options.get(CONF_OWNER_SENSORS, False):
-        return
+    Those were created on the fly from a caller-supplied string, which
+    is exactly the "devices appearing by magic" this replaced. Nothing
+    is lost by deleting them: claims are no longer persisted at all, so
+    there is no state in them to preserve, and removing a device takes
+    its entities with it."""
     registry = dr.async_get(hass)
     for device in _owner_devices(hass, entry):
         registry.async_remove_device(device.id)
-
-
-async def async_remove_config_entry_device(
-    hass: HomeAssistant, config_entry: ConfigEntry, device_entry: dr.DeviceEntry
-) -> bool:
-    """Lets a per-owner device be deleted from the UI - which is the
-    whole point of grouping the three per-owner entities onto one:
-    cleaning up an owner_id that no longer exists is one delete rather
-    than hunting down three separate entities.
-
-    That entity's tracked records are cleared as part of it, using the
-    same write_tracker.async_clear() the Clear button calls. Without
-    that, the device is rebuilt from those very records the next time
-    anything writes, and the delete silently undoes itself. With it,
-    deleting the device is exactly "press Clear, then remove".
-
-    Schedule-instance devices are refused - they belong to a subentry
-    and are removed by deleting that sensor instead. Accepted cost:
-    merely defining this function is what turns HA's Delete button on
-    for *every* device on the entry (config_entries.py discovers it with
-    hasattr), so those now offer a Delete that fails with HA's generic
-    "rejected by integration" message rather than not offering one at
-    all."""
-    owner_ids = {
-        key.removeprefix("owner_")
-        for domain, key in device_entry.identifiers
-        if domain == DOMAIN and key.startswith("owner_")
-    }
-    if not owner_ids:
-        return False
-    write_tracker: LastWriteTracker | None = hass.data.get(DOMAIN, {}).get(config_entry.entry_id)
-    if write_tracker is not None:
-        stale = [
-            entity_id
-            for entity_id, record in write_tracker.snapshot().items()
-            if owner_of(record) in owner_ids
-        ]
-        if stale:
-            await write_tracker.async_clear(stale)
-    return True

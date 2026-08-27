@@ -833,15 +833,10 @@ action:
             prefer_rgb_color: "{{ prefer_rgb_color }}"
             # Identifies this room's automation as the owner of its own
             # writes (see docs/HELPERS.md's apply_lighting reference) -
-            # without this, every call here would count as the explicit
-            # force/override case and never leave an externally-changed
-            # light alone. `this` is this automation's own state object,
-            # so this.entity_id is stable per room and needs no input.
-            owner_id: "{{ this.entity_id }}"
             # A manual run (someone hit "Run" on this automation, or
             # called automation.trigger directly) forces the whole tick
-            # through regardless of override protection - owner_id is
-            # still passed above, so the write is properly attributed and
-            # a later, non-forced tick still recognises it as this
-            # automation's own rather than finding an orphaned record.
+            # through regardless of override protection. Which state
+            # device tracks each light is decided by the integration from
+            # its own configuration, not declared here - see
+            # write_tracking.py's scope_for.
             force: "{{ manual_run }}"

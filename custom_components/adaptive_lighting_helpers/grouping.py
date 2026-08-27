@@ -69,9 +69,7 @@ class EntityLookup:
     # actually observed landing; "latest" is the most recent attempt,
     # not yet verified either way.
     observed_context_id: Callable[[str], Optional[str]]
-    observed_owner_id: Callable[[str], Optional[str]]
     latest_context_id: Callable[[str], Optional[str]]
-    latest_owner_id: Callable[[str], Optional[str]]
     # What each claim's write actually intended - {brightness,
     # color_temp_kelvin} or {brightness, rgb_color}, or None if that
     # claim isn't a real apply_lighting write (an off-command, or a
@@ -106,7 +104,6 @@ class EntityLookup:
     def externally_set(
         self,
         entity_id: str,
-        owner_id: Optional[str] = None,
         force: bool = False,
         brightness_tolerance: int = 2,
         color_temp_tolerance: int = 10,
@@ -143,7 +140,6 @@ class EntityLookup:
             {
                 "context_id": observed_ctx,
                 "secondary_context_id": self.observed_secondary_context_id(entity_id),
-                "owner_id": self.observed_owner_id(entity_id),
                 "target": self.observed_target(entity_id),
             }
             if observed_ctx is not None
@@ -154,14 +150,13 @@ class EntityLookup:
             {
                 "context_id": latest_ctx,
                 "secondary_context_id": self.latest_secondary_context_id(entity_id),
-                "owner_id": self.latest_owner_id(entity_id),
                 "target": self.latest_target(entity_id),
             }
             if latest_ctx is not None
             else None
         )
 
-        status, claim_owner, _matched_via = classify(
+        status, _claim_owner, _matched_via = classify(
             self.is_state(entity_id, "on"),
             observed,
             latest,
@@ -173,7 +168,7 @@ class EntityLookup:
             color_temp_tolerance,
             rgb_color_tolerance,
         )
-        return is_blocked(status, claim_owner, owner_id, force)
+        return is_blocked(status, force)
 
     def supports_rgb(self, entity_id: str) -> bool:
         """True if the entity's supported_color_modes includes any mode
@@ -277,7 +272,6 @@ def build_groups(
     prefer_rgb_color: bool = False,
     rgb_color: Optional[tuple] = None,
     rgb_color_tolerance: int = 10,
-    owner_id: Optional[str] = None,
     force: bool = False,
 ) -> list:
     """Compute exactly what needs commanding for `entities`, bucketed by
@@ -319,7 +313,7 @@ def build_groups(
                 for e in group_entities
                 if lookup.reachable(e)
                 and not lookup.is_state(e, "off")
-                and not lookup.externally_set(e, owner_id, force, brightness_tolerance, color_temp_tolerance, rgb_color_tolerance)
+                and not lookup.externally_set(e, force, brightness_tolerance, color_temp_tolerance, rgb_color_tolerance)
             ]
             groups.append(group)
             continue
@@ -334,7 +328,7 @@ def build_groups(
             e
             for e in temp_entities
             if lookup.reachable(e)
-            and not lookup.externally_set(e, owner_id, force, brightness_tolerance, color_temp_tolerance, rgb_color_tolerance)
+            and not lookup.externally_set(e, force, brightness_tolerance, color_temp_tolerance, rgb_color_tolerance)
             and not _already_set(e, brightness, sensor_color_temp_kelvin, lookup, brightness_tolerance, color_temp_tolerance)
         ]
         group.two_step = [e for e in needing_update if two_step_label in lookup.tags(e)]
@@ -344,7 +338,7 @@ def build_groups(
             e
             for e in rgb_entities
             if lookup.reachable(e)
-            and not lookup.externally_set(e, owner_id, force, brightness_tolerance, color_temp_tolerance, rgb_color_tolerance)
+            and not lookup.externally_set(e, force, brightness_tolerance, color_temp_tolerance, rgb_color_tolerance)
             and not _already_set_rgb(e, brightness, rgb_color, lookup, brightness_tolerance, rgb_color_tolerance)
         ]
         group.two_step_rgb = [e for e in needing_update_rgb if two_step_label in lookup.tags(e)]

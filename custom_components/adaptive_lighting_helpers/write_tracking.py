@@ -1,8 +1,8 @@
 """
-Tracks which context.id (and optional caller-supplied owner_id) this
-integration last wrote each light with, so grouping.py can tell "did WE
-make the last change" apart from a person, another automation, or a
-device reconnecting under its own fresh context.
+Tracks which context.id this integration last wrote each light with, so
+grouping.py can tell "did WE make the last change" apart from a person,
+another automation, or a device reconnecting under its own fresh
+context.
 
 context.id rather than context.user_id: every service call within one
 automation run shares that run's context.id (HA core's
@@ -11,16 +11,21 @@ anything else - including a different automation - gets an unrelated
 one. user_id can't distinguish our own write from another automation's,
 since neither carries one.
 
-owner_id (e.g. the blueprint passing its own `this.entity_id`) is
-recorded alongside, so a *different* apply_lighting caller's write is
-recognised as "not mine" even though this integration still made it.
-Omitting owner_id skips the check entirely; the write is still recorded
-under owner_id=None so a later keyed caller sees it as someone else's.
-grouping.py's externally_set() and override_protection.classify() own
-the comparison itself - this module only records and persists.
+There is no caller-supplied owner. A light's claims live on exactly one
+state device, resolved from configuration by scope_for() below, so the
+scope holding a claim *is* its owner - two automations driving one room
+write into the same claims and therefore co-operate rather than each
+reading the other as an intruder. grouping.py's externally_set() and
+override_protection.classify() own the comparison itself; this module
+only records.
 
-Persisted via Store so a restart doesn't make every already-on light
-look externally set.
+Deliberately not persisted. Claims live on each state device's tracking
+entity and die with a restart, which is correct rather than merely
+tolerable: these are lighting overrides, and losing them means a bulb
+someone wanted purple goes back to being managed. A cold start tracks
+nothing, classify() therefore returns `untracked`, and every light is
+manageable - which is exactly the state the old startup resync existed
+to reconstruct.
 
 Two claims per entity, not one
 ------------------------------
@@ -77,8 +82,8 @@ async_start_listening() watches both directions of the
 unavailable/unknown boundary: it clears an entity's record when it is
 observed dropping from a real on/off state, and snapshots the
 newly-observed context as a fresh `observed` baseline when it comes
-back. async_resync_to_live_state performs the same snapshot once at
-startup for whatever is already reporting by then.
+back. There is no startup equivalent, and none is needed - nothing is
+tracked at startup.
 
 The drop direction must *start* from a real on/off state, not merely end
 at unavailable/unknown: nearly every entity passes through
@@ -89,18 +94,18 @@ the house on each one.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import timedelta
-from typing import Optional
+from typing import Optional, Protocol
 
+from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import CALLBACK_TYPE, Event, EventStateChangedData, HomeAssistant, callback
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_send
-from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
+from .coordinator import StateInstance, state_instances
 from .override_protection import _context_matches, _ContextClaim, _WriteRecord
-
-STORAGE_VERSION = 1
-STORAGE_KEY = "adaptive_lighting_helpers.last_write_context_ids"
 
 # How long a tracked record is kept after it was last written or
 # observed, before async_prune_stale() discards it outright - see that
@@ -127,192 +132,180 @@ STALE_RECORD_MAX_AGE_DAYS = 1
 # a few dozen).
 PRUNE_CHECK_INTERVAL = timedelta(hours=1)
 
-# Fired (with no payload - listeners re-read via snapshot()) whenever
-# self._data changes, so the diagnostic sensor in sensor.py can refresh
-# itself immediately instead of polling - see snapshot()'s own docstring.
+# Fired (with no payload - listeners re-read through the registry)
+# whenever any scope's claims change, so the per-scope count sensors
+# refresh immediately instead of polling.
 SIGNAL_WRITE_TRACKING_UPDATED = "adaptive_lighting_helpers_write_tracking_updated"
 
 
-class LastWriteTracker:
-    """entity_id -> {observed, latest} claims for the last two writes
-    this integration issued for it, across every apply_lighting call
-    regardless of which automation made it - see the module docstring
-    for why exactly two, not one and not a growing history."""
+def _as_list(value) -> list[str]:
+    """A target selector key is a bare string when one thing is picked
+    and a list when several are - normalise before membership tests."""
+    if value is None:
+        return []
+    return [value] if isinstance(value, str) else list(value)
 
-    def __init__(self, hass: HomeAssistant) -> None:
+
+class ClaimStore(Protocol):
+    """What ClaimRegistry needs from a state device's tracking entity.
+
+    Declared structurally rather than importing sensor.py, which would
+    be circular - sensor.py imports this module."""
+
+    claims: dict[str, _WriteRecord]
+
+    def async_claims_changed(self) -> None:
+        """Publish the mutated claims as the entity's own state."""
+
+
+class ClaimRegistry:
+    """Routes each light to the state device that tracks it, and reads
+    and writes that device's claims.
+
+    Holds no claims of its own. The dict lives on the state device's
+    tracking entity, which publishes it as an attribute - so what
+    governs behaviour and what you can see in Developer Tools are the
+    same object, not a copy kept in step by convention."""
+
+    def __init__(self, hass: HomeAssistant, entry: ConfigEntry) -> None:
         self._hass = hass
-        self._store: Store[dict[str, _WriteRecord]] = Store(hass, STORAGE_VERSION, STORAGE_KEY)
-        self._data: dict[str, _WriteRecord] = {}
+        self._entry = entry
+        self._stores: dict[str, ClaimStore] = {}
 
-    def snapshot(self) -> dict[str, _WriteRecord]:
-        """A shallow copy of every entity currently tracked, for the
-        diagnostic sensor (sensor.py's _WriteTrackingSensor) - this is
-        otherwise a black box only inspectable indirectly through
-        compute_lighting_groups's combined/needing_off output, which
-        tells you *whether* a light is excluded, never *why*. Read-only:
-        callers must not mutate the returned claims."""
-        return dict(self._data)
+    @callback
+    def register(self, subentry_id: str, store: ClaimStore) -> None:
+        self._stores[subentry_id] = store
 
-    async def async_load(self) -> None:
-        raw = await self._store.async_load() or {}
-        now_iso = dt_util.utcnow().isoformat()
-        data: dict[str, _WriteRecord] = {}
-        for entity_id, value in raw.items():
-            if not isinstance(value, dict):
+    @callback
+    def unregister(self, subentry_id: str) -> None:
+        self._stores.pop(subentry_id, None)
+
+    def scope_for(self, entity_id: str) -> StateInstance | None:
+        """Which state device tracks this light - most specific match
+        wins, and nothing matches means nothing tracks it.
+
+        Deterministic from configuration rather than from whoever wrote
+        last, which is what makes a light's claims live in exactly one
+        place no matter how many automations drive it. Two automations
+        on one room therefore share that room's claims and co-operate,
+        instead of each seeing the other as an intruder.
+
+        A light matching no state device is deliberately left untracked
+        - permanently manageable - rather than swept into a catch-all.
+        An absent scope is a visible signal that a light needs an area
+        or a target; a catch-all would silently absorb the mistake."""
+        entry = er.async_get(self._hass).async_get(entity_id)
+        device_id = entry.device_id if entry else None
+        area_id = entry.area_id if entry else None
+        if area_id is None and device_id:
+            device = dr.async_get(self._hass).async_get(device_id)
+            area_id = device.area_id if device else None
+
+        instances = state_instances(self._entry)  # already sorted by title
+        for key, value in (("entity_id", entity_id), ("device_id", device_id), ("area_id", area_id)):
+            if value is None:
                 continue
-            # Records written before the claims were renamed carry the
-            # old key names. Mapped straight across - the shapes are
-            # identical, only the words changed - so an upgrade doesn't
-            # silently drop every light's protection and reopen "no
-            # record -> free" across the whole house.
-            if "confirmed" in value and "pending" in value:
-                value = {
-                    "observed": value["confirmed"],
-                    "latest": value["pending"],
-                    "last_seen": value.get("last_seen"),
-                }
-            if "observed" in value and "latest" in value:
-                # Older observed/latest records (pre-recorded_at) are
-                # missing the key entirely - .setdefault below back-fills
-                # None on load rather than needing every reader to
-                # handle a missing key as well as an explicit None.
-                for claim in (value.get("observed"), value.get("latest")):
-                    if claim is not None:
-                        claim.setdefault("recorded_at", None)
-                        claim.setdefault("target", None)
-                        # Records from before two-step transitions got
-                        # their own second context.id (see async_record's
-                        # own docstring) are missing this key entirely -
-                        # None here means exactly what it always has for
-                        # a claim with only one context: no secondary to
-                        # match against.
-                        claim.setdefault("secondary_context_id", None)
-                # Records from before last_seen existed (every record
-                # persisted prior to this feature shipping) get backfilled
-                # to *now*, not left missing or backdated - deliberately
-                # conservative: this is what gives every already-tracked
-                # light a fresh full STALE_RECORD_MAX_AGE_DAYS window
-                # after upgrading, rather than risking a one-time mass
-                # prune of legitimate, currently-relevant records the very
-                # first time this loads on an existing install.
-                value.setdefault("last_seen", now_iso)
-                data[entity_id] = value  # already this shape
-            elif "context_id" in value:
-                # The single-record format this integration shipped with
-                # before two claims existed - one {context_id,
-                # owner_id} per entity. Treated as an already-established
-                # observed baseline with nothing latest, not dropped
-                # outright - an upgrade shouldn't itself reopen "no
-                # record -> free" for every currently-protected light in
-                # the house, the same class of incident the restart-blip
-                # fix above exists to prevent.
-                data[entity_id] = {
-                    "observed": {
-                        "context_id": value["context_id"],
-                        "secondary_context_id": None,
-                        "owner_id": value.get("owner_id"),
-                        "recorded_at": None,
-                        "target": None,
-                    },
-                    "latest": None,
-                    "last_seen": now_iso,
-                }
-            # Anything else (the even older bare-string format, or
-            # malformed data) is dropped - same safe "no record -> free"
-            # fallback this integration has always used for data it
-            # doesn't recognise.
-        self._data = data
+            for instance in instances:
+                if value in _as_list(instance.target.get(key)):
+                    return instance
+        return None
 
-    async def async_resync_to_live_state(self, hass: HomeAssistant) -> None:
-        """Called once at integration startup, right after async_load().
+    def _store_for(self, entity_id: str) -> ClaimStore | None:
+        """The live tracking entity holding this light's claims.
 
-        A restart recreates every entity's state object, so the first
-        report after one always carries a fresh context.id even when the
-        value never changed and the device never went offline - which is
-        indistinguishable from a genuine external change. Without this,
-        every already-tracked light would look permanently overridden
-        after any restart.
+        None whenever the light resolves to no scope, *or* its scope's
+        entity hasn't been added yet - services are registered before
+        the platforms are forwarded (see __init__.py), so a write can
+        genuinely arrive first. Such a write is dropped: the light stays
+        untracked and therefore manageable, and the next tick records it
+        properly. Nothing is queued, because a lighting override that
+        goes unrecorded for one tick costs nothing."""
+        # An already-tracked light keeps its existing home even if the
+        # targets have since changed, so re-pointing a state device
+        # can't strand claims in a scope nothing reads any more.
+        for store in self._stores.values():
+            if entity_id in store.claims:
+                return store
+        instance = self.scope_for(entity_id)
+        return self._stores.get(instance.subentry_id) if instance else None
 
-        Snapshots each tracked entity's live context as a new `observed`
-        baseline (owner_id/recorded_at None - observed, not written, the
-        same convention async_record's first-write baseline uses). An
-        entity still unavailable here isn't skipped forever:
-        async_start_listening's recovery branch performs the identical
-        snapshot when it next reports, closing a startup-ordering race
-        where a restart leaves many entities still mid-reconnect."""
-        changed = False
-        for entity_id in list(self._data):
-            state = hass.states.get(entity_id)
-            if state is None or state.state in ("unavailable", "unknown"):
-                continue
-            self._snapshot_observed(entity_id, state.context.id)
-            changed = True
-        if changed:
-            await self._store.async_save(self._data)
-            async_dispatcher_send(self._hass, SIGNAL_WRITE_TRACKING_UPDATED)
+    def _record(self, entity_id: str) -> _WriteRecord | None:
+        store = self._store_for(entity_id)
+        return store.claims.get(entity_id) if store else None
 
-    def _snapshot_observed(self, entity_id: str, context_id: str) -> None:
+    def all_records(self) -> dict[str, _WriteRecord]:
+        """Every tracked light across every scope, flattened. A light
+        can only appear once - _store_for keeps it in one scope."""
+        merged: dict[str, _WriteRecord] = {}
+        for store in self._stores.values():
+            merged.update(store.claims)
+        return merged
+
+    def records_for_scope(self, subentry_id: str) -> dict[str, _WriteRecord]:
+        store = self._stores.get(subentry_id)
+        return dict(store.claims) if store else {}
+
+    @callback
+    def _notify(self, stores: Iterable[ClaimStore]) -> None:
+        for store in stores:
+            store.async_claims_changed()
+        async_dispatcher_send(self._hass, SIGNAL_WRITE_TRACKING_UPDATED)
+
+    def _snapshot_observed(self, entity_id: str, context_id: str) -> ClaimStore | None:
         """Replace `observed` with a fresh baseline built from a live
-        context.id just observed for this entity - owner_id=None and
-        recorded_at=None, since this is merely *observed*, not a write
+        context.id just observed for this entity - recorded_at=None,
+        since this is merely *observed*, not a write
         this integration actually made (the same convention
         async_record's synthetic first-write baseline uses - see its own
         docstring). `latest` is left untouched: a claim from before
         this observation can never match this fresh context either way,
         so it's simply inert until the next real write overwrites it.
-        Shared by async_resync_to_live_state's startup pass and
-        async_start_listening's live recovery handling below - the same
-        operation, triggered two different ways."""
-        record = self._data.get(entity_id)
-        self._data[entity_id] = {
+        Used by async_start_listening's recovery branch. Returns the
+        store it touched so the caller can publish it, or None when the
+        light belongs to no scope."""
+        store = self._store_for(entity_id)
+        if store is None:
+            return None
+        record = store.claims.get(entity_id)
+        store.claims[entity_id] = {
             "observed": {
                 "context_id": context_id,
                 "secondary_context_id": None,
-                "owner_id": None,
                 "recorded_at": None,
                 "target": None,
             },
             "latest": record.get("latest") if record else None,
             "last_seen": dt_util.utcnow().isoformat(),
         }
+        return store
 
     def observed_context_id(self, entity_id: str) -> str | None:
-        record = self._data.get(entity_id)
+        record = self._record(entity_id)
         claim = record.get("observed") if record else None
         return claim["context_id"] if claim else None
 
-    def observed_owner_id(self, entity_id: str) -> str | None:
-        record = self._data.get(entity_id)
-        claim = record.get("observed") if record else None
-        return claim.get("owner_id") if claim else None
-
     def observed_target(self, entity_id: str) -> dict | None:
-        record = self._data.get(entity_id)
+        record = self._record(entity_id)
         claim = record.get("observed") if record else None
         return claim.get("target") if claim else None
 
     def observed_secondary_context_id(self, entity_id: str) -> str | None:
-        record = self._data.get(entity_id)
+        record = self._record(entity_id)
         claim = record.get("observed") if record else None
         return claim.get("secondary_context_id") if claim else None
 
     def latest_context_id(self, entity_id: str) -> str | None:
-        record = self._data.get(entity_id)
+        record = self._record(entity_id)
         claim = record.get("latest") if record else None
         return claim["context_id"] if claim else None
 
-    def latest_owner_id(self, entity_id: str) -> str | None:
-        record = self._data.get(entity_id)
-        claim = record.get("latest") if record else None
-        return claim.get("owner_id") if claim else None
-
     def latest_target(self, entity_id: str) -> dict | None:
-        record = self._data.get(entity_id)
+        record = self._record(entity_id)
         claim = record.get("latest") if record else None
         return claim.get("target") if claim else None
 
     def latest_secondary_context_id(self, entity_id: str) -> str | None:
-        record = self._data.get(entity_id)
+        record = self._record(entity_id)
         claim = record.get("latest") if record else None
         return claim.get("secondary_context_id") if claim else None
 
@@ -333,20 +326,21 @@ class LastWriteTracker:
         the live colour temperature drifted a single Kelvin past the
         rescue tolerance of a `latest` claim that was itself frozen the
         moment exclusion began. A no-op for an entity with no record."""
-        changed = False
+        touched: set[int] = set()
+        stores = []
         for entity_id in entity_ids:
-            if self._data.pop(entity_id, None) is not None:
-                changed = True
-        if changed:
-            await self._store.async_save(self._data)
-            async_dispatcher_send(self._hass, SIGNAL_WRITE_TRACKING_UPDATED)
+            store = self._store_for(entity_id)
+            if store is not None and store.claims.pop(entity_id, None) is not None and id(store) not in touched:
+                touched.add(id(store))
+                stores.append(store)
+        if stores:
+            self._notify(stores)
 
     async def async_record(
         self,
         entity_ids: list[str],
         live_context_before_write: dict[str, str | None],
         context_id: str,
-        owner_id: str | None = None,
         targets: dict[str, dict] | None = None,
         secondary_context_ids: dict[str, str] | None = None,
         context_id_overrides: dict[str, str] | None = None,
@@ -369,7 +363,7 @@ class LastWriteTracker:
         Otherwise `observed` is left untouched and only `latest` is
         replaced. The exception is an entity's first-ever write, which has
         no `observed` to fall back on - the pre-write context is recorded
-        as `observed` with owner_id=None, so a dropped first write still
+        as `observed`, so a dropped first write still
         has a retry signal, and that synthetic baseline never blocks
         anyone else's claim.
 
@@ -388,8 +382,18 @@ class LastWriteTracker:
         targets = targets or {}
         secondary_context_ids = secondary_context_ids or {}
         context_id_overrides = context_id_overrides or {}
+        touched: set[int] = set()
+        stores = []
         for entity_id in entity_ids:
-            old = self._data.get(entity_id)
+            store = self._store_for(entity_id)
+            if store is None:
+                # No state device covers this light (or its scope's
+                # entity isn't up yet) - see _store_for.
+                continue
+            if id(store) not in touched:
+                touched.add(id(store))
+                stores.append(store)
+            old = store.claims.get(entity_id)
             observed: Optional[_ContextClaim]
             if old is not None:
                 old_latest = old.get("latest")
@@ -403,26 +407,24 @@ class LastWriteTracker:
                     {
                         "context_id": baseline_context,
                         "secondary_context_id": None,
-                        "owner_id": None,
                         "recorded_at": None,
                         "target": None,
                     }
                     if baseline_context is not None
                     else None
                 )
-            self._data[entity_id] = {
+            store.claims[entity_id] = {
                 "observed": observed,
                 "latest": {
                     "context_id": context_id_overrides.get(entity_id, context_id),
                     "secondary_context_id": secondary_context_ids.get(entity_id),
-                    "owner_id": owner_id,
                     "recorded_at": dt_util.utcnow().isoformat(),
                     "target": targets.get(entity_id),
                 },
                 "last_seen": dt_util.utcnow().isoformat(),
             }
-        await self._store.async_save(self._data)
-        async_dispatcher_send(self._hass, SIGNAL_WRITE_TRACKING_UPDATED)
+        if stores:
+            self._notify(stores)
 
     async def async_prune_stale(self) -> None:
         """Discards any tracked record not written or observed in over
@@ -443,7 +445,7 @@ class LastWriteTracker:
         the same "don't delete on ambiguity" preference used elsewhere."""
         cutoff = dt_util.utcnow() - timedelta(days=STALE_RECORD_MAX_AGE_DAYS)
         stale = []
-        for entity_id, record in self._data.items():
+        for entity_id, record in self.all_records().items():
             last_seen = record.get("last_seen")
             if not last_seen:
                 continue
@@ -452,16 +454,24 @@ class LastWriteTracker:
                 stale.append(entity_id)
         if not stale:
             return
+        touched: set[int] = set()
+        stores = []
         for entity_id in stale:
-            del self._data[entity_id]
-        await self._store.async_save(self._data)
-        async_dispatcher_send(self._hass, SIGNAL_WRITE_TRACKING_UPDATED)
+            store = self._store_for(entity_id)
+            if store is None:
+                continue
+            store.claims.pop(entity_id, None)
+            if id(store) not in touched:
+                touched.add(id(store))
+                stores.append(store)
+        if stores:
+            self._notify(stores)
 
     def async_start_listening(self, hass: HomeAssistant) -> CALLBACK_TYPE:
         """Watches both directions of the unavailable/unknown boundary for
         every tracked entity, via one hass-wide "state_changed" listener -
         cheaper than keeping per-entity subscriptions in sync with
-        self._data as apply_lighting adds entities over time.
+        the tracked set as apply_lighting adds entities over time.
 
         - **Drop** (a real on/off state -> unavailable/unknown): clears
           the record entirely, so the eventual reconnect - a write we
@@ -469,8 +479,8 @@ class LastWriteTracker:
           no claim to conflict with.
         - **Recovery** (unavailable/unknown, or no prior state, -> a real
           state): snapshots the observed context as the new `observed`
-          baseline, the same operation async_resync_to_live_state does at
-          startup, triggered by the live event that pass can miss.
+          baseline, so a reconnect - a write we can't intercept, since
+          it isn't a service call at all - doesn't read as an override.
 
         Both directions require the *other* endpoint to be a genuine
         on/off state, not just the destination. Almost every entity
@@ -482,7 +492,8 @@ class LastWriteTracker:
         @callback
         def _on_state_changed(event: Event[EventStateChangedData]) -> None:
             entity_id = event.data["entity_id"]
-            if entity_id not in self._data:
+            store = self._store_for(entity_id)
+            if store is None or entity_id not in store.claims:
                 return
             old_state = event.data["old_state"]
             new_state = event.data["new_state"]
@@ -506,13 +517,12 @@ class LastWriteTracker:
             new_explicitly_unavailable = new_state is not None and new_state.state in ("unavailable", "unknown")
 
             if old_available and new_explicitly_unavailable:
-                del self._data[entity_id]
+                store.claims.pop(entity_id, None)
             elif not old_available and new_available:
                 self._snapshot_observed(entity_id, new_state.context.id)
             else:
                 return
 
-            hass.async_create_task(self._store.async_save(self._data))
-            async_dispatcher_send(hass, SIGNAL_WRITE_TRACKING_UPDATED)
+            self._notify([store])
 
         return hass.bus.async_listen("state_changed", _on_state_changed)

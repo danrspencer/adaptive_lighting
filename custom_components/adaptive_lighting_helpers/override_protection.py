@@ -275,25 +275,21 @@ def classify(
     return "overridden", None, None
 
 
-def is_blocked(status: str, claim_owner_id: Optional[str], owner_id: Optional[str], force: bool = False) -> bool:
-    """Turns classify()'s raw `(status, claim_owner_id)` into the actual
-    yes/no "should this write be blocked" decision for one specific
-    caller - the one remaining step both grouping.py's
-    EntityLookup.externally_set() and the check_ownership service need
-    on top of the shared classification, kept here too so neither
-    re-derives it independently.
+def is_blocked(status: str, force: bool = False) -> bool:
+    """Turns classify()'s raw status into the actual yes/no "should this
+    write be blocked" decision - the one remaining step both grouping.py's
+    EntityLookup.externally_set() and the check_ownership service need on
+    top of the shared classification, kept here so neither re-derives it.
 
-    `force` bypasses outright, regardless of `owner_id`. `owner_id=None`
-    also bypasses (skip the check altogether) but - unlike `force` -
-    doesn't claim anything for a later call to recognise. See
-    write_tracking.py's module docstring for the full force-vs-
-    omitted-owner_id distinction."""
-    if force or owner_id is None:
+    There is no longer any owner comparison to make. A light's claims
+    live on exactly one state device, resolved from configuration rather
+    than from whichever caller wrote last (see write_tracking.py's
+    scope_for), so a `controlled` claim is by construction the claim of
+    the scope that owns this light. Two automations driving one room
+    write into the same claims and therefore co-operate, instead of each
+    reading the other as an intruder.
+
+    `force` still bypasses outright."""
+    if force:
         return False
-    if status in ("off", "untracked"):
-        return False
-    if status == "overridden":
-        return True
-    # "controlled" - blocked only if the matching claim belongs to
-    # someone else.
-    return claim_owner_id is not None and claim_owner_id != owner_id
+    return status == "overridden"

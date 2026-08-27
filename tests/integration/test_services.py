@@ -27,14 +27,16 @@ from pytest_homeassistant_custom_component.common import (
     async_mock_service,
 )
 
-from homeassistant.config_entries import ConfigEntryState
+from homeassistant.config_entries import ConfigEntryState, ConfigSubentryData
 from homeassistant.core import Context, HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 
 from custom_components.adaptive_lighting_helpers import _build_lookup, async_setup_entry
 from custom_components.adaptive_lighting_helpers.grouping import build_groups
-from custom_components.adaptive_lighting_helpers.write_tracking import STALE_RECORD_MAX_AGE_DAYS, LastWriteTracker
+from custom_components.adaptive_lighting_helpers.const import CONF_TARGET, SUBENTRY_TYPE_STATE
+from custom_components.adaptive_lighting_helpers.coordinator import state_instances
+from custom_components.adaptive_lighting_helpers.write_tracking import STALE_RECORD_MAX_AGE_DAYS, ClaimRegistry
 
 DOMAIN = "adaptive_lighting_helpers"
 
@@ -55,12 +57,83 @@ async def _setup_entry(hass: HomeAssistant) -> MockConfigEntry:
     call requires the entry to already be LOADED - normally something
     hass.config_entries.async_setup() itself does around calling into
     the component, which this helper deliberately bypasses."""
-    entry = MockConfigEntry(domain=DOMAIN, data={})
+    await _track_test_lights(hass)
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={},
+        subentries_data=[
+            ConfigSubentryData(
+                subentry_type=SUBENTRY_TYPE_STATE,
+                title="Test Scope",
+                unique_id="test_scope",
+                data={CONF_TARGET: {"area_id": [_test_area(hass).id]}},
+            )
+        ],
+    )
     entry.add_to_hass(hass)
     entry.mock_state(hass, ConfigEntryState.LOADED)
     assert await async_setup_entry(hass, entry)
     await hass.async_block_till_done()
+    await _attach_tracking_sensors(hass, entry)
     return entry
+
+
+async def _attach_tracking_sensors(hass: HomeAssistant, entry: MockConfigEntry) -> None:
+    """Claims live on each state device's tracking entity, so the
+    registry has nothing to write to until those entities exist.
+
+    async_forward_entry_setups can't create them here - it resolves the
+    manifest's frontend dependency, which this suite deliberately avoids
+    (see _setup_entry). So the real sensor platform is invoked directly
+    with a capturing async_add_entities, exercising the real
+    _StateTrackingSensor and the real registry routing; only HA's state
+    publication is stubbed out, which test_state_devices.py covers
+    against a properly added entity."""
+    from custom_components.adaptive_lighting_helpers.sensor import async_setup_entry as sensor_setup
+
+    added: list = []
+    await sensor_setup(hass, entry, lambda entities, **kw: added.extend(entities))
+    registry = _registry(hass)
+    for instance, entity in zip(state_instances(entry), [e for e in added if hasattr(e, "claims")]):
+        entity.async_claims_changed = lambda: None
+        registry.register(instance.subentry_id, entity)
+
+
+def _registry(hass: HomeAssistant) -> ClaimRegistry:
+    """The one live registry, from hass.data. Tests used to build a
+    second tracker against the same Store to read state back; there is
+    no Store any more, and no second copy to read."""
+    return next(v for v in hass.data[DOMAIN].values() if isinstance(v, ClaimRegistry))
+
+
+def _test_area(hass: HomeAssistant):
+    """One area every test light belongs to, so the state device created
+    in _setup_entry actually resolves them - claims live on a state
+    device now, and a light matching none simply isn't tracked."""
+    from homeassistant.helpers import area_registry as ar
+
+    return ar.async_get(hass).async_get_or_create("Adaptive Test Area")
+
+
+# Every light these tests use. Registered into the test area once, in
+# _setup_entry, rather than lazily per _set_light: a registry write
+# trips two_step_check.py's 5s-debounced watcher, which has to be
+# flushed or the harness fails on a lingering timer (see
+# _label_two_step), and doing that once in an async place beats making
+# every _set_light call await something.
+_TEST_LIGHTS = ("light.a", "light.never_tracked", "light.recovering", "light.sibling")
+
+
+async def _track_test_lights(hass: HomeAssistant) -> None:
+    registry = er.async_get(hass)
+    area_id = _test_area(hass).id
+    for entity_id in _TEST_LIGHTS:
+        created = registry.async_get_or_create(
+            "light", "test", entity_id, suggested_object_id=entity_id.split(".", 1)[1]
+        )
+        registry.async_update_entity(created.entity_id, area_id=area_id)
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=30))
+    await hass.async_block_till_done()
 
 
 def _set_light(hass: HomeAssistant, entity_id: str, state: str, *, context: Context | None = None, **attrs) -> None:
@@ -236,12 +309,12 @@ async def test_check_ownership_reports_untracked_for_a_brand_new_entity(setup_in
     result = await hass.services.async_call(
         DOMAIN,
         "check_ownership",
-        {"entities": ["light.a"], "owner_id": "automation.test_room"},
+        {"entities": ["light.a"]},
         blocking=True,
         return_response=True,
     )
 
-    assert result["results"]["light.a"] == {"blocked": False, "status": "untracked", "owner_id": None, "matched_via": None}
+    assert result["results"]["light.a"] == {"blocked": False, "status": "untracked", "matched_via": None}
 
 
 async def test_check_ownership_and_record_ownership_round_trip(setup_integration: HomeAssistant):
@@ -255,7 +328,7 @@ async def test_check_ownership_and_record_ownership_round_trip(setup_integration
     await hass.services.async_call(
         DOMAIN,
         "record_ownership",
-        {"entities": ["light.a"], "owner_id": "automation.test_room", "targets": {"light.a": {"brightness": 100, "color_temp_kelvin": 3000}}},
+        {"entities": ["light.a"], "targets": {"light.a": {"brightness": 100, "color_temp_kelvin": 3000}}},
         blocking=True,
         context=our_context,
     )
@@ -269,14 +342,13 @@ async def test_check_ownership_and_record_ownership_round_trip(setup_integration
     result = await hass.services.async_call(
         DOMAIN,
         "check_ownership",
-        {"entities": ["light.a"], "owner_id": "automation.test_room"},
+        {"entities": ["light.a"]},
         blocking=True,
         return_response=True,
     )
     assert result["results"]["light.a"] == {
         "blocked": False,
         "status": "controlled",
-        "owner_id": "automation.test_room",
         "matched_via": "latest-context",
     }
 
@@ -286,27 +358,28 @@ async def test_check_ownership_and_record_ownership_round_trip(setup_integration
     result = await hass.services.async_call(
         DOMAIN,
         "check_ownership",
-        {"entities": ["light.a"], "owner_id": "automation.test_room"},
+        {"entities": ["light.a"]},
         blocking=True,
         return_response=True,
     )
-    assert result["results"]["light.a"] == {"blocked": True, "status": "overridden", "owner_id": None, "matched_via": None}
+    assert result["results"]["light.a"] == {"blocked": True, "status": "overridden", "matched_via": None}
 
-    # A *different* owner_id asking about the same still-matching claim
-    # correctly sees it as blocked too (it's not theirs, even though
-    # nothing about the light's context has changed since our own write).
+    # Another caller asking about the same still-matching claim sees it
+    # as *not* blocked. There is no owner comparison any more: the claim
+    # belongs to the state device that covers this light, so any caller
+    # writing it is writing through that same scope. Two automations
+    # driving one room co-operate rather than blocking each other.
     _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=100, color_temp_kelvin=3000, context=our_context)
     result = await hass.services.async_call(
         DOMAIN,
         "check_ownership",
-        {"entities": ["light.a"], "owner_id": "automation.other_room"},
+        {"entities": ["light.a"]},
         blocking=True,
         return_response=True,
     )
     assert result["results"]["light.a"] == {
-        "blocked": True,
+        "blocked": False,
         "status": "controlled",
-        "owner_id": "automation.test_room",
         "matched_via": "latest-context",
     }
 
@@ -318,7 +391,7 @@ async def test_check_ownership_force_bypasses_regardless_of_claims(setup_integra
     await hass.services.async_call(
         DOMAIN,
         "record_ownership",
-        {"entities": ["light.a"], "owner_id": "automation.test_room"},
+        {"entities": ["light.a"]},
         blocking=True,
         context=our_context,
     )
@@ -327,7 +400,7 @@ async def test_check_ownership_force_bypasses_regardless_of_claims(setup_integra
     result = await hass.services.async_call(
         DOMAIN,
         "check_ownership",
-        {"entities": ["light.a"], "owner_id": "automation.other_room", "force": True},
+        {"entities": ["light.a"], "force": True},
         blocking=True,
         return_response=True,
     )
@@ -341,7 +414,7 @@ async def test_check_ownership_off_light_is_never_blocked(setup_integration: Hom
     await hass.services.async_call(
         DOMAIN,
         "record_ownership",
-        {"entities": ["light.a"], "owner_id": "automation.test_room"},
+        {"entities": ["light.a"]},
         blocking=True,
         context=our_context,
     )
@@ -353,16 +426,16 @@ async def test_check_ownership_off_light_is_never_blocked(setup_integration: Hom
     result = await hass.services.async_call(
         DOMAIN,
         "check_ownership",
-        {"entities": ["light.a"], "owner_id": "automation.other_room"},
+        {"entities": ["light.a"]},
         blocking=True,
         return_response=True,
     )
-    assert result["results"]["light.a"] == {"blocked": False, "status": "off", "owner_id": None, "matched_via": None}
+    assert result["results"]["light.a"] == {"blocked": False, "status": "off", "matched_via": None}
 
 
 async def test_clear_ownership_frees_a_light_stuck_overridden(setup_integration: HomeAssistant):
     """The manual escape hatch: an entity showing "overridden" (blocked
-    for any owner_id) with no other way back - see write_tracking.py's
+    for any caller) with no other way back - see write_tracking.py's
     async_clear docstring for why this can happen on its own (an
     excluded entity's own pending target goes stale forever, since
     build_groups() never calls record_ownership/async_record for
@@ -375,7 +448,7 @@ async def test_clear_ownership_frees_a_light_stuck_overridden(setup_integration:
     await hass.services.async_call(
         DOMAIN,
         "record_ownership",
-        {"entities": ["light.a"], "owner_id": "automation.test_room"},
+        {"entities": ["light.a"]},
         blocking=True,
         context=our_context,
     )
@@ -386,7 +459,7 @@ async def test_clear_ownership_frees_a_light_stuck_overridden(setup_integration:
     result = await hass.services.async_call(
         DOMAIN,
         "check_ownership",
-        {"entities": ["light.a"], "owner_id": "automation.test_room"},
+        {"entities": ["light.a"]},
         blocking=True,
         return_response=True,
     )
@@ -397,11 +470,11 @@ async def test_clear_ownership_frees_a_light_stuck_overridden(setup_integration:
     result = await hass.services.async_call(
         DOMAIN,
         "check_ownership",
-        {"entities": ["light.a"], "owner_id": "automation.test_room"},
+        {"entities": ["light.a"]},
         blocking=True,
         return_response=True,
     )
-    assert result["results"]["light.a"] == {"blocked": False, "status": "untracked", "owner_id": None, "matched_via": None}
+    assert result["results"]["light.a"] == {"blocked": False, "status": "untracked", "matched_via": None}
 
 
 async def test_clear_ownership_is_a_noop_for_an_untracked_entity(setup_integration: HomeAssistant):
@@ -418,7 +491,7 @@ async def test_override_protection_survives_a_real_write_tracking_round_trip(set
     write_tracking.py Store and __init__.py's context propagation, not
     a fake. A light manually changed (a different context.id) after our
     own write must be left alone on the next non-forced call with the
-    same owner_id.
+    the same state device.
 
     This is also the direct regression test for the first-write
     baseline in write_tracking.py's async_record(): only one
@@ -440,7 +513,6 @@ async def test_override_protection_survives_a_real_write_tracking_round_trip(set
         brightness=180,
         color_temp_kelvin=3200,
         transition=2,
-        owner_id='automation.test_room',
         context=our_context,
     )
     assert len(turn_on_calls) == 1
@@ -475,7 +547,6 @@ async def test_override_protection_survives_a_real_write_tracking_round_trip(set
         brightness=180,
         color_temp_kelvin=3200,
         transition=2,
-        owner_id='automation.test_room',
     )
 
     # Still just the one call from before - the second, non-forced call
@@ -513,7 +584,6 @@ async def test_a_devices_own_delayed_echo_does_not_permanently_lock_the_light_ou
         brightness=180,
         color_temp_kelvin=3200,
         transition=2,
-        owner_id='automation.test_room',
         context=first_context,
     )
     _set_light(
@@ -527,7 +597,7 @@ async def test_a_devices_own_delayed_echo_does_not_permanently_lock_the_light_ou
     )
 
     second_context = Context()
-    await _apply(hass, ['light.a'], transition=2, owner_id='automation.test_room', context=second_context)
+    await _apply(hass, ['light.a'], transition=2, context=second_context)
     _set_light(
         hass,
         "light.a",
@@ -560,7 +630,7 @@ async def test_a_devices_own_delayed_echo_does_not_permanently_lock_the_light_ou
     # Same target - nothing should be written (already correct either
     # way), but this must NOT be the moment the light gets marked
     # externally-set.
-    await _apply(hass, ['light.a'], transition=2, owner_id='automation.test_room')
+    await _apply(hass, ['light.a'], transition=2)
     assert len(turn_on_calls) == 2
 
     # The curve moves on to a genuinely different value - the real test:
@@ -571,7 +641,6 @@ async def test_a_devices_own_delayed_echo_does_not_permanently_lock_the_light_ou
         brightness=100,
         color_temp_kelvin=4500,
         transition=2,
-        owner_id='automation.test_room',
     )
     assert len(turn_on_calls) == 3
 
@@ -589,7 +658,7 @@ async def test_two_step_transition_generates_two_distinct_contexts(setup_integra
     await _label_two_step(hass, "light.a")
     _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
 
-    await _apply(hass, ['light.a'], transition=0.2, owner_id='automation.room')
+    await _apply(hass, ['light.a'], transition=0.2)
 
     assert len(turn_on_calls) == 2
     brightness_call, color_call = turn_on_calls
@@ -600,8 +669,7 @@ async def test_two_step_transition_generates_two_distinct_contexts(setup_integra
     # call for a two-step entity anymore - see _two_step_turn_on).
     assert brightness_call.context.id != color_call.context.id
 
-    tracker = LastWriteTracker(hass)
-    await tracker.async_load()
+    tracker = _registry(hass)
     assert tracker.latest_context_id("light.a") == color_call.context.id
     assert tracker.latest_secondary_context_id("light.a") == brightness_call.context.id
 
@@ -622,7 +690,7 @@ async def test_two_step_brightness_step_landing_alone_is_recognised_as_ours(setu
     await _label_two_step(hass, "light.a")
     _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
 
-    await _apply(hass, ['light.a'], transition=0.2, owner_id='automation.room')
+    await _apply(hass, ['light.a'], transition=0.2)
     assert len(turn_on_calls) == 2
     brightness_context = turn_on_calls[0].context
 
@@ -637,14 +705,13 @@ async def test_two_step_brightness_step_landing_alone_is_recognised_as_ours(setu
     result = await hass.services.async_call(
         DOMAIN,
         "check_ownership",
-        {"entities": ["light.a"], "owner_id": "automation.room"},
+        {"entities": ["light.a"]},
         blocking=True,
         return_response=True,
     )
     assert result["results"]["light.a"] == {
         "blocked": False,
         "status": "controlled",
-        "owner_id": "automation.room",
         "matched_via": "latest-context",
     }
 
@@ -663,10 +730,9 @@ async def test_two_step_promotion_recognises_a_match_via_the_secondary_context(s
     await _label_two_step(hass, "light.a")
     _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
 
-    await _apply(hass, ['light.a'], transition=0.2, owner_id='automation.room')
+    await _apply(hass, ['light.a'], transition=0.2)
 
-    tracker = LastWriteTracker(hass)
-    await tracker.async_load()
+    tracker = _registry(hass)
     brightness_ctx_1 = tracker.latest_secondary_context_id("light.a")
     color_ctx_1 = tracker.latest_context_id("light.a")
     assert brightness_ctx_1 is not None and color_ctx_1 is not None
@@ -677,17 +743,16 @@ async def test_two_step_promotion_recognises_a_match_via_the_secondary_context(s
     # dropped-first-write test below already covers).
     _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=200, context=Context(id=brightness_ctx_1))
 
-    await _apply(hass, ['light.a'], transition=0.2, owner_id='automation.room')
+    await _apply(hass, ['light.a'], transition=0.2)
 
-    # A fresh LastWriteTracker/Store, not the one used above - the test
+    # A fresh ClaimRegistry/Store, not the one used above - the test
     # harness's mock_storage patch caches a Store instance's first-ever
     # load in `store._data` and never refreshes it on a later load (real
     # HA's Store clears that field right after a write; the mock deliberately
     # doesn't, since it exists to skip disk I/O, not to model write-then-
     # reread staleness) - reusing `tracker` here would just re-read the
     # snapshot from before call 2 ran.
-    tracker_after = LastWriteTracker(hass)
-    await tracker_after.async_load()
+    tracker_after = _registry(hass)
     # Promoted: the first write's own claim (both its contexts) is now
     # `confirmed`, proven via the secondary (brightness) context match,
     # not the primary (colour) one - the light never reported the
@@ -721,7 +786,6 @@ async def test_a_dropped_first_write_self_heals_on_the_next_tick_with_no_interfe
         brightness=180,
         color_temp_kelvin=3200,
         transition=2,
-        owner_id='automation.test_room',
     )
     assert len(turn_on_calls) == 1
 
@@ -734,7 +798,6 @@ async def test_a_dropped_first_write_self_heals_on_the_next_tick_with_no_interfe
         brightness=180,
         color_temp_kelvin=3200,
         transition=2,
-        owner_id='automation.test_room',
     )
 
     # Retried, not locked out - the unchanged live context matched the
@@ -744,7 +807,7 @@ async def test_a_dropped_first_write_self_heals_on_the_next_tick_with_no_interfe
 
 
 async def test_force_bypasses_protection_and_reclaims_ownership(setup_integration: HomeAssistant):
-    """force=True writes through regardless, and still records owner_id
+    """force=True writes through regardless, and still records the write
     - so a later, non-forced call under that same owner_id recognises it
     as its own rather than finding an orphaned record (the bug `force`
     itself was added to fix - see grouping.py's externally_set() and
@@ -761,7 +824,6 @@ async def test_force_bypasses_protection_and_reclaims_ownership(setup_integratio
         brightness=180,
         color_temp_kelvin=3200,
         transition=2,
-        owner_id='automation.other_room',
     )
     assert len(turn_on_calls) == 1  # the "other room" claims it
 
@@ -772,7 +834,6 @@ async def test_force_bypasses_protection_and_reclaims_ownership(setup_integratio
         brightness=180,
         color_temp_kelvin=3200,
         transition=2,
-        owner_id='automation.test_room',
         force=True,
         context=forced_context,
     )
@@ -804,7 +865,6 @@ async def test_force_bypasses_protection_and_reclaims_ownership(setup_integratio
             "entities": ["light.a"],
             "brightness": 180,
             "color_temp_kelvin": 3200,
-            "owner_id": "automation.test_room",
         },
         blocking=True,
         return_response=True,
@@ -816,7 +876,7 @@ async def test_force_bypasses_protection_and_reclaims_ownership(setup_integratio
 
 
 async def test_write_tracking_record_is_cleared_when_light_goes_unavailable(setup_integration: HomeAssistant):
-    """Confirms LastWriteTracker.async_start_listening() (wired up by
+    """Confirms ClaimRegistry.async_start_listening() (wired up by
     async_setup_entry, already active via the setup_integration fixture)
     actually does what it's for - see write_tracking.py's own module
     docstring on the "device regaining power" gap this closes. Without
@@ -828,7 +888,7 @@ async def test_write_tracking_record_is_cleared_when_light_goes_unavailable(setu
     turn_on_calls = async_mock_service(hass, "light", "turn_on")
 
     _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
-    await _apply(hass, ['light.a'], brightness=180, color_temp_kelvin=3200, transition=2, owner_id='automation.room')
+    await _apply(hass, ['light.a'], brightness=180, color_temp_kelvin=3200, transition=2)
     assert len(turn_on_calls) == 1
 
     # The device drops off the network.
@@ -846,242 +906,8 @@ async def test_write_tracking_record_is_cleared_when_light_goes_unavailable(setu
     # stale record left to conflict with the light's new, unrelated
     # context. Before this fix, this second call would have found the
     # light "externally set" and left it alone.
-    await _apply(hass, ['light.a'], brightness=180, color_temp_kelvin=3200, transition=2, owner_id='automation.room')
+    await _apply(hass, ['light.a'], brightness=180, color_temp_kelvin=3200, transition=2)
     assert len(turn_on_calls) == 2
-
-
-async def test_a_restart_resyncs_confirmed_to_live_context_so_an_on_light_stays_manageable(
-    setup_integration: HomeAssistant,
-):
-    """The bug caught live the day this shipped: a plain HA restart
-    recreates every entity's state object from scratch, so the first
-    state report after restart always carries a fresh context.id - even
-    for a light that never actually dropped off the network and whose
-    reported value hasn't changed at all. Confirmed on the real
-    instance: light.kitchen_1, genuinely on, excluded from every tick
-    purely because of a restart. async_resync_to_live_state (called once
-    at startup, right after async_load) is what fixes this - simulated
-    here via a second LastWriteTracker loading the same persisted Store
-    data, the same "restart" a real process go-around would produce."""
-    hass = setup_integration
-    turn_on_calls = async_mock_service(hass, "light", "turn_on")
-
-    _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
-    await _apply(hass, ['light.a'], brightness=180, color_temp_kelvin=3200, transition=2, owner_id='automation.room')
-    assert len(turn_on_calls) == 1
-
-    # Simulate the restart in one step: light.a is still "off" (the
-    # mocked light.turn_on above never actually touched hass.states), so
-    # this transition to "on" is itself a genuine state change and gets
-    # a real fresh context - exactly a real restart's first post-restart
-    # state report for a light that never actually went unavailable, so
-    # test_write_tracking_record_is_cleared_when_light_goes_unavailable's
-    # listener-based fix above never gets a chance to fire. (An
-    # identical-value re-set here would be silently treated as a
-    # no-op "state_reported" and its context discarded - HA only
-    # replaces context on a genuine change, confirmed elsewhere in this
-    # file - so this has to be the light's *first* transition to "on",
-    # not a second same-value re-set.)
-    restart_context = Context()
-    _set_light(
-        hass,
-        "light.a",
-        "on",
-        supported_color_modes=["color_temp"],
-        brightness=180,
-        color_temp_kelvin=3200,
-        context=restart_context,
-    )
-
-    resynced_tracker = LastWriteTracker(hass)
-    await resynced_tracker.async_load()
-    await resynced_tracker.async_resync_to_live_state(hass)
-
-    assert resynced_tracker.observed_context_id("light.a") == restart_context.id
-    assert resynced_tracker.observed_owner_id("light.a") is None
-
-    # The real, end-to-end proof: a plain, non-forced check from the
-    # same owner still manages the light afterward, rather than finding
-    # it permanently excluded. Built directly against resynced_tracker
-    # (the same _build_lookup/build_groups path __init__.py's
-    # compute_lighting_groups service itself uses) rather than through
-    # hass.services.async_call - the *service* still reads whichever
-    # tracker got registered when setup_integration's own entry was set
-    # up (before this test's write even happened), not this test's
-    # separately-constructed resynced_tracker, so going through the
-    # service here would just prove the wrong tracker's state.
-    lookup = _build_lookup(hass, resynced_tracker)
-    groups = build_groups(
-        entities=["light.a"],
-        brightness_multipliers={"light.a": 1},
-        sensor_brightness=200,
-        sensor_color_temp_kelvin=3200,
-        lookup=lookup,
-        owner_id="automation.room",
-    )
-    assert groups[0].combined == ["light.a"]
-
-
-async def test_the_listener_resyncs_a_light_still_unavailable_when_startup_resync_ran(
-    setup_integration: HomeAssistant,
-):
-    """The gap found live the same day the fix above shipped:
-    light.kitchen_2 stayed excluded through several real ticks after a
-    restart that the bulk startup pass alone did fix light.kitchen_1
-    against - both recovered from the same restart, just close enough
-    together in time that only one had already reported back when
-    async_resync_to_live_state ran.
-
-    Deliberately does NOT reach "unavailable" via a live off->unavailable
-    transition (light.a is set unavailable as its very first-ever state
-    in this test's hass instance, old_state=None) - going through a real
-    on/off->unavailable transition first would trip the *existing*
-    clear-on-drop branch, which already frees a light via "no record ->
-    free" on its own and would pass this test regardless of whether the
-    new recovery branch does anything at all. Setting "unavailable" as
-    the first-ever state instead matches what light.kitchen_2 actually
-    looked like from this listener's own point of view: its drop
-    happened before the new process's listener was ever attached, so
-    from here it's as if the light simply arrived already down - a
-    pre-existing record with no observed drop, exactly the case that
-    needs the *recovery* direction specifically to be fixed."""
-    hass = setup_integration
-    real_tracker = next(v for v in hass.data[DOMAIN].values() if isinstance(v, LastWriteTracker))
-
-    # A pre-existing record, as if written before this process (and its
-    # listener) ever existed - two real writes, so `confirmed` holds an
-    # actual claim (not None). A record with confirmed=None is already
-    # unconditionally lenient regardless of context (see
-    # externally_set()'s own "unconfirmed first attempt" fallback), so
-    # seeding only one write here would pass this test even with the
-    # recovery fix disabled entirely - proving nothing.
-    await real_tracker.async_record(["light.a"], {"light.a": "pre-existing-context"}, "ctx-1", "automation.room")
-    await real_tracker.async_record(["light.a"], {"light.a": "ctx-1"}, "ctx-2", "automation.room")
-
-    _set_light(hass, "light.a", "unavailable", supported_color_modes=["color_temp"])
-    await hass.async_block_till_done()
-
-    # It recovers - a fresh context nothing here ever issued, exactly
-    # what a real device's own post-restart state report looks like.
-    recovery_context = Context()
-    _set_light(
-        hass,
-        "light.a",
-        "on",
-        supported_color_modes=["color_temp"],
-        brightness=180,
-        color_temp_kelvin=3200,
-        context=recovery_context,
-    )
-    await hass.async_block_till_done()
-
-    # A plain, non-forced call from the same owner manages it
-    # immediately - not permanently excluded, and not needing a second
-    # restart or a force to recover.
-    result = await hass.services.async_call(
-        DOMAIN,
-        "compute_lighting_groups",
-        {
-            "entities": ["light.a"],
-            "brightness": 200,
-            "color_temp_kelvin": 3200,
-            "owner_id": "automation.room",
-        },
-        blocking=True,
-        return_response=True,
-    )
-    assert result["groups"][0]["combined"] == ["light.a"]
-
-
-async def test_resync_leaves_a_genuinely_unavailable_light_untouched(hass: HomeAssistant):
-    """A light still unavailable at resync time (a real drop the restart
-    itself doesn't fix) has nothing live to snapshot - left alone for
-    the clear-on-unavailable listener to handle once it does report back
-    in, not given a bogus confirmed claim.
-
-    Deliberately doesn't use the setup_integration fixture: its own
-    write_tracker already has async_start_listening() live, which would
-    itself clear this record the moment light.a below goes unavailable -
-    exactly correct real behaviour, but it would mean this test was only
-    proving the *listener* works (already covered by
-    test_write_tracking_record_is_cleared_when_light_goes_unavailable
-    above), not resync_to_live_state's own "nothing to snapshot" branch
-    in isolation. A bare, unconnected LastWriteTracker keeps the two
-    mechanisms properly separated."""
-    tracker = LastWriteTracker(hass)
-    await tracker.async_load()
-    await tracker.async_record(["light.a"], {"light.a": None}, "ctx-1", "automation.room")
-
-    _set_light(hass, "light.a", "unavailable", supported_color_modes=["color_temp"])
-
-    tracker_after_load = LastWriteTracker(hass)
-    await tracker_after_load.async_load()
-    await tracker_after_load.async_resync_to_live_state(hass)
-
-    # Untouched - still exactly the pending claim just recorded, not
-    # None (which would mean it was wrongly cleared) and not a bogus
-    # confirmed claim manufactured from the "unavailable" state.
-    assert tracker_after_load.observed_context_id("light.a") is None
-    assert tracker_after_load.latest_context_id("light.a") == "ctx-1"
-
-
-async def test_resync_preserves_the_pending_claim(setup_integration: HomeAssistant):
-    """Only `confirmed` is replaced - a stale pre-restart `pending`
-    claim can never match a fresh post-restart context anyway, so
-    there's nothing to fix there; it's simply inert until the next real
-    write overwrites it."""
-    hass = setup_integration
-    async_mock_service(hass, "light", "turn_on")
-
-    _set_light(hass, "light.a", "off", supported_color_modes=["color_temp"])
-    await _apply(hass, ['light.a'], brightness=180, color_temp_kelvin=3200, transition=2, owner_id='automation.room')
-    tracker_before = LastWriteTracker(hass)
-    await tracker_before.async_load()
-    original_pending_context = tracker_before.latest_context_id("light.a")
-    assert original_pending_context is not None
-
-    _set_light(
-        hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=180, color_temp_kelvin=3200
-    )
-
-    resynced_tracker = LastWriteTracker(hass)
-    await resynced_tracker.async_load()
-    await resynced_tracker.async_resync_to_live_state(hass)
-
-    assert resynced_tracker.latest_context_id("light.a") == original_pending_context
-
-
-async def test_async_load_backfills_last_seen_for_legacy_records_without_it(hass: HomeAssistant):
-    """Every record persisted before last_seen existed is missing the
-    key entirely - backfilled to *now* on load, not left missing (which
-    async_prune_stale treats as "can't judge age, leave alone" - see its
-    own docstring) and not backdated (which would let a legitimate,
-    currently-relevant record get immediately swept up by the very next
-    prune pass, the "mass prune on upgrade" this backfill specifically
-    exists to avoid)."""
-    from homeassistant.helpers.storage import Store
-
-    from custom_components.adaptive_lighting_helpers.write_tracking import STORAGE_KEY, STORAGE_VERSION
-
-    legacy_store = Store(hass, STORAGE_VERSION, STORAGE_KEY)
-    await legacy_store.async_save(
-        {
-            "light.a": {
-                "observed": {"context_id": "ctx-old", "owner_id": "automation.room"},
-                "latest": None,
-                # no last_seen key at all - the pre-upgrade shape.
-            }
-        }
-    )
-
-    tracker = LastWriteTracker(hass)
-    await tracker.async_load()
-
-    record = tracker.snapshot()["light.a"]
-    assert record.get("last_seen") is not None
-    assert dt_util.utcnow() - dt_util.parse_datetime(record["last_seen"]) < timedelta(seconds=5)
-
-
 async def test_prune_stale_removes_a_record_untouched_past_the_cutoff(setup_integration: HomeAssistant):
     hass = setup_integration
     async_mock_service(hass, "light", "turn_on")
@@ -1094,16 +920,14 @@ async def test_prune_stale_removes_a_record_untouched_past_the_cutoff(setup_inte
             brightness=180,
             color_temp_kelvin=3200,
             transition=2,
-            owner_id='automation.room',
         )
-        tracker = LastWriteTracker(hass)
-        await tracker.async_load()
-        assert "light.a" in tracker.snapshot()
+        tracker = _registry(hass)
+        assert "light.a" in tracker.all_records()
 
         frozen.move_to(dt_util.utcnow() + timedelta(days=STALE_RECORD_MAX_AGE_DAYS, hours=1))
         await tracker.async_prune_stale()
 
-    assert "light.a" not in tracker.snapshot()
+    assert "light.a" not in tracker.all_records()
 
 
 async def test_prune_stale_leaves_a_recent_record_alone(setup_integration: HomeAssistant):
@@ -1122,33 +946,31 @@ async def test_prune_stale_leaves_a_recent_record_alone(setup_integration: HomeA
             brightness=180,
             color_temp_kelvin=3200,
             transition=2,
-            owner_id='automation.room',
         )
-        tracker = LastWriteTracker(hass)
-        await tracker.async_load()
+        tracker = _registry(hass)
 
         frozen.move_to(dt_util.utcnow() + timedelta(hours=1))
         await tracker.async_prune_stale()
 
-    assert "light.a" in tracker.snapshot()
+    assert "light.a" in tracker.all_records()
 
 
-async def test_prune_stale_leaves_a_record_with_no_last_seen_alone(hass: HomeAssistant):
+async def test_prune_stale_leaves_a_record_with_no_last_seen_alone(setup_integration: HomeAssistant):
     """Defensive branch: a record whose age genuinely can't be judged
-    (shouldn't happen after async_load()'s own backfill, but nothing
-    else in this module ever deletes on ambiguity either - see
-    async_prune_stale's own docstring) must never be pruned."""
-    tracker = LastWriteTracker(hass)
-    await tracker.async_load()
-    tracker._data["light.a"] = {  # bypassing the public API is deliberate here - this shape shouldn't occur naturally
-        "observed": {"context_id": "ctx-old", "owner_id": "automation.room", "recorded_at": None, "target": None},
+    (nothing writes this shape, but nothing in this module ever deletes
+    on ambiguity either - see async_prune_stale's own docstring) must
+    never be pruned."""
+    hass = setup_integration
+    tracker = _registry(hass)
+    tracker._stores[next(iter(tracker._stores))].claims["light.a"] = {  # this shape shouldn't occur naturally
+        "observed": {"context_id": "ctx-old", "recorded_at": None, "target": None},
         "latest": None,
         "last_seen": None,
     }
 
     await tracker.async_prune_stale()
 
-    assert "light.a" in tracker.snapshot()
+    assert "light.a" in tracker.all_records()
 
 
 async def test_recovered_light_is_freed_while_an_unrelated_override_stays_protected(
@@ -1171,7 +993,6 @@ async def test_recovered_light_is_freed_while_an_unrelated_override_stays_protec
         brightness=180,
         color_temp_kelvin=3200,
         transition=2,
-        owner_id='automation.room',
         context=our_context,
     )
     assert len(turn_on_calls) == 1
@@ -1211,7 +1032,6 @@ async def test_recovered_light_is_freed_while_an_unrelated_override_stays_protec
             "entities": ["light.recovering", "light.sibling"],
             "brightness": 180,
             "color_temp_kelvin": 3200,
-            "owner_id": "automation.room",
         },
         blocking=True,
         return_response=True,
@@ -1250,7 +1070,6 @@ async def test_a_restart_style_unavailable_blip_does_not_clear_an_existing_recor
         brightness=180,
         color_temp_kelvin=3200,
         transition=2,
-        owner_id='automation.room',
         context=our_context,
     )
     assert len(turn_on_calls) == 1
@@ -1286,7 +1105,6 @@ async def test_a_restart_style_unavailable_blip_does_not_clear_an_existing_recor
             "entities": ["light.a"],
             "brightness": 180,
             "color_temp_kelvin": 3200,
-            "owner_id": "automation.room",
         },
         blocking=True,
         return_response=True,
@@ -1294,42 +1112,3 @@ async def test_a_restart_style_unavailable_blip_does_not_clear_an_existing_recor
     assert "light.a" not in result["groups"][0]["combined"]
 
 
-async def test_async_load_migrates_pre_rename_confirmed_pending_records(setup_integration: HomeAssistant):
-    """The claims were renamed confirmed/pending -> observed/latest. A
-    record written before that rename must map straight across, not be
-    dropped as an unrecognised shape - dropping it would reopen "no
-    record means free to manage" for every already-protected light in
-    the house on the upgrade tick."""
-    hass = setup_integration
-    tracker = LastWriteTracker(hass)
-    await tracker._store.async_save(
-        {
-            "light.a": {
-                "confirmed": {
-                    "context_id": "ctx-old-observed",
-                    "secondary_context_id": "ctx-old-observed-brightness",
-                    "owner_id": "automation.room",
-                    "recorded_at": "2026-08-01T00:00:00+00:00",
-                    "target": {"brightness": 200, "color_temp_kelvin": 3000},
-                },
-                "pending": {
-                    "context_id": "ctx-old-latest",
-                    "secondary_context_id": None,
-                    "owner_id": "automation.room",
-                    "recorded_at": "2026-08-01T00:01:00+00:00",
-                    "target": {"brightness": 210, "color_temp_kelvin": 3100},
-                },
-                "last_seen": "2026-08-01T00:01:00+00:00",
-            }
-        }
-    )
-
-    migrated = LastWriteTracker(hass)
-    await migrated.async_load()
-
-    assert migrated.observed_context_id("light.a") == "ctx-old-observed"
-    assert migrated.observed_secondary_context_id("light.a") == "ctx-old-observed-brightness"
-    assert migrated.observed_target("light.a") == {"brightness": 200, "color_temp_kelvin": 3000}
-    assert migrated.observed_owner_id("light.a") == "automation.room"
-    assert migrated.latest_context_id("light.a") == "ctx-old-latest"
-    assert migrated.latest_target("light.a") == {"brightness": 210, "color_temp_kelvin": 3100}
