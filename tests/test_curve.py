@@ -1,4 +1,13 @@
-from curve import brightness_for_phase, kelvin_for_phase, kelvin_to_rgb, phase_at, targets_for_phase
+import pytest
+
+from curve import (
+    brightness_for_phase,
+    kelvin_for_phase,
+    kelvin_to_rgb,
+    phase_at,
+    phase_marks,
+    targets_for_phase,
+)
 
 # A synthetic day used across every test in this file, expressed as
 # seconds-of-day for readability (these functions only ever care about
@@ -195,3 +204,118 @@ def test_evening_kelvin_fade_is_unchanged_inside_its_real_window():
     assert kelvin_for_phase("Evening", NIGHT - 3600, EVENING, DAY_START, NIGHT) == 3200
     # Halfway through the fade: halfway between the two.
     assert kelvin_for_phase("Evening", NIGHT - 1800, EVENING, DAY_START, NIGHT) == 2950
+
+
+# --- phase_marks -----------------------------------------------------
+#
+# phase_marks() exists so anything drawing the boundaries directly (the
+# dashboard card's labels and lines) agrees with what phase_at() actually
+# does, including when the boundary times are set out of order - which
+# they can be, since they're freely settable `time` entities.
+
+
+def _observed_transitions(boundaries, step=60):
+    """The day's real phase changes, read straight off phase_at().
+
+    This is the ground truth phase_marks() has to reproduce: sample the
+    whole day, collapse it into runs, and report where each run begins.
+
+    A LEADING NIGHT run is dropped, and only a leading Night one. The day
+    always opens on Night for any ordinary schedule, and that opening is
+    the wrap-around of the same Night the schedule returns to at its
+    night boundary - so reporting it would double-count. Any other
+    leading run is a genuine phase start (Morning set to 00:00 really
+    does start Morning at 00:00), and a day that is Night end to end
+    collapses to a single run that this drops, leaving nothing - which is
+    right, since nothing changes.
+    """
+    runs = []
+    previous = None
+    for i in range(0, 86400, step):
+        current = phase_at(i, *boundaries)
+        if current != previous:
+            runs.append((current, float(i)))
+        previous = current
+    if runs and runs[0][0] == "Night":
+        runs = runs[1:]
+    return runs
+
+
+# Hour-aligned so a 60s sampling grid lands exactly on every boundary.
+# Includes in-order schedules, every kind of out-of-order one, and
+# duplicates (two phases starting at the same instant).
+_H = 3600
+BOUNDARY_CASES = [
+    (6 * _H, 8 * _H, 19 * _H, 22 * _H),  # normal
+    (10 * _H, 8 * _H, 19 * _H, 22 * _H),  # Morning after Day -> no Morning
+    (6 * _H, 8 * _H, 7 * _H, 22 * _H),  # Evening before Day -> no Day
+    (6 * _H, 8 * _H, 19 * _H, 18 * _H),  # Night before Evening -> no Evening
+    (6 * _H, 6 * _H, 19 * _H, 22 * _H),  # Morning == Day -> no Morning
+    (6 * _H, 8 * _H, 8 * _H, 22 * _H),  # Day == Evening -> no Day
+    (22 * _H, 20 * _H, 18 * _H, 16 * _H),  # fully reversed -> only Night
+    (0, 8 * _H, 19 * _H, 22 * _H),  # Morning at midnight -> no leading Night
+    (6 * _H, 6 * _H, 6 * _H, 6 * _H),  # everything collapsed onto one instant
+]
+
+
+@pytest.mark.parametrize("boundaries", BOUNDARY_CASES)
+def test_phase_marks_matches_what_phase_at_actually_does(boundaries):
+    assert phase_marks(*boundaries) == _observed_transitions(boundaries)
+
+
+@pytest.mark.parametrize("boundaries", BOUNDARY_CASES)
+def test_phase_marks_never_reports_a_phase_that_never_occurs(boundaries):
+    """The bug this was written for: a Morning label on a day that never
+    has a Morning."""
+    occurring = {phase_at(i, *boundaries) for i in range(0, 86400, 60)}
+    for name, _ in phase_marks(*boundaries):
+        assert name in occurring, f"{name} is marked but never actually happens"
+
+
+@pytest.mark.parametrize("boundaries", BOUNDARY_CASES)
+def test_phase_marks_are_ordered_and_end_on_night(boundaries):
+    marks = phase_marks(*boundaries)
+    starts = [t for _, t in marks]
+    assert starts == sorted(starts)
+    assert len(starts) == len(set(starts)), "two phases cannot start at the same instant"
+    # Either the day changes phase at some point and must therefore come
+    # back to Night at the end, or it never changes at all and there is
+    # nothing to mark. There is no in-between.
+    assert marks == [] or marks[-1][0] == "Night"
+
+
+def test_phase_marks_normal_schedule_is_all_four_in_order():
+    assert phase_marks(6 * _H, 8 * _H, 19 * _H, 22 * _H) == [
+        ("Morning", 6.0 * _H),
+        ("Day", 8.0 * _H),
+        ("Evening", 19.0 * _H),
+        ("Night", 22.0 * _H),
+    ]
+
+
+def test_phase_after_an_unreachable_one_starts_at_the_later_boundary():
+    """Not just "hide Morning" - Day genuinely begins at 10:00 here,
+    Morning's boundary, not at its own 08:00."""
+    marks = dict(phase_marks(10 * _H, 8 * _H, 19 * _H, 22 * _H))
+    assert "Morning" not in marks
+    assert marks["Day"] == 10.0 * _H
+
+
+def test_a_day_that_never_leaves_night_has_no_marks():
+    """A fully reversed schedule is Night from end to end. Marking its
+    night boundary would draw a line implying a change that never
+    happens - there is nothing to return to Night *from*."""
+    assert phase_marks(22 * _H, 20 * _H, 18 * _H, 16 * _H) == []
+    assert phase_marks(6 * _H, 6 * _H, 6 * _H, 6 * _H) == []
+
+
+def test_a_phase_starting_at_midnight_is_still_marked():
+    """Morning at 00:00 genuinely starts Morning at 00:00 - the day opens
+    in it rather than in Night, so it is a real phase start, not the
+    wrap-around Night that gets folded away."""
+    assert phase_marks(0, 8 * _H, 19 * _H, 22 * _H) == [
+        ("Morning", 0),
+        ("Day", 8.0 * _H),
+        ("Evening", 19.0 * _H),
+        ("Night", 22.0 * _H),
+    ]

@@ -49,9 +49,17 @@ from curve import (
     kelvin_for_phase,
     kelvin_to_rgb,
     phase_at,
+    phase_marks,
 )
 
 CURVE_JS = Path(__file__).resolve().parent.parent / "docs" / "assets" / "js" / "curve.js"
+CARD_JS = (
+    Path(__file__).resolve().parent.parent
+    / "custom_components"
+    / "adaptive_lighting_helpers"
+    / "www"
+    / "adaptive-lighting-curve-card.js"
+)
 
 pytestmark = pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
 
@@ -179,3 +187,87 @@ def _brightness_kwargs(values):
 
 def _kelvin_kwargs(values):
     return {k: values[k] for k in ("morning_kelvin", "day_end_kelvin", "evening_kelvin", "night_kelvin")}
+
+
+# --- the dashboard card's own copies --------------------------------
+#
+# The card carries its own phaseAt/phaseMarks/kelvinToRgb rather than
+# importing them: it has to run standalone inside Home Assistant's
+# frontend, with no build step and nothing to import from. That makes it
+# a THIRD implementation of logic curve.py owns, and until these tests it
+# was the only one nothing checked - the docs port at least had the grid
+# above.
+#
+# It imports cleanly under node given three shims. Home Assistant loads
+# it as an ES module (add_extra_js_url defaults to es5: false), so the
+# `export` keywords that make this possible are inert in production.
+CARD_SHIMS = """
+globalThis.HTMLElement = class {};
+globalThis.customElements = { define() {}, get() { return undefined; } };
+globalThis.window = globalThis;
+"""
+
+CARD_DRIVER = CARD_SHIMS + f"""
+const {{ phaseAt, phaseMarks, kelvinToRgb }} = await import({json.dumps(CARD_JS.as_posix())});
+
+const input = JSON.parse(await new Promise((resolve) => {{
+  let buf = '';
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', (c) => (buf += c));
+  process.stdin.on('end', () => resolve(buf));
+}}));
+
+process.stdout.write(JSON.stringify({{
+  phases: input.phaseCases.map((c) => phaseAt(c.t, c.b[0], c.b[1], c.b[2], c.b[3])),
+  marks: input.markCases.map((b) => phaseMarks(b[0], b[1], b[2], b[3])),
+  rgb: input.kelvins.map(kelvinToRgb),
+}}));
+"""
+
+# Ordinary schedules plus every way the boundaries can be out of order -
+# which they can be, since they're freely settable `time` entities.
+_H = 3600
+MARK_CASES = [
+    [6 * _H, 8 * _H, 19 * _H, 22 * _H],
+    [10 * _H, 8 * _H, 19 * _H, 22 * _H],
+    [6 * _H, 8 * _H, 7 * _H, 22 * _H],
+    [6 * _H, 8 * _H, 19 * _H, 18 * _H],
+    [6 * _H, 6 * _H, 19 * _H, 22 * _H],
+    [6 * _H, 8 * _H, 8 * _H, 22 * _H],
+    [22 * _H, 20 * _H, 18 * _H, 16 * _H],
+    [0, 8 * _H, 19 * _H, 22 * _H],
+    [6 * _H, 6 * _H, 6 * _H, 6 * _H],
+    [0, 0, 0, 86399],
+]
+
+
+def test_dashboard_card_matches_curve_py():
+    phase_cases = [
+        {"t": float(t), "b": b}
+        for b in MARK_CASES
+        for t in list(range(0, 86400, 900)) + [x for edge in b for x in (edge - 1, edge, edge + 1)]
+    ]
+    kelvins = list(range(1000, 10001))
+
+    js = _node_eval(CARD_DRIVER, {"phaseCases": phase_cases, "markCases": MARK_CASES, "kelvins": kelvins})
+
+    phase_mismatches = [
+        f"phase_at(t={c['t']}, {c['b']}) py={py} js={got}"
+        for c, got in zip(phase_cases, js["phases"])
+        if (py := phase_at(c["t"], *c["b"])) != got
+    ]
+    assert not phase_mismatches, "the card's phaseAt has drifted:\n" + "\n".join(phase_mismatches[:10])
+
+    mark_mismatches = []
+    for boundaries, got in zip(MARK_CASES, js["marks"]):
+        expected = [[name, start] for name, start in phase_marks(*boundaries)]
+        if expected != got:
+            mark_mismatches.append(f"phase_marks({boundaries}) py={expected} js={got}")
+    assert not mark_mismatches, "the card's phaseMarks has drifted:\n" + "\n".join(mark_mismatches[:10])
+
+    rgb_mismatches = [
+        f"kelvin_to_rgb({k}) py={tuple(kelvin_to_rgb(k))} js={tuple(got)}"
+        for k, got in zip(kelvins, js["rgb"])
+        if tuple(kelvin_to_rgb(k)) != tuple(got)
+    ]
+    assert not rgb_mismatches, "the card's kelvinToRgb has drifted:\n" + "\n".join(rgb_mismatches[:10])
