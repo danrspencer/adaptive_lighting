@@ -12,11 +12,10 @@ venv/
 # moment it's written).
 dashboard/preview_data.json
 
-# Copied into the docs site at build time from their real homes
-# (custom_components/.../www/ and dashboard/) so the site can never show
-# a stale card - see .github/workflows/docs.yml.
+# Copied into the docs site at build time from its real home
+# (custom_components/.../www/) so the site can never show a stale card -
+# see .github/workflows/docs.yml.
 docs/assets/js/adaptive-lighting-curve-card.js
-docs/assets/img/curve-preview.svg
 docs/reference-blueprint.md
 docs/reference-helpers.md
 docs/_site/

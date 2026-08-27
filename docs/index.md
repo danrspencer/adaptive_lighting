@@ -14,7 +14,6 @@ you're done with them, and anything a scene already has covered is left to the s
 [Install it]({{ '/installation.html' | relative_url }}){: .btn }
 [View on GitHub](https://github.com/danrspencer/adaptive_lighting){: .btn }
 
-![The Adaptive Lighting curve card, showing brightness and colour temperature through the day]({{ '/assets/img/curve-preview.svg' | relative_url }})
 
 Two pieces, installed separately and useful separately:
 
