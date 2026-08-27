@@ -51,12 +51,13 @@ import asyncio
 # forwards SCHEDULE_PLATFORMS for the first time on a zero-instance entry.
 import time as time_module
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 import voluptuous as vol
 from homeassistant.components.frontend import add_extra_js_url
 from homeassistant.components.http import StaticPathConfig
-from homeassistant.config_entries import ConfigEntry
+from homeassistant.config_entries import ConfigEntry, ConfigSubentry
 from homeassistant.const import Platform
 from homeassistant.core import Context, HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse, callback
 from homeassistant.helpers import config_validation as cv
@@ -64,8 +65,10 @@ from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.event import async_track_state_change_event, async_track_time_interval
 from homeassistant.helpers.typing import ConfigType
+from homeassistant.util import slugify
 
-from .const import DOMAIN
+from .const import CONF_TARGET, DOMAIN, SUBENTRY_TYPE_STATE
+from .config_flow import _areas_with_lights
 from .coordinator import CURVE_KEYS, ScheduleCoordinator, schedule_instances
 from .curve import phase_at, targets_for_phase
 from .grouping import EntityLookup, Group, build_groups
@@ -321,6 +324,37 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
         [StaticPathConfig(CARD_URL_BASE, str(Path(__file__).parent / "www"), cache_headers=False)]
     )
     add_extra_js_url(hass, f"{CARD_URL_BASE}/{CARD_JS_PATH}")
+    return True
+
+
+async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    """v1 -> v2: seed a state device per area that has lights.
+
+    Before v2 there were no state devices - a light's tracking scope was
+    derived from the calling automation's own entity_id. Without this,
+    upgrading leaves an entry with no scopes at all, every light
+    resolving to nothing, and therefore override protection silently
+    off: lights still get driven, but one taken by hand is overwritten
+    on the next tick rather than being left alone.
+
+    Seeds exactly what a fresh install's setup step offers, from the
+    user's own area configuration - not invented from a caller-supplied
+    string, which is the "devices appearing by magic" this release
+    replaced. Runs once, because the version bump does; deleting a state
+    device afterwards sticks."""
+    if entry.version >= 2:
+        return True
+    for area_id, name in _areas_with_lights(hass):
+        hass.config_entries.async_add_subentry(
+            entry,
+            ConfigSubentry(
+                data=MappingProxyType({CONF_TARGET: {"area_id": [area_id]}}),
+                subentry_type=SUBENTRY_TYPE_STATE,
+                title=name,
+                unique_id=slugify(name),
+            ),
+        )
+    hass.config_entries.async_update_entry(entry, version=2)
     return True
 
 
