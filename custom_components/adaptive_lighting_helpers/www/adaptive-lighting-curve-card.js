@@ -140,6 +140,73 @@ export function phaseMarks(morning, day, evening, night) {
   return marks;
 }
 
+// Nudges the phase labels apart so they don't overlap each other.
+//
+// Each label wants to be centred on its own boundary line, which is fine
+// on a wide card and collides on a narrow one - two phases an hour apart
+// are only a few pixels apart at phone width, while the words "Morning"
+// and "Day" need about 60px between them. Measured on a 375px-wide
+// screen, Morning/Day and Evening/Night each overlapped by 7px.
+//
+// The standard two-pass sweep: walk left to right pushing each label
+// right until it clears its predecessor, clamp the last one inside the
+// right edge, then walk back pushing left, and finally clamp the first
+// inside the left edge. Labels move as little as possible and keep their
+// order, so each stays nearest its own line. The lines themselves are
+// never moved - they mark the actual boundary - and every label keeps a
+// `title` with the exact time.
+//
+// If they cannot all fit even packed edge to edge, the ones that don't
+// fit are dropped rather than left overlapping: an unreadable smear of
+// two words on top of each other is worse than one honest label. Later
+// ones go first, so the earliest phases in the day survive.
+//
+// Pure and exported so tests/test_curve_js_parity.py can exercise it
+// under node without a DOM.
+export function layoutBoundaryLabels(desired, widths, containerWidth, gap = 6) {
+  const total = (count) =>
+    widths.slice(0, count).reduce((sum, w) => sum + w, 0) + gap * Math.max(0, count - 1);
+
+  // How many, from the left, can physically fit at all.
+  let visible = desired.length;
+  while (visible > 0 && total(visible) > containerWidth) {
+    visible -= 1;
+  }
+
+  const centres = desired.slice(0, visible);
+
+  // Order matters here. The left-edge clamp has to happen BEFORE the
+  // left-to-right sweep, not after it: pushing the first label right to
+  // get it on screen shoves it into its neighbour, and a clamp applied
+  // at the end has no sweep left to repair that. Doing it first means
+  // the sweep carries the displacement along the whole run.
+  if (visible > 0) centres[0] = Math.max(centres[0], widths[0] / 2);
+
+  // Left to right: clear the previous label.
+  for (let i = 1; i < visible; i++) {
+    const min = centres[i - 1] + widths[i - 1] / 2 + gap + widths[i] / 2;
+    if (centres[i] < min) centres[i] = min;
+  }
+
+  // Right to left: pull back inside the right edge, and carry that back
+  // along the run the same way. This can't undo the left-edge clamp
+  // above - `visible` was chosen so the whole run fits, so even packed
+  // hard against the right edge the first label still starts at or after
+  // its own half-width.
+  if (visible > 0) {
+    centres[visible - 1] = Math.min(centres[visible - 1], containerWidth - widths[visible - 1] / 2);
+  }
+  for (let i = visible - 2; i >= 0; i--) {
+    const max = centres[i + 1] - widths[i + 1] / 2 - gap - widths[i] / 2;
+    if (centres[i] > max) centres[i] = max;
+  }
+
+  return desired.map((_, i) => ({
+    centre: i < visible ? centres[i] : desired[i],
+    hidden: i >= visible,
+  }));
+}
+
 // title unset -> "Adaptive Lighting"; title: "" explicitly -> no header at
 // all (ha-card renders nothing for a falsy header) - lets a dashboard that
 // already labels each sensor elsewhere (a heading card, a section title)
@@ -210,10 +277,20 @@ class AdaptiveLightingCurveCard extends HTMLElement {
 
   connectedCallback() {
     this._timer = setInterval(() => this._render(), 30000);
+    // A dashboard card gets resized without any state change - dragging
+    // a column wider, rotating a phone - and the label collisions depend
+    // entirely on width. Re-laying out is cheap and changes no layout
+    // the observer itself watches (the labels are absolutely positioned
+    // inside a fixed-height chart), so this cannot feed back on itself.
+    if (typeof ResizeObserver !== 'undefined') {
+      this._resizeObserver = new ResizeObserver(() => this._layoutLabels());
+      this._resizeObserver.observe(this);
+    }
   }
 
   disconnectedCallback() {
     clearInterval(this._timer);
+    if (this._resizeObserver) this._resizeObserver.disconnect();
   }
 
   set hass(hass) {
@@ -297,6 +374,42 @@ class AdaptiveLightingCurveCard extends HTMLElement {
     }
 
     this._render();
+  }
+
+  // Applies layoutBoundaryLabels to whatever is currently rendered.
+  //
+  // Split from the pure function above because it needs real measured
+  // widths: the labels are HTML text, so their width depends on the
+  // viewer's font, and guessing from character count would be wrong on
+  // exactly the narrow screens this matters for. Reading
+  // getBoundingClientRect forces a layout, which is why this runs once
+  // after a render rather than per label.
+  _layoutLabels() {
+    const root = this.shadowRoot;
+    if (!root) return;
+    const wrap = root.querySelector('.chart-wrap');
+    const labels = [...root.querySelectorAll('.boundary-label')];
+    if (!wrap || !labels.length) return;
+
+    const width = wrap.clientWidth;
+    // Not laid out yet (detached, or a hidden dashboard tab). The inline
+    // percentage positions still apply, so the labels are simply left
+    // where they were rendered until something asks again.
+    if (!width) return;
+
+    // Clear any previous pass before measuring - a label left hidden
+    // measures zero wide, which would let it collide once shown again.
+    labels.forEach((el) => {
+      el.style.display = '';
+    });
+
+    const desired = labels.map((el) => Number(el.dataset.xFrac) * width);
+    const widths = labels.map((el) => el.getBoundingClientRect().width);
+
+    layoutBoundaryLabels(desired, widths, width).forEach((placed, i) => {
+      labels[i].style.left = `${placed.centre.toFixed(1)}px`;
+      if (placed.hidden) labels[i].style.display = 'none';
+    });
   }
 
   _renderError(message) {
@@ -399,8 +512,12 @@ class AdaptiveLightingCurveCard extends HTMLElement {
 
     const topLabels = marks
       .map(([name, t]) => {
-        const leftPct = ((xOf(t) / VB_W) * 100).toFixed(2);
-        return `<span class="boundary-label" style="left:${leftPct}%" title="${fmtTime(t)}">${name}</span>`;
+        const frac = xOf(t) / VB_W;
+        // data-x-frac is what _layoutLabels re-derives the desired
+        // position from, so the nudging can be recomputed at any width
+        // without re-rendering. The inline % is the pre-layout position,
+        // which is already correct whenever nothing collides.
+        return `<span class="boundary-label" style="left:${(frac * 100).toFixed(2)}%" data-x-frac="${frac.toFixed(5)}" title="${fmtTime(t)}">${name}</span>`;
       })
       .join('');
 
@@ -579,6 +696,11 @@ class AdaptiveLightingCurveCard extends HTMLElement {
     this._tooltipEl = this.shadowRoot.querySelector('.tooltip');
     this._dayStart = dayStart;
     this._span = span;
+
+    // Before the early return below: the phase labels are drawn whether
+    // or not the curve samples have arrived, so they need laying out
+    // either way.
+    this._layoutLabels();
 
     if (!haveSamples) return;
 
