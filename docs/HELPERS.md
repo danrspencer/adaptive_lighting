@@ -233,6 +233,43 @@ Tracking** dashboard card exposes this as a "Clear" button on every row, no conf
 diagnostic bookkeeping entry, not the light itself, and a fresh claim gets re-established the moment anything
 next writes to that entity.
 
+### The hand-over event
+
+Every time a tracked light passes into someone else's hands, this fires
+`adaptive_lighting_helpers_light_overridden` carrying a full snapshot of that moment:
+
+```yaml
+entity_id: light.kitchen_1
+owner_id: automation.kitchen_lights   # who lost it
+previous_status: controlled
+live_context_id: 01M11...
+live: { state: on, brightness: 12, color_temp_kelvin: 6500, rgb_color: null }
+observed: { context_id: ..., target: {...}, owner_id: ..., recorded_at: ... }
+latest:   { context_id: ..., target: {...}, owner_id: ..., recorded_at: ... }
+```
+
+The point is the pairing of `live` against each claim's `target`. That comparison is what tells you whether a
+hand-over was genuine or a false positive, and it's exactly what can't be reconstructed afterwards - by the
+time anyone looks, the curve has moved on and a stale target says nothing about why the light was excluded.
+
+**Edge-triggered**: it marks the light *changing hands*, not the fact that it currently is, so it fires once
+per hand-over rather than repeating while the light stays taken. A restart seeds quietly - lights already
+overridden before it aren't re-announced.
+
+Home Assistant's recorder keeps it like any other event, and because it carries an `entity_id` it follows
+whatever recorder filtering that light already has. It also appears in the light's own logbook timeline,
+interleaved with its state changes, which is where you'd be looking anyway:
+
+> **kitchen_lights** released this light to something else (last asked for 255/6667, found 12/6500)
+
+Trigger on it like any event:
+
+```yaml
+trigger:
+  - platform: event
+    event_type: adaptive_lighting_helpers_light_overridden
+```
+
 ### Per-owner count sensors (optional)
 
 Reading the global sensor above needs the custom **Adaptive Lighting Write Tracking** card, because everything

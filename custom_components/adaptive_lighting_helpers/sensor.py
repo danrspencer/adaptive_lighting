@@ -57,7 +57,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import slugify
 
-from .const import CONF_OWNER_SENSORS, DOMAIN
+from .const import CONF_OWNER_SENSORS, DOMAIN, EVENT_LIGHT_OVERRIDDEN
 from .coordinator import ScheduleCoordinator, ScheduleInstance, schedule_instances
 from .override_protection import classify
 from .write_tracking import SIGNAL_WRITE_TRACKING_UPDATED, LastWriteTracker
@@ -387,20 +387,34 @@ class _WriteTrackingSensor(SensorEntity):
         self._write_tracker = write_tracker
         self._attr_unique_id = f"{entry.entry_id}_write_tracking"
         self.entity_id = "sensor.adaptive_lighting_write_tracking"
+        # entity_id -> last status seen, so _refresh_statuses can fire on
+        # the *transition* into overridden rather than every refresh.
+        # None (not {}) until the first pass, which is what stops a
+        # restart re-announcing every light that was already overridden
+        # before it.
+        self._last_statuses: dict[str, str] | None = None
 
     async def async_added_to_hass(self) -> None:
         self.async_on_remove(async_dispatcher_connect(self.hass, SIGNAL_WRITE_TRACKING_UPDATED, self._handle_update))
 
     @callback
     def _handle_update(self) -> None:
+        self._refresh_statuses()
         self.async_write_ha_state()
+
+    async def async_update(self) -> None:
+        # The poll path (see the class docstring for why polling exists at
+        # all): live state can change without write_tracking being touched,
+        # so this is where an override by hand is actually noticed.
+        self._refresh_statuses()
 
     @property
     def native_value(self) -> int:
         return len(self._write_tracker.snapshot())
 
-    @property
-    def extra_state_attributes(self) -> dict[str, Any]:
+    def _classify_all(self) -> dict[str, Any]:
+        """Every tracked light's current status. Pure - no side effects,
+        so `extra_state_attributes` can call it directly."""
         entities: dict[str, Any] = {}
         for entity_id, record in self._write_tracker.snapshot().items():
             status, claim_owner, matched_via, live_context_id = _classify_tracked(self.hass, entity_id, record)
@@ -423,4 +437,60 @@ class _WriteTrackingSensor(SensorEntity):
                 "observed": record.get("observed"),
                 "latest": record.get("latest"),
             }
-        return {"entities": entities}
+        return entities
+
+    @callback
+    def _refresh_statuses(self) -> None:
+        """Fire EVENT_LIGHT_OVERRIDDEN for any light that has just passed
+        into someone else's hands.
+
+        Edge-triggered deliberately: the event marks the moment a light
+        changed hands, not the fact that it currently is. It carries both
+        claims and the live values as they were at that instant, because
+        that is exactly what can't be reconstructed later - by the time
+        anyone looks the curve has moved on, and a stale target says
+        nothing about why the light was excluded.
+
+        Kept out of `extra_state_attributes`: firing events is a side
+        effect, and HA reads that property on every state write."""
+        entities = self._classify_all()
+        if self._last_statuses is not None:
+            for entity_id, data in entities.items():
+                previous = self._last_statuses.get(entity_id)
+                if data["status"] == "overridden" and previous != "overridden":
+                    self._fire_overridden(entity_id, self._write_tracker.snapshot().get(entity_id, {}), previous, data["live_context_id"])
+        # Seeded on the first pass without firing, so a restart doesn't
+        # re-announce every light that was already overridden before it.
+        self._last_statuses = {entity_id: data["status"] for entity_id, data in entities.items()}
+
+    @callback
+    def _fire_overridden(
+        self, entity_id: str, record: dict, previous: str | None, live_context_id: str | None
+    ) -> None:
+        state = self.hass.states.get(entity_id)
+        self.hass.bus.async_fire(
+            EVENT_LIGHT_OVERRIDDEN,
+            {
+                "entity_id": entity_id,
+                # Who lost it - the record's own owner, not classify()'s
+                # matched owner, which is None for an overridden light.
+                "owner_id": _owner_of(record),
+                "previous_status": previous,
+                "live_context_id": live_context_id,
+                # The live values at this exact moment. Comparing these
+                # against each claim's target is the whole diagnosis, and
+                # neither survives to be looked up afterwards.
+                "live": {
+                    "state": state.state if state else None,
+                    "brightness": state.attributes.get("brightness") if state else None,
+                    "color_temp_kelvin": state.attributes.get("color_temp_kelvin") if state else None,
+                    "rgb_color": state.attributes.get("rgb_color") if state else None,
+                },
+                "observed": record.get("observed"),
+                "latest": record.get("latest"),
+            },
+        )
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        return {"entities": self._classify_all()}

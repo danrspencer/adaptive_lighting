@@ -391,3 +391,105 @@ async def test_an_anonymous_write_does_not_orphan_a_light_from_its_owner(hass: H
 
     assert "sensor.kitchen_adaptive_controlled" in by_id
     assert by_id["sensor.kitchen_adaptive_controlled"].extra_state_attributes["total_tracked"] == 1
+
+
+# --- EVENT_LIGHT_OVERRIDDEN ----------------------------------------------
+
+
+def _capture_override_events(hass: HomeAssistant) -> list:
+    from custom_components.adaptive_lighting_helpers.const import EVENT_LIGHT_OVERRIDDEN
+
+    events: list = []
+    hass.bus.async_listen(EVENT_LIGHT_OVERRIDDEN, events.append)
+    return events
+
+
+async def _take_light_by_hand(hass: HomeAssistant) -> None:
+    """Something else sets the light, at values matching neither claim."""
+    _set_light(hass, "light.a", "on", brightness=12, color_temp_kelvin=6500, context=Context())
+
+
+async def test_the_first_pass_seeds_without_announcing_existing_overrides(
+    hass: HomeAssistant, write_tracker: LastWriteTracker, sensor_entity: _WriteTrackingSensor
+):
+    """A restart must not re-announce every light that was already
+    overridden before it - the event marks a light changing hands, and
+    nothing changed hands here."""
+    events = _capture_override_events(hass)
+    ctx = Context()
+    _set_light(hass, "light.a", "on", brightness=200, color_temp_kelvin=3000, context=ctx)
+    await _record(write_tracker, "light.a", "automation.room", ctx.id)
+    await _take_light_by_hand(hass)
+
+    sensor_entity._refresh_statuses()
+    await hass.async_block_till_done()
+
+    assert sensor_entity.extra_state_attributes["entities"]["light.a"]["status"] == "overridden"
+    assert events == []
+
+
+async def test_a_light_changing_hands_fires_once_with_a_full_snapshot(
+    hass: HomeAssistant, write_tracker: LastWriteTracker, sensor_entity: _WriteTrackingSensor
+):
+    events = _capture_override_events(hass)
+    ctx = Context()
+    _set_light(hass, "light.a", "on", brightness=200, color_temp_kelvin=3000, context=ctx)
+    await write_tracker.async_record(
+        ["light.a"],
+        {"light.a": "ctx-before"},
+        ctx.id,
+        "automation.room",
+        targets={"light.a": {"brightness": 200, "color_temp_kelvin": 3000}},
+    )
+    sensor_entity._refresh_statuses()  # seeds, still controlled
+
+    await _take_light_by_hand(hass)
+    sensor_entity._refresh_statuses()
+    await hass.async_block_till_done()
+
+    assert len(events) == 1
+    data = events[0].data
+    assert data["entity_id"] == "light.a"
+    assert data["owner_id"] == "automation.room"
+    assert data["previous_status"] == "controlled"
+    # The live values at the moment it changed hands, and what we had last
+    # asked for - the comparison you can't reconstruct afterwards.
+    assert data["live"]["brightness"] == 12
+    assert data["live"]["color_temp_kelvin"] == 6500
+    assert data["latest"]["target"] == {"brightness": 200, "color_temp_kelvin": 3000}
+    assert data["observed"] is not None
+
+    # Still overridden on the next refresh - no repeat.
+    sensor_entity._refresh_statuses()
+    await hass.async_block_till_done()
+    assert len(events) == 1
+
+
+async def test_it_fires_again_if_the_light_comes_back_and_is_taken_again(
+    hass: HomeAssistant, write_tracker: LastWriteTracker, sensor_entity: _WriteTrackingSensor
+):
+    """Edge-triggered means every hand-over is recorded, not just the
+    first - a light that flaps in and out is exactly the case worth
+    seeing in the timeline."""
+    events = _capture_override_events(hass)
+    ctx = Context()
+    _set_light(hass, "light.a", "on", brightness=200, color_temp_kelvin=3000, context=ctx)
+    await _record(write_tracker, "light.a", "automation.room", ctx.id)
+    sensor_entity._refresh_statuses()
+
+    await _take_light_by_hand(hass)
+    sensor_entity._refresh_statuses()
+    await hass.async_block_till_done()
+    assert len(events) == 1
+
+    # Reclaimed by a fresh write of our own, then taken again.
+    reclaim = Context()
+    _set_light(hass, "light.a", "on", brightness=201, color_temp_kelvin=3000, context=reclaim)
+    await _record(write_tracker, "light.a", "automation.room", reclaim.id)
+    sensor_entity._refresh_statuses()
+    assert sensor_entity.extra_state_attributes["entities"]["light.a"]["status"] == "controlled"
+
+    await _take_light_by_hand(hass)
+    sensor_entity._refresh_statuses()
+    await hass.async_block_till_done()
+    assert len(events) == 2

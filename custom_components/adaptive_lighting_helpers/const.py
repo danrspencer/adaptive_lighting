@@ -20,3 +20,11 @@ CONF_TWO_STEP_MODELS = "two_step_models"
 # the global write-tracking sensor already exposes, so enabling them is a
 # choice about how many entities you want, not about what's tracked.
 CONF_OWNER_SENSORS = "owner_sensors"
+
+# Fired once each time a tracked light passes into "overridden" - edge
+# triggered, not level, so it marks the transition rather than repeating
+# while the light stays taken. Carries a full snapshot of both claims and
+# the live values at that instant, which is the thing you can't
+# reconstruct afterwards: by the time anyone looks, the curve has moved
+# and the evidence is gone. See sensor.py's _refresh_statuses.
+EVENT_LIGHT_OVERRIDDEN = "adaptive_lighting_helpers_light_overridden"
