@@ -51,7 +51,7 @@ function clamp(v, lo, hi) {
 // Tanner Helland's Kelvin -> RGB approximation. Purely a display concern
 // (turning a Kelvin number into a colour) -- not part of the schedule
 // logic, so it stays here rather than in the shared macro.
-function kelvinToRgb(kelvin) {
+export function kelvinToRgb(kelvin) {
   const temp = kelvin / 100;
   let r, g, b;
 
@@ -85,12 +85,59 @@ function rgbToHex([r, g, b]) {
 // Mirrors curve.py's phase_at() exactly - same four boundaries, same
 // half-open intervals - so the hover tooltip's phase name always agrees
 // with what the real schedule would report for that instant.
-function phaseAt(t, morning, day, evening, night) {
+//
+// Exported (along with phaseMarks and kelvinToRgb below) purely so
+// tests/test_curve_js_parity.py can import this file under node and
+// check them against curve.py. Home Assistant loads this file as an ES
+// module (add_extra_js_url defaults to es5: false), so the exports are
+// simply unused there.
+export function phaseAt(t, morning, day, evening, night) {
   if (t < morning) return 'Night';
   if (t < day) return 'Morning';
   if (t < evening) return 'Day';
   if (t < night) return 'Evening';
   return 'Night';
+}
+
+const PHASE_ORDER = ['Morning', 'Day', 'Evening', 'Night'];
+
+// Mirrors curve.py's phase_marks(). Which phases actually occur today,
+// and where each really starts - which is NOT the same as the four
+// configured boundaries, because phaseAt above is a cascade of `t <
+// boundary` tests that tolerates them being set out of order.
+//
+// With Morning at 10:00 and Day at 08:00, nothing is ever Morning (by
+// the time t clears 10:00 it has already passed the 08:00 test), and Day
+// actually begins at 10:00 rather than its own 08:00. Drawing the raw
+// boundaries would label a phase that isn't happening, and put the next
+// one at a time it doesn't start. Both fall out of one rule: each phase
+// begins at the running maximum of the boundaries up to and including
+// its own, and is real exactly when the span to the next one isn't
+// empty.
+//
+// Night is special both ways: the day always opens on Night, so its
+// boundary marks the RETURN to Night - and if nothing ever leaves Night
+// (a fully reversed schedule) there's no return to draw, so nothing is
+// marked at all. See curve.py's phase_marks docstring, and
+// tests/test_curve.py, which pins this against phaseAt's real output.
+export function phaseMarks(morning, day, evening, night) {
+  const effectiveStarts = [];
+  let running = null;
+  for (const ts of [morning, day, evening, night]) {
+    running = running === null ? ts : Math.max(running, ts);
+    effectiveStarts.push(running);
+  }
+
+  const marks = [];
+  for (let i = 0; i < PHASE_ORDER.length - 1; i++) {
+    if (effectiveStarts[i] < effectiveStarts[i + 1]) {
+      marks.push([PHASE_ORDER[i], effectiveStarts[i]]);
+    }
+  }
+  if (marks.length) {
+    marks.push(['Night', effectiveStarts[effectiveStarts.length - 1]]);
+  }
+  return marks;
 }
 
 // title unset -> "Adaptive Lighting"; title: "" explicitly -> no header at
@@ -345,12 +392,12 @@ class AdaptiveLightingCurveCard extends HTMLElement {
     // on its own boundary line just like Morning/Day/Night; the
     // earliest/latest range it can be clamped between is shown
     // separately, by eveningRange below, not folded into this label.
-    const topLabels = [
-      ['Morning', b.morning],
-      ['Day', b.day],
-      ['Evening', b.evening],
-      ['Night', b.night],
-    ]
+    // Only the phases that actually occur, each at the instant it really
+    // starts - see phaseMarks above. A schedule whose boundaries are out
+    // of order otherwise labels a phase that never happens.
+    const marks = phaseMarks(b.morning, b.day, b.evening, b.night);
+
+    const topLabels = marks
       .map(([name, t]) => {
         const leftPct = ((xOf(t) / VB_W) * 100).toFixed(2);
         return `<span class="boundary-label" style="left:${leftPct}%" title="${fmtTime(t)}">${name}</span>`;
@@ -387,8 +434,8 @@ class AdaptiveLightingCurveCard extends HTMLElement {
     // sun-line's solid stroke lets both remain visible - the dashes'
     // gaps show the orange line underneath instead of one flat-out
     // hiding the other.
-    const boundaryLines = [b.morning, b.day, b.evening, b.night]
-      .map((t) => `<line x1="${xOf(t).toFixed(1)}" y1="${PAD_TOP}" x2="${xOf(t).toFixed(1)}" y2="${BASELINE_Y}" class="boundary-line" />`)
+    const boundaryLines = marks
+      .map(([, t]) => `<line x1="${xOf(t).toFixed(1)}" y1="${PAD_TOP}" x2="${xOf(t).toFixed(1)}" y2="${BASELINE_Y}" class="boundary-line" />`)
       .join('');
 
     const sunriseTs = this._sun && sunTimeInWindow(this._sun.attributes.next_rising, dayStart, dayEnd);

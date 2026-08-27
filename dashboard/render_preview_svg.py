@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "custom_components" / "adaptive_lighting_helpers"))
-from curve import kelvin_to_rgb  # noqa: E402
+from curve import kelvin_to_rgb, phase_marks  # noqa: E402
 
 VB_W = 960
 VB_H = 220
@@ -95,12 +95,19 @@ def main():
     # dashed line on top lets the sun-line's solid orange show through
     # its gaps instead of one flat-out hiding the other. Matches
     # www/adaptive-lighting-curve-card.js exactly.
-    boundary_defs = [
-        ("Morning", boundaries["morning"]),
-        ("Day", boundaries["day"]),
-        ("Evening", boundaries["evening"]),
-        ("Night", boundaries["night"]),
-    ]
+    # Via phase_marks rather than the four raw boundaries, so this stays
+    # true to the comment above: the live card does the same. It only
+    # matters for an out-of-order schedule (a Morning time later than the
+    # Day time never happens, and shouldn't be labelled), which the
+    # synthetic preview data never has - but a third copy of this drawing
+    # logic that quietly disagrees with the other two is exactly how they
+    # drift apart.
+    boundary_defs = phase_marks(
+        boundaries["morning"],
+        boundaries["day"],
+        boundaries["evening"],
+        boundaries["night"],
+    )
     boundary_lines = []
     top_labels = []
     for label, t in boundary_defs:

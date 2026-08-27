@@ -110,6 +110,70 @@ def phase_at(t: float, morning_ts: float, day_start_ts: float, evening_ts: float
     return "Night"
 
 
+PHASE_ORDER = ("Morning", "Day", "Evening", "Night")
+
+
+def phase_marks(morning_ts: float, day_start_ts: float, evening_ts: float, night_ts: float) -> list:
+    """Which phases actually occur today, and the instant each really starts.
+
+    phase_at() above is a cascade of `t < boundary` tests in a fixed
+    order, which quietly tolerates boundaries set out of order - a
+    Morning time later than the Day time, say. Two things follow from
+    that cascade, and neither is obvious from the four raw boundaries:
+
+    1. A phase can be UNREACHABLE. With Morning at 10:00 and Day at
+       08:00, nothing is ever Morning: by the time `t` clears 10:00 it
+       has already passed the 08:00 test, so the day runs
+       Night -> Day -> Evening -> Night.
+    2. The phase that follows an unreachable one starts at the LATER
+       boundary, not its own. In that same example Day starts at 10:00
+       (Morning's boundary), not at its own 08:00.
+
+    Both fall out of one rule: each phase effectively begins at the
+    running maximum of the boundaries up to and including its own, and
+    occupies the span up to the next phase's effective start - so it is
+    real exactly when that span is non-empty.
+
+    Returned as [(name, start_ts), ...] in order, omitting any phase
+    that never happens. Night is a special case in both directions: the
+    day always *opens* on Night (`t < morning_ts`), so its own boundary
+    marks the RETURN to Night rather than its only appearance - and if
+    nothing ever leaves Night (every other phase unreachable, as with a
+    fully reversed schedule) there is no return to mark, so nothing is
+    returned at all. A mark means "the phase changes here"; a day that is
+    Night throughout changes nowhere.
+
+    This exists because the boundaries are freely settable `time`
+    entities, so an out-of-order schedule is a state a user can reach.
+    The curve itself already handles it correctly, having gone through
+    phase_at(); it's anything drawing the boundaries *directly* from the
+    four timestamps - the dashboard card's phase labels and lines - that
+    would otherwise show a phase that isn't happening, at a time it
+    isn't happening at.
+    """
+    raw = (morning_ts, day_start_ts, evening_ts, night_ts)
+
+    effective_starts = []
+    running = None
+    for ts in raw:
+        running = ts if running is None else max(running, ts)
+        effective_starts.append(running)
+
+    marks = []
+    for i, name in enumerate(PHASE_ORDER[:-1]):
+        # Squeezed out by the next phase starting no later than it does.
+        if effective_starts[i] < effective_starts[i + 1]:
+            marks.append((name, effective_starts[i]))
+
+    # Night last, and only if some other phase actually happens - see the
+    # docstring. Without that check a fully reversed schedule (a day that
+    # is Night from end to end) would draw a Night boundary partway
+    # through, implying a change that never occurs.
+    if marks:
+        marks.append(("Night", effective_starts[-1]))
+    return marks
+
+
 def brightness_for_phase(
     day_phase: str,
     now_ts: float,
