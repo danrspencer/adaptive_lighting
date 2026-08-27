@@ -277,7 +277,8 @@ is in one `entities` attribute that no stock card can usefully render. If you'd 
 Assistant UI, turn on **Create per-owner entities** in the integration's options (Settings → Devices &
 Services → Adaptive Lighting Helpers → Configure).
 
-That adds three entities for each `owner_id` that has written lights through this integration:
+That adds a **device** for each `owner_id` that has written lights through this integration, carrying three
+entities:
 
 | entity | state |
 |---|---|
@@ -316,14 +317,23 @@ check, and a non-zero `overridden` count doesn't mean anything is wrong.
 The two counts deliberately don't sum to `total_tracked`: a light that's off or unavailable is in neither,
 because override protection doesn't apply to it at all.
 
+**One device per owner** means the three are grouped, renamed and deleted together. Renaming the device
+retitles all three (the entity_ids don't move), and **deleting it removes all three at once** - the way to
+clean up an `owner_id` that no longer exists. Deleting also clears that owner's tracked records, without which
+the device would simply be rebuilt from them on the next write.
+
+*Caveat:* supporting that Delete button means Home Assistant offers one on **every** device this integration
+owns, including the per-schedule devices, where it fails with "rejected by integration". Those are removed by
+deleting the sensor itself (Settings → Devices & Services → the subentry), which is unchanged.
+
 **Areas.** An `owner_id` is an arbitrary string, but in practice it's the calling automation's own
 `entity_id` - and that automation is usually already assigned to the room it looks after. When it resolves to
-a registered entity with an area (its own, or its device's), these three entities are put in that area too,
-so they turn up under the room rather than in an unsorted heap. Anything that doesn't resolve is left
-unassigned. Moving one by hand sticks - a derived area only ever fills in a blank.
+a registered entity with an area (its own, or its device's), the owner device is put in that area too, so it
+turns up under the room rather than in an unsorted heap. Anything that doesn't resolve is left unassigned.
+Moving a device by hand sticks - a derived area only ever fills in a blank.
 
 Off by default, because a busy house gains a few dozen entities. Owners are derived from the tracked
-records themselves, so nothing extra is stored and a restart brings the same entities back. An owner whose
+records themselves, so nothing extra is stored and a restart brings the same devices back. An owner whose
 records all age out (nothing written for a day) keeps its sensors, reporting 0, rather than having them
 vanish and reappear every time a room goes unused - delete a genuinely dead one from the entity registry, or
 toggle the option off and on. Turning the option off removes them all.

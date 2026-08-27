@@ -443,21 +443,27 @@ class _WriteTrackingSensor(SensorEntity):
     indirectly by probing compute_lighting_groups, which tells you
     *whether* a light is currently excluded, never *why*.
 
-    Deliberately has no device_info. This data is global to the whole
-    config entry (one LastWriteTracker shared across every apply_lighting
-    call, from every room automation - see write_tracking.py's module
-    docstring), not scoped to any one schedule instance, so there's no
-    single device it naturally belongs on. Giving it a new device of its
-    own would risk reintroducing the "Add Integration creates a device"
-    popup this integration's main entry deliberately avoids (see
-    CLAUDE.md's "Auto-seeded Default sensor" entry) - confirmed against
-    home-assistant/frontend's step-flow-create-entry.ts that the
-    device-rename/area-picker dialog is gated purely on whether *any*
-    device exists for the config entry at render time (a live registry
-    read against `device.primary_config_entry`, not something scoped to
-    just the flow that's completing), for every flow type including
-    options/subentry flows - so an entity with no device at all can never
-    trigger it, regardless of when or how it's created.
+    Deliberately has no device_info - but for its own reason, not the
+    one an earlier version of this docstring gave. This data is global to
+    the whole config entry (one LastWriteTracker shared across every
+    apply_lighting call, from every room automation - see
+    write_tracking.py's module docstring), belonging to no schedule
+    instance and no owner, so there is no device it naturally sits on.
+    The per-owner entities are owner-scoped by construction and do get
+    one - see owner_device_info.
+
+    The claim this docstring used to make - that any device on the entry
+    reintroduces HA's device-rename/area-picker dialog, "for every flow
+    type including options/subentry flows" - was overstated, and led to
+    a wrong conclusion once already. Re-checked against
+    home-assistant/frontend: the dialog is gated on the flow's own
+    `showDevices`, and show-dialog-options-flow.ts sets it **false**, so
+    an options flow never renders it however many devices exist.
+    dialog-data-entry-flow.ts then filters `hass.devices` by
+    `device.config_entries.includes(entry_id)` taken from the flow
+    result, so only the main config flow (showDevices true, at entry
+    creation) is affected - and every schedule subentry already creates a
+    device anyway, so the entry is never device-free in practice.
 
     Push-updated via SIGNAL_WRITE_TRACKING_UPDATED for instant feedback
     right when write_tracking.py actually mutates something (a real
