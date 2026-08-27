@@ -198,3 +198,26 @@ both the routing decision (a real bulb correctly bucketed by its actual `support
 `light.turn_on` dispatch itself (a real bulb landing in `xy` colour mode with the expected `rgb_color`) - and
 `apply_lighting`'s context.id-based override protection confirmed live too: a foreign write is correctly left
 alone, our own write correctly isn't, and `force: true` correctly writes through regardless. See CLAUDE.md's "Current status" section for the full rundown.
+
+## Cutting a release
+
+HACS reads the version out of `manifest.json`, not out of the tag, so the two must
+agree or the version people see installed isn't the one they downloaded. That's
+checked twice: `tests/test_version.py` runs on every PR, and
+`.github/workflows/release.yml` re-checks at tag time and refuses to publish a
+mismatch.
+
+1. Bump `version` in `custom_components/adaptive_lighting_helpers/manifest.json`.
+   Breaking changes bump the **minor** while below 1.0.
+2. Add a `## [x.y.z] - YYYY-MM-DD` section to `CHANGELOG.md`, calling out anything
+   breaking explicitly — this integration ships in two halves (integration and
+   blueprint) that deploy separately, so "you must deploy both" is a real
+   instruction, not boilerplate.
+3. Merge, then tag the merge commit and push it:
+
+   ```bash
+   git tag v0.2.0 && git push origin v0.2.0
+   ```
+
+The workflow validates and creates the GitHub release. HACS picks it up from there,
+so installs can track releases rather than `main`.
