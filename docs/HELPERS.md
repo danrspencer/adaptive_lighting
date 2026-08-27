@@ -36,7 +36,7 @@ another automation — and pick it up again when they let go. That needs an answ
 this light *ours*", which is what the claims below record.
 
 **Claims belong to a state device, not to a caller.** A state device is a named tracking scope you configure
-(Settings → Devices & Services → Adaptive Lighting Helpers → Add state device), pointed at an area, some
+(Settings → Devices & Services → **Adaptive Lighting Tracking** → Add state device), pointed at an area, some
 devices, or specific lights. Every light resolves to exactly one:
 
 1. a state device whose target names the **entity**

@@ -438,9 +438,28 @@ target only gets staler, so the value-rescue can't recover it either.
 Revisit properly if it keeps recurring; the underlying rot is that an
 excluded entity never gets a refreshed claim.
 
+### Two config entries
+
+The integration installs as **two** entries, not one: *Adaptive Lighting
+Schedules* (day-phase/curve sensors) and *Adaptive Lighting Tracking*
+(the services, the claim registry, and the state devices). Both use the
+sensor platform; each platform module branches on
+`entry.data[CONF_ENTRY_TYPE]`.
+
+Why: HA's integration page renders **one section per subentry** with no
+hook to group them by type (`subEntries.map(...)` in
+`ha-config-entry-row.ts`), so a single entry flattened schedules and
+scopes into one long list of peers - 19 of them on this house. The entry
+is the only level at which the distinction can be expressed.
+
+The services live with **tracking**, not schedules: every one of them is
+about which lights are being driven and by whom, and they need the claim
+registry that entry owns.
+
 ### Multi-sensor schedule architecture
 
-The config entry registers services only and carries no schedule.
+The schedules entry registers no services and carries no schedule of its
+own.
 "Add Integration" creates **zero devices and zero entities** - that's
 deliberate: HA's "integration added" dialog
 (`step-flow-create-entry.ts`) shows a device-rename + area-picker form

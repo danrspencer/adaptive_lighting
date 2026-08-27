@@ -494,3 +494,41 @@ async def test_counters_refresh_when_a_lights_live_state_changes(hass: HomeAssis
 
     assert refreshed, "the poll must tell the counters to recompute"
     assert overridden.native_value == 0
+
+
+async def test_each_entry_type_owns_only_its_own_sensors(hass: HomeAssistant):
+    """Both entry types use the sensor platform, so the branch deciding
+    which entities belong to which is load-bearing: without it a
+    schedules entry would try to build tracking entities (and look up a
+    claim registry it doesn't have), and vice versa."""
+    from custom_components.adaptive_lighting_helpers.const import (
+        CONF_ENTRY_TYPE as CET,
+        ENTRY_TYPE_SCHEDULES,
+        SUBENTRY_TYPE_SENSOR,
+    )
+    from custom_components.adaptive_lighting_helpers.coordinator import ScheduleCoordinator, schedule_instances
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CET: ENTRY_TYPE_SCHEDULES},
+        subentries_data=[
+            ConfigSubentryData(
+                subentry_type=SUBENTRY_TYPE_SENSOR, title="Ground Floor", unique_id="ground_floor", data={}
+            )
+        ],
+    )
+    entry.add_to_hass(hass)
+    for instance in schedule_instances(entry):
+        coordinator = ScheduleCoordinator(hass, instance)
+        # Plain refresh: async_config_entry_first_refresh needs the
+        # coordinator to carry a config entry, which only happens inside
+        # a real entry setup.
+        await coordinator.async_refresh()
+        hass.data.setdefault(DOMAIN, {})[instance.subentry_id] = coordinator
+
+    added: list = []
+    await sensor_setup(hass, entry, lambda entities, **kw: added.extend(entities))
+
+    assert [e.entity_id for e in added] == ["sensor.ground_floor_adaptive_lighting"]
+    # No claims storage on a schedules entry - it has no registry at all.
+    assert not any(hasattr(e, "claims") for e in added)
