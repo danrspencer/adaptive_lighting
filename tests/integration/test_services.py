@@ -414,6 +414,26 @@ async def test_check_control_reports_the_scope_that_tracks_each_light(setup_inte
     assert result["results"]["light.unscoped"]["scope"] is None
 
 
+async def test_record_write_reports_only_what_it_actually_recorded(setup_integration: HomeAssistant):
+    """A light matching no state device isn't tracked, so recording it
+    is a no-op. Echoing the request back would tell a caller their write
+    was tracked when nothing happened - the same quiet failure as any
+    other success report for work that didn't occur."""
+    hass = setup_integration
+    _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=100, color_temp_kelvin=3000)
+    hass.states.async_set("light.unscoped", "on", {"brightness": 100, "color_temp_kelvin": 3000})
+
+    result = await hass.services.async_call(
+        DOMAIN,
+        "record_write",
+        {"entities": ["light.a", "light.unscoped"]},
+        blocking=True,
+        return_response=True,
+    )
+
+    assert result["recorded"] == ["light.a"]
+
+
 async def test_check_control_does_not_take_force(setup_integration: HomeAssistant):
     """Forcing is something a write does. As a question it has exactly
     one answer - is_blocked returns False for everything when force is
