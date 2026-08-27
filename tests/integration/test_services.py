@@ -34,7 +34,12 @@ from homeassistant.util import dt as dt_util
 
 from custom_components.adaptive_lighting_helpers import _build_lookup, async_setup_entry
 from custom_components.adaptive_lighting_helpers.grouping import build_groups
-from custom_components.adaptive_lighting_helpers.const import CONF_TARGET, SUBENTRY_TYPE_STATE
+from custom_components.adaptive_lighting_helpers.const import (
+    CONF_ENTRY_TYPE,
+    CONF_TARGET,
+    ENTRY_TYPE_TRACKING,
+    SUBENTRY_TYPE_STATE,
+)
 from custom_components.adaptive_lighting_helpers.coordinator import state_instances
 from custom_components.adaptive_lighting_helpers.write_tracking import STALE_RECORD_MAX_AGE_DAYS, ClaimRegistry
 
@@ -60,7 +65,7 @@ async def _setup_entry(hass: HomeAssistant) -> MockConfigEntry:
     await _track_test_lights(hass)
     entry = MockConfigEntry(
         domain=DOMAIN,
-        data={},
+        data={CONF_ENTRY_TYPE: ENTRY_TYPE_TRACKING},
         subentries_data=[
             ConfigSubentryData(
                 subentry_type=SUBENTRY_TYPE_STATE,
