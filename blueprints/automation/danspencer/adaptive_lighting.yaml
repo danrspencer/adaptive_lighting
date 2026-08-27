@@ -791,7 +791,7 @@ action:
       # lights right now. Nothing is given up by it - they aren't being
       # written, so there is no protection to lose, and the next tick
       # that does manage them re-establishes a claim through the
-      # ordinary first-write path. clear_ownership is a no-op for an
+      # ordinary first-write path. clear_claims is a no-op for an
       # entity with no record, so this costs nothing on the ticks where
       # it changes nothing.
       - alias: "Release lights handed off to a scene or another owner"
@@ -799,7 +799,7 @@ action:
           - condition: template
             value_template: "{{ handed_off_entities | length > 0 }}"
         then:
-          - action: adaptive_lighting_helpers.clear_ownership
+          - action: adaptive_lighting_helpers.clear_claims
             data:
               entities: "{{ handed_off_entities }}"
       # Reachability, multiplier bucketing, tolerance checks, override

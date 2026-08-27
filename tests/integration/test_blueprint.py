@@ -102,11 +102,11 @@ def light_turn_off_calls(hass: HomeAssistant):
 
 
 @pytest.fixture(autouse=True)
-def clear_ownership_calls(hass: HomeAssistant):
+def clear_claims_calls(hass: HomeAssistant):
     """Autouse because the blueprint releases handed-off lights on every
     tick that has any, in rooms these tests aren't otherwise asserting
     about - an unmocked service call would fail those runs outright."""
-    return async_mock_service(hass, "adaptive_lighting_helpers", "clear_ownership")
+    return async_mock_service(hass, "adaptive_lighting_helpers", "clear_claims")
 
 
 @pytest.fixture(autouse=True)
@@ -961,7 +961,7 @@ class TestSceneHandoff:
         assert calls and calls[-1].data["entities"] == ["light.uncovered"]
 
     async def test_scene_covered_lights_are_released_from_override_protection(
-        self, hass, apply_lighting_calls, scene_turn_on_calls, clear_ownership_calls
+        self, hass, apply_lighting_calls, scene_turn_on_calls, clear_claims_calls
     ):
         """A light handed to a scene isn't written by apply_lighting, so its
         override-protection claim would freeze at the last real write and be
@@ -982,14 +982,14 @@ class TestSceneHandoff:
         hass.states.async_set("sensor.test_adaptive", "Evening", {"brightness": 150, "color_temp": 3000})
         await hass.async_block_till_done()
 
-        assert clear_ownership_calls
-        assert clear_ownership_calls[-1].data["entities"] == ["light.covered"]
+        assert clear_claims_calls
+        assert clear_claims_calls[-1].data["entities"] == ["light.covered"]
         # The uncovered light is still adaptively managed, so it must NOT
         # be released.
         assert apply_lighting_calls[-1].data["entities"] == ["light.uncovered"]
 
     async def test_a_scene_reaching_outside_scope_releases_nothing(
-        self, hass, apply_lighting_calls, clear_ownership_calls
+        self, hass, apply_lighting_calls, clear_claims_calls
     ):
         """scene_active gates the release. A scene that exists but covers
         something outside the room is treated as no scene at all - adaptive
@@ -1009,7 +1009,7 @@ class TestSceneHandoff:
         hass.states.async_set("sensor.test_adaptive", "Evening", {"brightness": 150, "color_temp": 3000})
         await hass.async_block_till_done()
 
-        assert clear_ownership_calls == []
+        assert clear_claims_calls == []
         assert apply_lighting_calls[-1].data["entities"] == ["light.a"]
 
     async def test_scene_recheck_is_skipped_on_a_same_phase_attribute_only_tick(
@@ -1181,7 +1181,7 @@ class TestBrightnessScaling:
         assert "light.handed_off" not in turned_off
 
     async def test_a_null_multiplier_light_is_released_from_override_protection(
-        self, hass, apply_lighting_calls, clear_ownership_calls
+        self, hass, apply_lighting_calls, clear_claims_calls
     ):
         """The other half of the handoff: a null multiplier means something
         else owns this light, so its claim is released too. Live, this was
@@ -1199,8 +1199,8 @@ class TestBrightnessScaling:
         async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=1))
         await hass.async_block_till_done()
 
-        assert clear_ownership_calls
-        assert clear_ownership_calls[-1].data["entities"] == ["light.handed_off"]
+        assert clear_claims_calls
+        assert clear_claims_calls[-1].data["entities"] == ["light.handed_off"]
 
     async def test_a_zero_multiplier_light_is_still_turned_off_when_occupancy_clears(
         self, hass, light_turn_off_calls

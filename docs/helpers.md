@@ -73,7 +73,7 @@ Because the scope is decided by configuration rather than by whoever wrote last,
 same room share that room's claims and co-operate.** Neither reads the other's write as an intruder. If you
 want them tracked separately, give them separate state devices.
 
-`apply_lighting` takes no ownership argument at all. `force: true` still writes through regardless of who
+`apply_lighting` names no owner at all. `force: true` still writes through regardless of who
 holds a light, and the write is still recorded, so protection works again on the next non-forced call.
 
 #### What's recorded, and why there are two claims
@@ -103,24 +103,25 @@ state you'd want anyway.
 
 ### Using override protection standalone
 
-Everything above is also its own pair of services - `check_ownership` (read-only) and `record_ownership`
+Everything above is also its own pair of services - `check_control` (read-only) and `record_write`
 (records a write) - not specific to lights, or to this integration's own `apply_lighting`. Any automation can
 use them directly on its own entities:
 
 ```yaml
-action: adaptive_lighting_helpers.check_ownership
+action: adaptive_lighting_helpers.check_control
 data:
   entities: [light.kitchen_1]
-response_variable: ownership
-# ownership.results["light.kitchen_1"] -> {"blocked": false, "status": "controlled", "matched_via": "latest-context"}
+response_variable: control
+# control.results["light.kitchen_1"] ->
+#   {"blocked": false, "status": "controlled", "matched_via": "latest-context", "scope": "Kitchen"}
 # matched_via is "context" (a direct match on either of the claim's context ids) or "value" (the
 # delayed-echo/mired rescue above, against either claim's target) for a `controlled` status, null
 # otherwise - useful for understanding *why* a light is considered ours, not just that it is.
 ```
 
 ```yaml
-# After actually issuing your own light.turn_on, so a later check_ownership call recognises it as yours:
-action: adaptive_lighting_helpers.record_ownership
+# After actually issuing your own light.turn_on, so a later check_control call recognises it as yours:
+action: adaptive_lighting_helpers.record_write
 data:
   entities: [light.kitchen_1]
   targets:
@@ -128,18 +129,18 @@ data:
 ```
 
 `apply_lighting`/`compute_lighting_groups` use the exact same underlying logic internally (a direct Python
-call, not a service-to-service round trip) - `check_ownership`'s `status` values are the same ones
+call, not a service-to-service round trip) - `check_control`'s `status` values are the same ones
 each state device's `claims` attribute shows (see below), and `targets` is the same shape `apply_lighting`
 itself records automatically on every write it makes.
 
-A third service, `clear_ownership`, is the manual escape hatch for a light stuck reporting `overridden` with no
-other way back - possible because `apply_lighting`/`compute_lighting_groups` never call `record_ownership`
+A third service, `clear_claims`, is the manual escape hatch for a light stuck reporting `overridden` with no
+other way back - possible because `apply_lighting`/`compute_lighting_groups` never call `record_write`
 internally for anything already excluded, so an overridden light's own `latest` claim can go permanently stale
 (most concretely: during a ramping curve, once its recorded target drifts more than a tick or two away from
 where the curve has since moved on to):
 
 ```yaml
-action: adaptive_lighting_helpers.clear_ownership
+action: adaptive_lighting_helpers.clear_claims
 data:
   entities: [light.kitchen_1]
 ```
@@ -221,7 +222,7 @@ one tick.
 Each state device's `sensor.<name>_adaptive_tracking` makes the mechanism above inspectable directly, rather
 than only indirectly through `compute_lighting_groups`'s `combined`/`needing_off` output (which tells you
 *whether* a light is currently excluded, never *why*). Its `claims` attribute holds, per light, the raw
-`observed`/`latest` records. `check_ownership` turns those into the computed `status` and `matched_via` -
+`observed`/`latest` records. `check_control` turns those into the computed `status` and `matched_via` -
 `"latest-context"`, `"latest-value"`, `"observed-context"` or `"observed-value"` - saying *how* a match was
 determined, so you needn't guess whether a light is `controlled` because its reported `context.id` matched
 directly, or because it was rescued via the delayed-echo/mired-equivalence value comparison described above.

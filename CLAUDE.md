@@ -405,9 +405,9 @@ in `docs/helpers.md` and `services.yaml` - not repeated here.
   of which layer reads the attributes, and voluptuous's own required-
   field validation gives the same hard failure the internal read was
   added for.
-- `check_ownership` / `record_ownership` / `clear_ownership` - override
+- `check_control` / `record_write` / `clear_claims` - override
   protection exposed standalone, for callers that want it without any
-  curve/brightness logic. `clear_ownership` is the manual escape hatch
+  curve/brightness logic. `clear_claims` is the manual escape hatch
   for a light stuck `overridden`.
 
 `rgb_color` on both `apply_lighting` and `compute_lighting_groups`
@@ -424,7 +424,7 @@ model, and why two rather than one, lives in `write_tracking.py`'s module
 docstring; the decision table lives in `override_protection.classify()`;
 the user-facing contract lives in `docs/helpers.md`. Three consumers
 share that one table - `grouping.py`'s `externally_set()`, `sensor.py`'s
-diagnostic status, and `check_ownership` - deliberately, because they
+diagnostic status, and `check_control` - deliberately, because they
 previously drifted.
 
 Facts worth knowing before touching it, each verified against HA core
@@ -454,7 +454,7 @@ rather than assumed:
 `build_groups()` excludes the entity from every group, so nothing ever
 records a fresher `pending` for it - and on a ramping curve its recorded
 target only gets staler, so the value-rescue can't recover it either.
-`clear_ownership` (and the card's Clear button) is the escape hatch.
+`clear_claims` (and the card's Clear button) is the escape hatch.
 Revisit properly if it keeps recurring; the underlying rot is that an
 excluded entity never gets a refreshed claim.
 

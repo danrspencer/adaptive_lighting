@@ -69,8 +69,8 @@ def test_every_documented_service_is_one_this_integration_registers():
         "apply_lighting",
         "compute_curve",
         "compute_scene_coverage",
-        "check_ownership",
-        "record_ownership",
-        "clear_ownership",
+        "check_control",
+        "record_write",
+        "clear_claims",
     }
     assert set(SERVICES) == expected
