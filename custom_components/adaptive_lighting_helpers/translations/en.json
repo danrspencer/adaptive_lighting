@@ -30,7 +30,11 @@
       }
     },
     "state": {
-      "title": "Add state device",
+      "entry_type": "State device",
+      "initiate_flow": {
+        "user": "Add state device",
+        "reconfigure": "Reconfigure state device"
+      },
       "step": {
         "user": {
           "title": "Add state device",
@@ -45,13 +49,13 @@
           "data": {
             "name": "Name",
             "target": "Lights, devices or areas"
-          }
+          },
+          "description": "A state device tracks which of its lights adaptive lighting is currently driving, and which have been taken over by something else. Point it at an area, a device, or specific lights. A light matching no state device simply isn't tracked."
         }
       },
       "error": {
         "already_configured": "A sensor or state device with that name already exists"
-      },
-      "entry_type": "State device"
+      }
     }
   },
   "issues": {
