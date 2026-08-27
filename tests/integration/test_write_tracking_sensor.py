@@ -493,3 +493,100 @@ async def test_it_fires_again_if_the_light_comes_back_and_is_taken_again(
     sensor_entity._refresh_statuses()
     await hass.async_block_till_done()
     assert len(events) == 2
+
+
+# --- the per-owner Clear button -------------------------------------------
+#
+# Shares setup_owner_entities() with the counter sensors above, so the
+# opt-in, dynamic-add and disable-cleanup behaviour is already covered
+# there. What's left is the button's own: does it appear per owner, and
+# does a press clear exactly that owner's records.
+
+
+async def _setup_button_platform(hass: HomeAssistant, *, owner_sensors: bool) -> list:
+    from custom_components.adaptive_lighting_helpers.button import async_setup_entry as button_setup
+    from custom_components.adaptive_lighting_helpers.const import CONF_OWNER_SENSORS, DOMAIN
+
+    entry = MockConfigEntry(domain=DOMAIN, data={}, options={CONF_OWNER_SENSORS: owner_sensors})
+    entry.add_to_hass(hass)
+    tracker = LastWriteTracker(hass)
+    await tracker.async_load()
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = tracker
+
+    added: list = []
+    await button_setup(hass, entry, lambda entities, **kw: added.extend(entities))
+    return added, tracker
+
+
+async def test_a_clear_button_is_created_per_owner_only_when_enabled(hass: HomeAssistant):
+    ctx = Context()
+    _set_light(hass, "light.a", "on", brightness=200, color_temp_kelvin=3000, context=ctx)
+    _set_light(hass, "light.b", "on", brightness=200, color_temp_kelvin=3000, context=ctx)
+    seed = LastWriteTracker(hass)
+    await seed.async_load()
+    await _record(seed, "light.a", "automation.kitchen", ctx.id)
+    await _record(seed, "light.b", "automation.hall", ctx.id)
+
+    off, _ = await _setup_button_platform(hass, owner_sensors=False)
+    assert off == []
+
+    on, _ = await _setup_button_platform(hass, owner_sensors=True)
+    assert sorted(e.entity_id for e in on) == [
+        "button.hall_adaptive_clear",
+        "button.kitchen_adaptive_clear",
+    ]
+    kitchen = next(e for e in on if e.entity_id == "button.kitchen_adaptive_clear")
+    assert kitchen.extra_state_attributes == {"owner_id": "automation.kitchen", "tracked": 1}
+
+
+async def test_pressing_clears_that_owners_records_and_leaves_other_owners_alone(hass: HomeAssistant):
+    """The whole point of the button - and the reason it clears by owner
+    rather than wholesale. A press is a reset for one room, not for the
+    house."""
+    ctx = Context()
+    for entity_id in ("light.a", "light.b", "light.c"):
+        _set_light(hass, entity_id, "on", brightness=200, color_temp_kelvin=3000, context=ctx)
+    seed = LastWriteTracker(hass)
+    await seed.async_load()
+    await _record(seed, "light.a", "automation.kitchen", ctx.id)
+    await _record(seed, "light.b", "automation.kitchen", ctx.id)
+    await _record(seed, "light.c", "automation.hall", ctx.id)
+
+    added, tracker = await _setup_button_platform(hass, owner_sensors=True)
+    kitchen = next(e for e in added if e.entity_id == "button.kitchen_adaptive_clear")
+    assert kitchen.extra_state_attributes["tracked"] == 2
+
+    await kitchen.async_press()
+
+    assert sorted(tracker.snapshot()) == ["light.c"]
+    assert kitchen.extra_state_attributes["tracked"] == 0
+
+
+async def test_disabling_sweeps_each_platforms_own_entities_not_the_others(hass: HomeAssistant):
+    """Both platforms' per-owner entities share the "<entry>_owner_"
+    unique_id prefix, so the disable sweep has to filter on the domain
+    too - otherwise whichever set up second would delete the first's."""
+    from homeassistant.helpers import entity_registry as er
+
+    from custom_components.adaptive_lighting_helpers.button import async_setup_entry as button_setup
+    from custom_components.adaptive_lighting_helpers.const import CONF_OWNER_SENSORS, DOMAIN
+
+    entry = MockConfigEntry(domain=DOMAIN, data={}, options={CONF_OWNER_SENSORS: False})
+    entry.add_to_hass(hass)
+    tracker = LastWriteTracker(hass)
+    await tracker.async_load()
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = tracker
+
+    registry = er.async_get(hass)
+    stale_button = registry.async_get_or_create(
+        "button", DOMAIN, f"{entry.entry_id}_owner_automation.kitchen_clear", config_entry=entry
+    )
+    stale_sensor = registry.async_get_or_create(
+        "sensor", DOMAIN, f"{entry.entry_id}_owner_automation.kitchen_controlled", config_entry=entry
+    )
+
+    await button_setup(hass, entry, lambda entities, **kw: None)
+
+    assert registry.async_get(stale_button.entity_id) is None
+    # The sensor platform's own entity is not this platform's to remove.
+    assert registry.async_get(stale_sensor.entity_id) is not None

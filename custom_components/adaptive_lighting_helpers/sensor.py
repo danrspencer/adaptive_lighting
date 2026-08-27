@@ -45,14 +45,16 @@ dedicated entity to work.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from homeassistant.components.sensor import SensorEntity, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import EntityCategory
+from homeassistant.const import EntityCategory, Platform
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.util import slugify
@@ -72,7 +74,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
     write_tracker: LastWriteTracker = hass.data[DOMAIN][entry.entry_id]
     async_add_entities([_WriteTrackingSensor(hass, entry, write_tracker)])
 
-    _setup_owner_sensors(hass, entry, write_tracker, async_add_entities)
+    setup_owner_entities(
+        hass,
+        entry,
+        write_tracker,
+        async_add_entities,
+        Platform.SENSOR,
+        lambda owner_id: [
+            _OwnerCountSensor(hass, entry, write_tracker, owner_id, status)
+            for status in ("controlled", "overridden")
+        ],
+    )
 
     for instance in schedule_instances(entry):
         coordinator: ScheduleCoordinator = hass.data[DOMAIN][instance.subentry_id]
@@ -81,11 +93,21 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
 
 
 
-def _setup_owner_sensors(
-    hass: HomeAssistant, entry: ConfigEntry, write_tracker: LastWriteTracker, async_add_entities: AddEntitiesCallback
+def setup_owner_entities(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    write_tracker: LastWriteTracker,
+    async_add_entities: AddEntitiesCallback,
+    platform: Platform,
+    factory: Callable[[str], list[Entity]],
 ) -> None:
-    """Creates a controlled/overridden pair per owner, and keeps up with
+    """Creates one platform's per-owner entities, and keeps up with
     owners that appear later.
+
+    Shared by sensor.py (a controlled/overridden counter pair) and
+    button.py (a Clear button) rather than copied into each: the
+    disable-path cleanup below is exactly the kind of thing that drifts
+    once there are two copies of it.
 
     Off by default (CONF_OWNER_SENSORS): these are derived entirely from
     what the global write-tracking sensor already exposes, so turning
@@ -109,21 +131,24 @@ def _setup_owner_sensors(
         registry = er.async_get(hass)
         prefix = f"{entry.entry_id}_owner_"
         for existing in er.async_entries_for_config_entry(registry, entry.entry_id):
-            if existing.unique_id.startswith(prefix):
+            # Filtering on the domain as well as the unique_id prefix
+            # matters now that more than one platform creates per-owner
+            # entities sharing that prefix - without it whichever
+            # platform set up second would delete the first's entities.
+            if existing.domain == platform.value and existing.unique_id.startswith(prefix):
                 registry.async_remove(existing.entity_id)
         return
 
-    known: set[tuple[str, str]] = set()
+    known: set[str] = set()
 
     @callback
     def _sync() -> None:
-        new = []
+        new: list[Entity] = []
         for owner in sorted(_owners(write_tracker.snapshot())):
-            for status in ("controlled", "overridden"):
-                if (owner, status) in known:
-                    continue
-                known.add((owner, status))
-                new.append(_OwnerCountSensor(hass, entry, write_tracker, owner, status))
+            if owner in known:
+                continue
+            known.add(owner)
+            new.extend(factory(owner))
         if new:
             async_add_entities(new)
 
@@ -163,7 +188,7 @@ def _classify_tracked(hass: HomeAssistant, entity_id: str, record: dict) -> tupl
     return ("controlled" if raw_status == "untracked" else raw_status), claim_owner, matched_via, live_context_id
 
 
-def _owner_of(record: dict) -> str | None:
+def owner_of(record: dict) -> str | None:
     """Which owner a tracked record belongs to - the most recent write's,
     falling back to the observed claim's.
 
@@ -181,10 +206,10 @@ def _owner_of(record: dict) -> str | None:
 
 
 def _owners(snapshot: dict) -> set[str]:
-    return {owner for record in snapshot.values() if (owner := _owner_of(record)) is not None}
+    return {owner for record in snapshot.values() if (owner := owner_of(record)) is not None}
 
 
-def _owner_slug(owner_id: str) -> str:
+def owner_slug(owner_id: str) -> str:
     """entity_id-safe form of an owner. Strips the domain first
     (automation.kitchen_lights -> kitchen_lights), matching what the
     dashboard card already does for display, so the result reads as the
@@ -233,7 +258,7 @@ class _OwnerCountSensor(SensorEntity):
         # script.kitchen) stay distinct in the registry - HA de-duplicates
         # the entity_id itself.
         self._attr_unique_id = f"{entry.entry_id}_owner_{owner_id}_{status}"
-        slug = _owner_slug(owner_id)
+        slug = owner_slug(owner_id)
         self.entity_id = f"sensor.{slug}_adaptive_{status}"
         self._attr_name = f"{slug.replace('_', ' ').title()} Adaptive {status.title()}"
 
@@ -250,7 +275,7 @@ class _OwnerCountSensor(SensorEntity):
         lights: list[str] = []
         total = 0
         for entity_id, record in self._write_tracker.snapshot().items():
-            if _owner_of(record) != self._owner_id:
+            if owner_of(record) != self._owner_id:
                 continue
             total += 1
             status, _owner, _via, _ctx = _classify_tracked(self.hass, entity_id, record)
@@ -474,7 +499,7 @@ class _WriteTrackingSensor(SensorEntity):
                 "entity_id": entity_id,
                 # Who lost it - the record's own owner, not classify()'s
                 # matched owner, which is None for an overridden light.
-                "owner_id": _owner_of(record),
+                "owner_id": owner_of(record),
                 "previous_status": previous,
                 "live_context_id": live_context_id,
                 # The live values at this exact moment. Comparing these
