@@ -342,3 +342,42 @@ async def test_setup_with_no_areas_creates_the_entry_and_no_scopes(stub_entry_se
 
     assert result["type"] == "create_entry"
     assert state_instances(hass.config_entries.async_entries(DOMAIN)[0]) == []
+
+
+# --- upgrading an existing entry -----------------------------------------
+
+
+async def test_upgrading_seeds_a_state_device_per_area_with_lights(stub_entry_setup, hass: HomeAssistant):
+    """Before v2 there were no state devices at all. Without seeding,
+    an upgrade leaves every light resolving to nothing and override
+    protection silently off - lights still driven, but one taken by hand
+    overwritten on the next tick."""
+    from custom_components.adaptive_lighting_helpers import async_migrate_entry
+
+    kitchen = ar.async_get(hass).async_get_or_create("Kitchen")
+    ar.async_get(hass).async_get_or_create("Garage")  # no lights
+    _light(hass, "light.k", area_id=kitchen.id)
+
+    entry = MockConfigEntry(domain=DOMAIN, data={}, version=1)
+    entry.add_to_hass(hass)
+
+    assert await async_migrate_entry(hass, entry)
+
+    assert [s.title for s in state_instances(entry)] == ["Kitchen"]
+    assert state_instances(entry)[0].target == {"area_id": [kitchen.id]}
+    assert entry.version == 2
+
+
+async def test_upgrading_an_already_migrated_entry_adds_nothing(stub_entry_setup, hass: HomeAssistant):
+    """The version bump is the guard, so deleting a state device after
+    upgrading sticks rather than being undone on the next restart."""
+    from custom_components.adaptive_lighting_helpers import async_migrate_entry
+
+    kitchen = ar.async_get(hass).async_get_or_create("Kitchen")
+    _light(hass, "light.k", area_id=kitchen.id)
+    entry = MockConfigEntry(domain=DOMAIN, data={}, version=2)
+    entry.add_to_hass(hass)
+
+    assert await async_migrate_entry(hass, entry)
+
+    assert state_instances(entry) == []
