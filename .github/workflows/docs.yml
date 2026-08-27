@@ -45,13 +45,21 @@ jobs:
         # skips its development-only output.
         run: JEKYLL_ENV=production bundle exec jekyll build --trace
 
-      - uses: actions/configure-pages@v5
+      # No configure-pages step: it only exists to inject a baseurl for
+      # sites that don't set their own, and it FAILS outright until Pages
+      # has been enabled on the repository. docs/_config.yml sets baseurl
+      # explicitly, so skipping it lets pull requests fully build and
+      # validate the site whether or not Pages is switched on yet.
       - uses: actions/upload-pages-artifact@v3
         with:
           path: docs/_site
 
   # Only main publishes. Pull requests still run the build above, so a
   # broken site fails review rather than fails after merge.
+  #
+  # This job needs Pages enabled on the repository with its source set
+  # to "GitHub Actions" (Settings -> Pages). Until that's done it is
+  # the only part of this workflow that can't succeed.
   deploy:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     needs: build
