@@ -28,6 +28,30 @@
       "error": {
         "already_configured": "A sensor with this name already exists"
       }
+    },
+    "state": {
+      "title": "Add state device",
+      "step": {
+        "user": {
+          "title": "Add state device",
+          "description": "A state device tracks which of its lights adaptive lighting is currently driving, and which have been taken over by something else. Point it at an area, a device, or specific lights. A light matching no state device simply isn't tracked.",
+          "data": {
+            "name": "Name",
+            "target": "Lights, devices or areas"
+          }
+        },
+        "reconfigure": {
+          "title": "Edit state device",
+          "data": {
+            "name": "Name",
+            "target": "Lights, devices or areas"
+          }
+        }
+      },
+      "error": {
+        "already_configured": "A sensor or state device with that name already exists"
+      },
+      "entry_type": "State device"
     }
   },
   "issues": {
@@ -50,10 +74,9 @@
     "step": {
       "init": {
         "title": "Adaptive Lighting Helpers options",
-        "description": "Bulb models that need two-step transitions, one pattern per line. This is the complete list the check uses — the box starts pre-filled with the models shipped with the integration, and you can add to it or remove from it freely.\n\nPatterns are matched case-insensitively against “manufacturer model”, and * is a wildcard, e.g. *TRADFRI bulb* or IKEA*. Clearing the box entirely falls back to the shipped defaults; to stop being told about unlabelled bulbs, ignore the repair instead.\n\nOnce you save your own list it stays as you left it — a later release adding a newly discovered bulb won't change it.\n\nPer-owner entities (optional): for each automation that writes lights through this integration, adds two counters - how many of its lights it is currently driving, and how many are currently held by something else - plus a Clear button that discards that automation's tracked state so its lights are free to be taken again. All three work on any dashboard, or from a script, without the custom write-tracking card. A light being held elsewhere is a supported outcome, not a fault. Off by default because a busy house gains a few dozen entities; turning it off again removes them.",
+        "description": "Bulb models that need two-step transitions, one pattern per line. This is the complete list the check uses — the box starts pre-filled with the models shipped with the integration, and you can add to it or remove from it freely.\n\nPatterns are matched case-insensitively against “manufacturer model”, and * is a wildcard, e.g. *TRADFRI bulb* or IKEA*. Clearing the box entirely falls back to the shipped defaults; to stop being told about unlabelled bulbs, ignore the repair instead.\n\nOnce you save your own list it stays as you left it — a later release adding a newly discovered bulb won't change it.",
         "data": {
-          "two_step_models": "Two-step bulb models",
-          "owner_sensors": "Create per-owner entities"
+          "two_step_models": "Two-step bulb models"
         }
       }
     }

@@ -4,7 +4,7 @@ compute_lighting_groups:
     Works out the minimal set of light.turn_on/light.turn_off calls
     needed to reach a target brightness/colour temperature: filters out
     unreachable lights, groups by multiplier, skips anything already
-    within tolerance, leaves overridden lights alone (see owner_id), and
+    within tolerance, leaves overridden lights alone, and
     separates out lights needing a two-step transition. Read-only - it
     reports what it would do without touching anything.
     Standalone; doesn't require this repo's blueprint.
@@ -114,26 +114,13 @@ compute_lighting_groups:
         number:
           min: 0
           max: 100
-    owner_id:
-      name: Owner ID
-      description: >-
-        Identifies this caller for override protection - e.g. an
-        automation passing its own {{ this.entity_id }}. Set it, and a
-        light is left alone once anything other than a write recorded
-        under this same owner_id has touched it. Left unset, the check is
-        skipped entirely and nothing is claimed for later calls to
-        recognise. A write recorded with no owner_id doesn't count
-        against you.
-      selector:
-        text:
     force:
       name: Force
       description: >-
-        Bypasses override protection for this call, regardless of
-        owner_id. The write is still recorded under owner_id if one was
-        given, so a later non-forced call still recognises it as its own
-        - the right way to force through and keep protection working
-        afterward. Off by default.
+        Bypasses override protection for this call, writing every
+        entity even if something else currently holds it. The write is
+        still recorded, so a later non-forced call recognises it and
+        protection works again afterward. Off by default.
       default: false
       selector:
         boolean:
@@ -266,26 +253,13 @@ apply_lighting:
         number:
           min: 0
           max: 100
-    owner_id:
-      name: Owner ID
-      description: >-
-        Identifies this caller for override protection - e.g. an
-        automation passing its own {{ this.entity_id }}. Set it, and a
-        light is left alone once anything other than a write recorded
-        under this same owner_id has touched it. Left unset, the check is
-        skipped entirely and nothing is claimed for later calls to
-        recognise. A write recorded with no owner_id doesn't count
-        against you.
-      selector:
-        text:
     force:
       name: Force
       description: >-
-        Bypasses override protection for this call, regardless of
-        owner_id. The write is still recorded under owner_id if one was
-        given, so a later non-forced call still recognises it as its own
-        - the right way to force through and keep protection working
-        afterward. Off by default.
+        Bypasses override protection for this call, writing every
+        entity even if something else currently holds it. The write is
+        still recorded, so a later non-forced call recognises it and
+        protection works again afterward. Off by default.
       default: false
       selector:
         boolean:
@@ -446,7 +420,7 @@ check_ownership:
   name: Check ownership
   description: >-
     For each entity, decides whether a write should currently be blocked
-    for owner_id - the exact override-protection mechanism
+    for the state device tracking it - the exact override-protection mechanism
     apply_lighting/compute_lighting_groups use internally, exposed
     standalone so any automation can ask "should I write this" without
     any of this integration's brightness/curve logic at all. Read-only -
@@ -460,19 +434,10 @@ check_ownership:
       selector:
         entity:
           multiple: true
-    owner_id:
-      name: Owner ID
-      description: >-
-        Identifies this caller - e.g. an automation passing its own
-        {{ this.entity_id }}. Left unset, every entity reports not
-        blocked (the check is skipped entirely), same as force below,
-        but without claiming anything for a later call to recognise.
-      selector:
-        text:
     force:
       name: Force
       description: >-
-        Every entity reports not blocked, regardless of owner_id or any
+        Every entity reports not blocked, regardless of any
         recorded claim. Off by default.
       default: false
       selector:
@@ -514,7 +479,7 @@ check_ownership:
 record_ownership:
   name: Record ownership
   description: >-
-    Records that owner_id (this call's own context) just wrote entities -
+    Records that this call's own context just wrote entities -
     call this immediately after actually issuing whatever write
     check_ownership told you was allowed, so a later check_ownership call
     recognises it as yours. A thin wrapper around the same bookkeeping
@@ -527,15 +492,6 @@ record_ownership:
       selector:
         entity:
           multiple: true
-    owner_id:
-      name: Owner ID
-      description: >-
-        Identifies this caller - e.g. an automation passing its own
-        {{ this.entity_id }}. Left unset, the write is recorded with no
-        owner (doesn't count against anyone later, but claims nothing
-        either).
-      selector:
-        text:
     targets:
       name: Targets
       description: >-

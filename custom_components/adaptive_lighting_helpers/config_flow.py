@@ -48,7 +48,7 @@ from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers import selector
 from homeassistant.util import slugify
 
-from .const import CONF_OWNER_SENSORS, CONF_TWO_STEP_MODELS, DOMAIN, SUBENTRY_TYPE_SENSOR
+from .const import CONF_TARGET, CONF_TWO_STEP_MODELS, DOMAIN, SUBENTRY_TYPE_SENSOR, SUBENTRY_TYPE_STATE
 from .two_step import DEFAULT_TWO_STEP_MODEL_PATTERNS
 
 SUBENTRY_FIELDS = {vol.Required("name"): selector.TextSelector()}
@@ -58,18 +58,53 @@ class AdaptiveLightingHelpersConfigFlow(config_entries.ConfigFlow, domain=DOMAIN
     VERSION = 1
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        """Offers a state device per area that currently contains a
+        light, pre-selected, and creates them with the entry.
+
+        Pre-selected rather than empty because a room is the unit almost
+        everyone wants to track by, and an unticked list is a wall of
+        work before anything does anything. Trimmable, and skippable
+        entirely - nothing here is required, and more can be added later
+        from the integration's own page.
+
+        Areas with no lights are left out: a state device that can never
+        resolve anything is just an empty device to wonder about."""
         await self.async_set_unique_id(DOMAIN)
         self._abort_if_unique_id_configured()
-        # No fields to ask for, no subentry seeded - see module
-        # docstring. Creates immediately rather than showing an empty
-        # form to click through; add a named sensor afterwards via this
-        # integration's own page (Add Sensor).
-        return self.async_create_entry(title="Adaptive Lighting Helpers", data={})
+
+        areas = _areas_with_lights(self.hass)
+        if user_input is not None or not areas:
+            chosen = (user_input or {}).get("areas", [])
+            return self.async_create_entry(
+                title="Adaptive Lighting Helpers",
+                data={},
+                subentries=[
+                    {
+                        "subentry_type": SUBENTRY_TYPE_STATE,
+                        "title": name,
+                        "unique_id": slugify(name),
+                        "data": {CONF_TARGET: {"area_id": [area_id]}},
+                    }
+                    for area_id, name in areas
+                    if area_id in chosen
+                ],
+            )
+
+        return self.async_show_form(
+            step_id="user",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional("areas", default=[area_id for area_id, _ in areas]): selector.AreaSelector(
+                        selector.AreaSelectorConfig(multiple=True)
+                    )
+                }
+            ),
+        )
 
     @classmethod
     @callback
     def async_get_supported_subentry_types(cls, config_entry: ConfigEntry) -> dict[str, type[ConfigSubentryFlow]]:
-        return {SUBENTRY_TYPE_SENSOR: SensorSubentryFlow}
+        return {SUBENTRY_TYPE_SENSOR: SensorSubentryFlow, SUBENTRY_TYPE_STATE: StateSubentryFlow}
 
     @staticmethod
     @callback
@@ -78,9 +113,8 @@ class AdaptiveLightingHelpersConfigFlow(config_entries.ConfigFlow, domain=DOMAIN
 
 
 class AdaptiveLightingHelpersOptionsFlow(config_entries.OptionsFlow):
-    """The install-wide settings: which bulb models need two-step
-    transitions, and whether to create the optional per-owner count
-    sensors.
+    """The install-wide setting: which bulb models need two-step
+    transitions.
 
     Kept on the main entry rather than per sensor because it describes
     hardware, not a schedule - which bulbs in this house can't take a
@@ -109,12 +143,10 @@ class AdaptiveLightingHelpersOptionsFlow(config_entries.OptionsFlow):
                         vol.Optional(CONF_TWO_STEP_MODELS, default=""): selector.TextSelector(
                             selector.TextSelectorConfig(multiline=True)
                         ),
-                        vol.Optional(CONF_OWNER_SENSORS, default=False): selector.BooleanSelector(),
                     }
                 ),
                 {
                     CONF_TWO_STEP_MODELS: current or "\n".join(DEFAULT_TWO_STEP_MODEL_PATTERNS),
-                    CONF_OWNER_SENSORS: self.config_entry.options.get(CONF_OWNER_SENSORS, False),
                 },
             ),
         )
@@ -149,5 +181,96 @@ class SensorSubentryFlow(ConfigSubentryFlow):
         return self.async_show_form(
             step_id="user",
             data_schema=self.add_suggested_values_to_schema(vol.Schema(SUBENTRY_FIELDS), user_input or {}),
+            errors=errors,
+        )
+
+
+def _areas_with_lights(hass) -> list[tuple[str, str]]:
+    """(area_id, name) for every area a light entity resolves to, by the
+    entity's own area or its device's - the same fallback
+    write_tracking.py's scope_for uses, so what's offered here is
+    exactly what would resolve later."""
+    from homeassistant.helpers import area_registry as ar, device_registry as dr, entity_registry as er
+
+    entity_registry = er.async_get(hass)
+    device_registry = dr.async_get(hass)
+    area_ids = set()
+    for entry in entity_registry.entities.values():
+        if entry.domain != "light":
+            continue
+        area_id = entry.area_id
+        if area_id is None and entry.device_id:
+            device = device_registry.async_get(entry.device_id)
+            area_id = device.area_id if device else None
+        if area_id:
+            area_ids.add(area_id)
+    area_registry = ar.async_get(hass)
+    named = []
+    for area_id in area_ids:
+        area = area_registry.async_get_area(area_id)
+        if area is not None:
+            named.append((area_id, area.name))
+    return sorted(named, key=lambda pair: pair[1])
+
+
+class StateSubentryFlow(ConfigSubentryFlow):
+    """Adds one state device - a named tracking scope owning the
+    override-protection claims for whatever lights its target covers.
+
+    The target is the same area/device/entity shape the blueprint's
+    room_target uses, so "the kitchen" means the same thing in both
+    places. Most specific match wins when scopes overlap; a light
+    matching nothing is simply not tracked - see write_tracking.py's
+    scope_for."""
+
+    async def async_step_user(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
+        return await self._async_form(user_input)
+
+    async def async_step_reconfigure(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
+        """Retargeting matters more here than for a schedule: rooms get
+        rearranged, and a scope you can't repoint would have to be
+        deleted and recreated, losing its history."""
+        return await self._async_form(user_input, reconfigure=self._get_reconfigure_subentry())
+
+    async def _async_form(self, user_input, reconfigure=None) -> SubentryFlowResult:
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            name = user_input["name"].strip()
+            slug = slugify(name)
+            for subentry_id, subentry in self._get_entry().subentries.items():
+                if reconfigure is not None and subentry_id == reconfigure.subentry_id:
+                    continue
+                if slugify(subentry.title) == slug:
+                    errors["name"] = "already_configured"
+                    break
+            if not errors:
+                data = {CONF_TARGET: user_input.get(CONF_TARGET) or {}}
+                if reconfigure is not None:
+                    return self.async_update_and_abort(
+                        self._get_entry(), reconfigure, title=name, data=data
+                    )
+                return self.async_create_entry(title=name, unique_id=slug or None, data=data)
+
+        suggested = user_input or (
+            {"name": reconfigure.title, CONF_TARGET: reconfigure.data.get(CONF_TARGET, {})}
+            if reconfigure
+            else {}
+        )
+        return self.async_show_form(
+            step_id="reconfigure" if reconfigure else "user",
+            data_schema=self.add_suggested_values_to_schema(
+                vol.Schema(
+                    {
+                        **SUBENTRY_FIELDS,
+                        # Lesson 14: under a target selector the filter
+                        # list goes directly under `entity:`, with no
+                        # nested `filter:` key.
+                        vol.Optional(CONF_TARGET): selector.TargetSelector(
+                            selector.TargetSelectorConfig(entity=[{"domain": "light"}])
+                        ),
+                    }
+                ),
+                suggested,
+            ),
             errors=errors,
         )

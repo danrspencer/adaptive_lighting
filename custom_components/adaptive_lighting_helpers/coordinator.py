@@ -67,7 +67,7 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util import slugify
 import homeassistant.util.dt as dt_util
 
-from .const import DOMAIN, SUBENTRY_TYPE_SENSOR
+from .const import CONF_TARGET, DOMAIN, SUBENTRY_TYPE_SENSOR, SUBENTRY_TYPE_STATE
 from .curve import DEFAULT_SCHEDULE_HOURS, phase_at, targets_for_phase
 
 _LOGGER = logging.getLogger(__name__)
@@ -168,6 +168,55 @@ def schedule_instances(entry: ConfigEntry) -> list[ScheduleInstance]:
             )
         )
     return instances
+
+
+@dataclass
+class StateInstance:
+    """One state device - a named tracking scope, derived from a "state"
+    subentry, owning the override-protection claims for whatever lights
+    its target covers.
+
+    Deliberately separate from ScheduleInstance: a schedule says *what
+    values* lights should take, a state device says *whose* claims a
+    light belongs to. A house can want one schedule per floor and one
+    tracking scope per room, and forcing those to be the same object
+    would make either choice constrain the other."""
+
+    subentry_id: str
+    prefix: str  # "<slug>_" - entity_id prefix, derived from the (required) name
+    title: str
+    target: dict  # area_id/device_id/entity_id lists, as a target selector returns
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(
+            identifiers={(DOMAIN, self.subentry_id)},
+            name=self.title or "Adaptive Lighting State",
+            entry_type=DeviceEntryType.SERVICE,
+        )
+
+
+def state_instances(entry: ConfigEntry) -> list[StateInstance]:
+    """Every state device on this entry, sorted by title.
+
+    The sort is load-bearing, not cosmetic: it is the tie-break when two
+    scopes claim the same area, so which one wins is stable across
+    restarts rather than depending on dict ordering (see
+    write_tracking.py's resolution)."""
+    instances = []
+    for subentry_id, subentry in entry.subentries.items():
+        if subentry.subentry_type != SUBENTRY_TYPE_STATE:
+            continue
+        slug = slugify(subentry.title)
+        instances.append(
+            StateInstance(
+                subentry_id=subentry_id,
+                prefix=f"{slug}_" if slug else "",
+                title=subentry.title,
+                target=dict(subentry.data.get(CONF_TARGET) or {}),
+            )
+        )
+    return sorted(instances, key=lambda i: i.title)
 
 
 def _curve_kwargs(hass: HomeAssistant, instance: ScheduleInstance) -> dict[str, int]:

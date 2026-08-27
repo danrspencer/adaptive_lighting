@@ -778,12 +778,13 @@ class TestAllowTurnOn:
 class TestOverrideDetection:
     """docs/BLUEPRINT.md#override-detection"""
 
-    async def test_apply_lighting_is_called_with_this_automations_owner_id(self, hass, apply_lighting_calls):
-        """The mechanism itself (context.id/owner_id comparison) is
-        grouping.py's job and already thoroughly tested in
-        tests/test_grouping.py and tests/integration/test_services.py -
-        this only confirms the blueprint wires its own identity through,
-        which is what makes the whole thing work per room."""
+    async def test_apply_lighting_declares_no_owner_of_its_own(self, hass, apply_lighting_calls):
+        """The blueprint deliberately declares no ownership. Which state
+        device tracks a light is resolved by the integration from its own
+        configuration (write_tracking.py's scope_for), so two automations
+        driving one room share that room's claims and co-operate rather
+        than each seeing the other as an intruder. `force` is still the
+        blueprint's to send, and defaults off."""
         _light(hass, "light.a", "on")
         await hass.async_block_till_done()
         await _setup_room_automation(hass, room_target={"entity_id": "light.a"})
@@ -793,7 +794,7 @@ class TestOverrideDetection:
         await hass.async_block_till_done()
 
         calls = apply_lighting_calls
-        assert calls and calls[-1].data["owner_id"] == "automation.room"
+        assert calls and "owner_id" not in calls[-1].data
         assert calls[-1].data["force"] is False
 
 

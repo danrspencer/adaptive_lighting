@@ -15,11 +15,15 @@ SUBENTRY_TYPE_SENSOR = "sensor"
 # what you add are the same editable thing (see two_step.py).
 CONF_TWO_STEP_MODELS = "two_step_models"
 
-# Options key for the optional per-owner count sensors (sensor.py's
-# _OwnerCountSensor). Off by default: they're derived entirely from data
-# the global write-tracking sensor already exposes, so enabling them is a
-# choice about how many entities you want, not about what's tracked.
-CONF_OWNER_SENSORS = "owner_sensors"
+# Subentry type for a state device - a named tracking scope that owns
+# the override-protection claims for whatever lights its target covers.
+# See write_tracking.py for the model and coordinator.py's
+# state_instances() for how they're enumerated.
+SUBENTRY_TYPE_STATE = "state"
+
+# The state subentry's target: an area/device/entity selector, resolved
+# per light to decide which scope tracks it.
+CONF_TARGET = "target"
 
 # Fired once each time a tracked light passes into "overridden" - edge
 # triggered, not level, so it marks the transition rather than repeating
