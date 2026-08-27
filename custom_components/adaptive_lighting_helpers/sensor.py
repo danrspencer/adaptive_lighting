@@ -52,7 +52,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers import device_registry as dr
-from homeassistant.helpers.dispatcher import async_dispatcher_connect
+from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dispatcher_send
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -185,6 +185,14 @@ class _StateTrackingSensor(SensorEntity):
 
     async def async_update(self) -> None:
         self._refresh_statuses()
+        # The counters are views over these claims, but what they show
+        # depends on each light's *live* state, which changes with
+        # nothing here being touched - a light switched off, a device
+        # reconnecting, someone dimming a bulb by hand. Without this
+        # they only refresh when a claim actually mutates, and sit stale
+        # in between: caught live reporting a light as overridden
+        # minutes after it had been turned off.
+        async_dispatcher_send(self.hass, SIGNAL_WRITE_TRACKING_UPDATED)
 
     @callback
     def _refresh_statuses(self) -> None:

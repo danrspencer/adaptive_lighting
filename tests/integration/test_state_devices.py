@@ -423,3 +423,36 @@ async def test_a_scope_spanning_several_areas_is_left_unassigned(hass: HomeAssis
     _assign_scope_area(hass, tracker, instance)
 
     assert dr.async_get(hass).async_get(device.id).area_id is None
+
+
+async def test_counters_refresh_when_a_lights_live_state_changes(hass: HomeAssistant):
+    """The counters are views over the claims, but what they show
+    depends on each light's *live* state, which changes with nothing
+    here being touched. Without the tracking sensor's poll broadcasting,
+    they only refresh when a claim mutates and sit stale in between -
+    caught live still calling a light overridden minutes after it had
+    been turned off."""
+    area = ar.async_get(hass).async_get_or_create("Kitchen")
+    _entry, registry, added = await _setup(hass, _scope("Kitchen", {"area_id": [area.id]}))
+    tracker = next(e for e in added if hasattr(e, "claims"))
+    overridden = next(e for e in added if e.entity_id.endswith("_adaptive_overridden"))
+
+    _light(hass, "light.a", area_id=area.id)
+    await _record(registry, "light.a", "ctx-ours", {"brightness": 200, "color_temp_kelvin": 3000})
+    hass.states.async_set("light.a", "on", {"brightness": 12, "color_temp_kelvin": 6500}, context=Context())
+    assert overridden.native_value == 1
+
+    refreshed: list = []
+    from homeassistant.helpers.dispatcher import async_dispatcher_connect
+
+    from custom_components.adaptive_lighting_helpers.write_tracking import SIGNAL_WRITE_TRACKING_UPDATED
+
+    async_dispatcher_connect(hass, SIGNAL_WRITE_TRACKING_UPDATED, lambda: refreshed.append(True))
+
+    # The light is turned off with no claim changing at all.
+    hass.states.async_set("light.a", "off", {})
+    await tracker.async_update()
+    await hass.async_block_till_done()
+
+    assert refreshed, "the poll must tell the counters to recompute"
+    assert overridden.native_value == 0
