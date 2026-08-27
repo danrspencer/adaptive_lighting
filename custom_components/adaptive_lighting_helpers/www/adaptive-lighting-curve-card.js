@@ -31,6 +31,11 @@ const DEFAULT_ENTITIES = {
   sun: 'sun.sun',
 };
 
+// How often the card re-renders to keep the "now" marker moving, and the
+// granularity at which "now" participates in the render cache below.
+// One constant for both so they can't drift apart.
+const RENDER_INTERVAL_MS = 30000;
+
 const VB_W = 960;
 const VB_H = 220;
 const PAD_L = 34;
@@ -276,7 +281,7 @@ class AdaptiveLightingCurveCard extends HTMLElement {
   }
 
   connectedCallback() {
-    this._timer = setInterval(() => this._render(), 30000);
+    this._timer = setInterval(() => this._render(), RENDER_INTERVAL_MS);
     // A dashboard card gets resized without any state change - dragging
     // a column wider, rotating a phone - and the label collisions depend
     // entirely on width. Re-laying out is cheap and changes no layout
@@ -331,6 +336,28 @@ class AdaptiveLightingCurveCard extends HTMLElement {
     const brightnessNowValue = numFromAttrOrState(brightnessNow, 'brightness');
     const kelvinNowValue = numFromAttrOrState(kelvinNow, 'color_temp');
 
+    // "now" belongs in this key. It is a real input to the render - it
+    // places the marker line and writes the "Now HH:MM" label - but it
+    // isn't part of the state Home Assistant hands us, because the card
+    // reads the clock itself. Leaving it out meant a schedule sitting on
+    // a flat stretch of curve (all of Night, all of Morning, Evening's
+    // hold) produced an identical key minute after minute, so every
+    // update was suppressed and the marker stopped moving until the
+    // brightness or colour temperature finally changed.
+    //
+    // On a dashboard the 30s timer hid that, re-rendering regardless.
+    // The docs playground has no timer driving it - it only assigns
+    // `hass` - so there the marker visibly froze through Night and
+    // Morning and only came unstuck once Day's ramp started.
+    //
+    // Bucketed rather than raw, or the key would differ on every single
+    // call and the cache would never hit at all. One bucket per render
+    // interval costs nothing: it can only allow a render the timer was
+    // about to do anyway, and it is far finer than the marker's own
+    // resolution - the chart is 914 units wide for a whole day, so a
+    // pixel is about 95 seconds.
+    const nowBucket = Math.floor(Date.now() / RENDER_INTERVAL_MS);
+
     const cacheKey = JSON.stringify([
       boundaries,
       phase && phase.state,
@@ -339,6 +366,7 @@ class AdaptiveLightingCurveCard extends HTMLElement {
       pointsRaw,
       brightnessNowValue,
       kelvinNowValue,
+      nowBucket,
     ]);
 
     if (cacheKey === this._cacheKey) {
