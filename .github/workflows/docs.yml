@@ -24,12 +24,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Copies the integration's real dashboard card into the site and
-      # generates the two reference pages from their pristine sources.
-      # See the script's docstring for why both steps are build-time
-      # rather than committed.
-      - name: Prepare docs sources
-        run: python3 docs/_build/prepare.py
+      # The playground page renders the integration's REAL dashboard
+      # card, which lives outside docs/ - and Jekyll can only serve files
+      # under its own source directory. Copying it in at build time
+      # rather than committing a second copy means the site can never
+      # show a stale card.
+      - name: Copy the dashboard card into the site
+        run: |
+          cp custom_components/adaptive_lighting_helpers/www/adaptive-lighting-curve-card.js \
+             docs/assets/js/adaptive-lighting-curve-card.js
 
       - uses: ruby/setup-ruby@v1
         with:

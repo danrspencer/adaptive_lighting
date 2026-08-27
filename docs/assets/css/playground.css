@@ -14,8 +14,30 @@
   --error-color: #d03d3d;
   --ha-card-box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 4px 14px rgba(0, 0, 0, 0.06);
 
+  /* Every control lives below the chart, so without this you'd be
+     scrolling up to see what a slider just did and back down to move the
+     next one. Sticking the chart to the top keeps cause and effect on
+     screen together.
+
+     The background is not optional: a sticky element with a transparent
+     background lets the controls scroll visibly through the chart. */
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: var(--alp-page-bg, #ffffff);
   display: block;
+  padding: 0.5rem 0 0.75rem;
   margin: 0 0 1.5rem;
+}
+
+/* On a short viewport the chart plus its labels would eat most of the
+   screen, leaving no room for the controls it's meant to be paired
+   with - so below that height it just scrolls normally. */
+@media (max-height: 620px) {
+  .alp-card-host {
+    position: static;
+    padding: 0;
+  }
 }
 
 .alp-note {

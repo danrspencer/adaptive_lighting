@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 Generates brand/icon.svg - the integration's icon - from the actual
-curve module, the same way dashboard/generate_preview_data.py builds
-the card preview: the icon IS the day's brightness/colour curve, not an
+curve module rather than being drawn by hand: the icon IS the day's
+brightness/colour curve, not an
 artist's impression of it. Bar heights come from brightness_for_phase,
 bar colours from kelvin_for_phase run through kelvin_to_rgb, and the
 schedule is curve.py's own DEFAULT_SCHEDULE_HOURS - change the
@@ -56,7 +56,7 @@ CHART_H = SIZE - PAD_TOP - PAD_BOTTOM
 
 N_BARS = 7  # same bar language as the dashboard card, icon-sized
 
-# Same representative day the preview uses (hours -> synthetic
+# A representative day (hours -> synthetic
 # timestamps; the curve functions only care about differences).
 MORNING = DEFAULT_SCHEDULE_HOURS["morning"] * 3600
 DAY = DEFAULT_SCHEDULE_HOURS["day"] * 3600

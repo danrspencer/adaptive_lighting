@@ -19,7 +19,7 @@ wrong at runtime):
    the now-working recovered) - never caught before because recovered
    never ran at all.
 
-Organised to mirror docs/BLUEPRINT.md's own section headings, one test
+Organised to mirror docs/blueprint.md's own section headings, one test
 class per feature - read top to bottom, this file is meant to double as
 a spec of what the blueprint actually does, not just a regression net
 for the two incidents above.
@@ -192,7 +192,7 @@ def expected_lingering_timers():
 
 
 class TestAdaptiveScheduleAndTransitions:
-    """docs/BLUEPRINT.md#brightness--colour-temperature-schedule"""
+    """docs/blueprint.md#brightness--colour-temperature-schedule"""
 
     async def test_an_unavailable_sensor_skips_the_tick_instead_of_erroring(self, hass, apply_lighting_calls):
         """brightness/color_temp_kelvin are plain state_attr() reads, and
@@ -504,7 +504,7 @@ class TestAdaptiveScheduleAndTransitions:
 
 
 class TestRoomTargetResolution:
-    """docs/BLUEPRINT.md#one-target-two-jobs - room_target does double
+    """docs/blueprint.md#one-target-two-jobs - room_target does double
     duty: lights within it are controlled, occupancy-class sensors
     within it govern occupancy. Entity-list resolution is covered
     throughout the rest of this file; this class is specifically about
@@ -615,7 +615,7 @@ class TestRoomTargetResolution:
 
 
 class TestOccupancyDrivenOnOff:
-    """docs/BLUEPRINT.md#occupancy-driven-onoff"""
+    """docs/blueprint.md#occupancy-driven-onoff"""
 
     async def test_occupancy_detected_turns_on_off_lights_in_the_room(self, hass, apply_lighting_calls):
         _occupancy(hass, "binary_sensor.occ", "off")
@@ -776,7 +776,7 @@ class TestAllowTurnOn:
 
 
 class TestOverrideDetection:
-    """docs/BLUEPRINT.md#override-detection"""
+    """docs/blueprint.md#override-detection"""
 
     async def test_apply_lighting_declares_no_owner_of_its_own(self, hass, apply_lighting_calls):
         """The blueprint deliberately declares no ownership. Which state
@@ -799,7 +799,7 @@ class TestOverrideDetection:
 
 
 class TestRecoveredTrigger:
-    """docs/BLUEPRINT.md's "A device regaining power after an outage"
+    """docs/blueprint.md's "A device regaining power after an outage"
     section - see also the dated CLAUDE.md incident this whole feature,
     and its follow-up bugs and eventual redesign, came from.
 
@@ -927,7 +927,7 @@ class TestRecoveredTrigger:
 
 
 class TestSceneHandoff:
-    """docs/BLUEPRINT.md#scene-handoff"""
+    """docs/blueprint.md#scene-handoff"""
 
     async def test_valid_scene_activates_via_a_phase_change_and_adaptive_lighting_only_covers_uncovered_entities(
         self, hass, apply_lighting_calls, scene_turn_on_calls
@@ -1111,7 +1111,7 @@ class TestSceneHandoff:
 
 
 class TestBrightnessScaling:
-    """docs/BLUEPRINT.md#per-light-brightness-scaling"""
+    """docs/blueprint.md#per-light-brightness-scaling"""
 
     async def test_phase_exclude_list_sets_a_zero_multiplier_for_that_light(self, hass, apply_lighting_calls):
         _light(hass, "light.a", "on")
@@ -1252,7 +1252,7 @@ class TestBrightnessScaling:
 
 
 class TestRgbColour:
-    """docs/BLUEPRINT.md#rgb-colour"""
+    """docs/blueprint.md#rgb-colour"""
 
     async def test_prefer_rgb_color_is_true_only_during_a_configured_phase(self, hass, apply_lighting_calls):
         _light(hass, "light.a", "on")
@@ -1281,7 +1281,7 @@ class TestRgbColour:
 
 
 class TestAdditionalTriggers:
-    """docs/BLUEPRINT.md#additional-triggers"""
+    """docs/blueprint.md#additional-triggers"""
 
     async def test_extra_trigger_entity_change_causes_immediate_reevaluation(self, hass, apply_lighting_calls):
         _light(hass, "light.a", "on", brightness=190, color_temp_kelvin=4000)
@@ -1300,7 +1300,7 @@ class TestAdditionalTriggers:
 
 
 class TestSelfHealing:
-    """docs/BLUEPRINT.md#self-healing"""
+    """docs/blueprint.md#self-healing"""
 
     async def test_reconcile_retries_turning_off_a_light_left_on_with_no_occupancy(
         self, hass, light_turn_off_calls, apply_lighting_calls, frozen_time

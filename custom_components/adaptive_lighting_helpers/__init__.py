@@ -13,7 +13,7 @@ whatever it doesn't cover" (scenes.py).
 touch any light); `apply_lighting` wraps the same grouping logic and
 actually dispatches light.turn_on/turn_off, taking brightness/colour
 targets as plain values - it doesn't read any sensor entity itself; see
-docs/BLUEPRINT.md's "Bring your own sensor" section for how the
+docs/blueprint.md's "Bring your own sensor" section for how the
 blueprint in this repo extracts those values before calling it.
 Optionally also sets up day-phase/curve
 sensors (sensor.py), a phase-override select (select.py), and the
@@ -668,7 +668,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         override_protection.classify()/is_blocked()), exposed standalone
         so any caller can ask "should I write this entity" without any
         of this integration's brightness/curve logic at all - see
-        docs/HELPERS.md's "Override protection" section for the full
+        docs/helpers.md's "Override protection" section for the full
         contract this mirrors.
 
         Returns: {"results": {entity_id: {"blocked": bool, "status":

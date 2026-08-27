@@ -47,8 +47,8 @@ DEFAULT_CURVE_VALUES = {
 # below - a single shared "sensible starting point" for anything that
 # wants to seed or preview a schedule without real user input yet
 # (time.py's default value for every new sensor's boundary-time
-# entities, dashboard/generate_preview_data.py's synthetic preview
-# data). The one place these numbers are literals.
+# entities, and the docs site's curve playground). The one place these
+# numbers are literals.
 DEFAULT_SCHEDULE_HOURS = {
     "morning": 6,
     "day": 8,
@@ -289,7 +289,7 @@ def targets_for_phase(
 
     Previously this 4-line sequence was hand-copied at every call site
     (the compute_curve service, the coordinator's "now" values, its
-    289-point curve loop, and the preview generator) - risking drift if
+    289-point curve loop) - risking drift if
     the shape of what gets computed here ever changed. One copy now."""
     brightness = brightness_for_phase(
         day_phase,
