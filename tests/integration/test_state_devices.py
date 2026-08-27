@@ -14,7 +14,7 @@ import pytest
 from homeassistant.config_entries import ConfigSubentryData
 from homeassistant.core import Context, HomeAssistant
 from homeassistant.helpers import area_registry as ar, device_registry as dr, entity_registry as er
-from pytest_homeassistant_custom_component.common import MockConfigEntry, async_fire_time_changed
+from pytest_homeassistant_custom_component.common import MockConfigEntry, async_fire_time_changed, mock_component
 from homeassistant.util import dt as dt_util
 
 from custom_components.adaptive_lighting_helpers.button import async_setup_entry as button_setup
@@ -287,3 +287,58 @@ async def test_the_event_omits_device_id_when_there_is_no_device(hass: HomeAssis
 
     assert len(events) == 1
     assert "device_id" not in events[0].data
+
+
+# --- the setup offer ------------------------------------------------------
+
+
+@pytest.fixture
+def stub_entry_setup(hass: HomeAssistant):
+    """Completing the flow sets the entry up, which resolves the
+    manifest's frontend dependency and pulls in the large
+    home-assistant-frontend package for the dashboard card these tests
+    never look at. Stubbed the same way test_services.py sidesteps it."""
+    mock_component(hass, "frontend")
+    mock_component(hass, "repairs")
+    hass.data.setdefault("frontend_extra_module_url", set())
+    return hass
+
+
+async def test_setup_offers_one_state_device_per_area_that_has_lights(stub_entry_setup, hass: HomeAssistant):
+    """A room is the unit almost everyone wants to track by, so the list
+    arrives pre-selected rather than as a wall of work. Areas with no
+    lights are left out - a scope that can never resolve anything is
+    just an empty device to wonder about."""
+    kitchen = ar.async_get(hass).async_get_or_create("Kitchen")
+    hall = ar.async_get(hass).async_get_or_create("Hall")
+    garage = ar.async_get(hass).async_get_or_create("Garage")
+    _light(hass, "light.k", area_id=kitchen.id)
+    _light(hass, "light.h", area_id=hall.id)
+    # The Garage has entities, just no lights - so it must not be
+    # offered. Without a non-light here, "lights only" would look
+    # covered while actually being untested.
+    door = er.async_get(hass).async_get_or_create("switch", "test", "garage_door")
+    er.async_get(hass).async_update_entity(door.entity_id, area_id=garage.id)
+
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
+    assert result["type"] == "form"
+    suggested = result["data_schema"]({})["areas"]
+    assert sorted(suggested) == sorted([hall.id, kitchen.id])
+
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"areas": [kitchen.id]})
+
+    assert result["type"] == "create_entry"
+    entry = hass.config_entries.async_entries(DOMAIN)[0]
+    scopes = state_instances(entry)
+    assert [s.title for s in scopes] == ["Kitchen"]
+    assert scopes[0].target == {"area_id": [kitchen.id]}
+
+
+async def test_setup_with_no_areas_creates_the_entry_and_no_scopes(stub_entry_setup, hass: HomeAssistant):
+    """Nothing here is required. With no areas there is nothing to
+    offer, so the entry is created straight away and lights simply stay
+    untracked until a state device exists."""
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
+
+    assert result["type"] == "create_entry"
+    assert state_instances(hass.config_entries.async_entries(DOMAIN)[0]) == []
