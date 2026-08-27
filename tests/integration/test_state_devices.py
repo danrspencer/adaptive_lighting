@@ -381,3 +381,45 @@ async def test_upgrading_an_already_migrated_entry_adds_nothing(stub_entry_setup
     assert await async_migrate_entry(hass, entry)
 
     assert state_instances(entry) == []
+
+
+async def test_a_state_device_lands_in_the_area_it_targets(hass: HomeAssistant):
+    """A scope created per area should turn up under that room rather
+    than in an unsorted heap."""
+    from custom_components.adaptive_lighting_helpers.sensor import _assign_scope_area
+
+    kitchen = ar.async_get(hass).async_get_or_create("Kitchen")
+    entry, _registry_, added = await _setup(hass, _scope("Kitchen", {"area_id": [kitchen.id]}))
+    instance = state_instances(entry)[0]
+    device = dr.async_get(hass).async_get_or_create(
+        config_entry_id=entry.entry_id, identifiers=instance.device_info["identifiers"], name="Kitchen"
+    )
+    tracker = next(e for e in added if hasattr(e, "claims"))
+    tracker.registry_entry = er.async_get(hass).async_get_or_create(
+        "sensor", DOMAIN, tracker.unique_id, config_entry=entry, device_id=device.id
+    )
+
+    _assign_scope_area(hass, tracker, instance)
+
+    assert dr.async_get(hass).async_get(device.id).area_id == kitchen.id
+
+
+async def test_a_scope_spanning_several_areas_is_left_unassigned(hass: HomeAssistant):
+    """No single right answer, so no guess."""
+    from custom_components.adaptive_lighting_helpers.sensor import _assign_scope_area
+
+    kitchen = ar.async_get(hass).async_get_or_create("Kitchen")
+    hall = ar.async_get(hass).async_get_or_create("Hall")
+    entry, _registry_, added = await _setup(hass, _scope("Both", {"area_id": [kitchen.id, hall.id]}))
+    instance = state_instances(entry)[0]
+    device = dr.async_get(hass).async_get_or_create(
+        config_entry_id=entry.entry_id, identifiers=instance.device_info["identifiers"], name="Both"
+    )
+    tracker = next(e for e in added if hasattr(e, "claims"))
+    tracker.registry_entry = er.async_get(hass).async_get_or_create(
+        "sensor", DOMAIN, tracker.unique_id, config_entry=entry, device_id=device.id
+    )
+
+    _assign_scope_area(hass, tracker, instance)
+
+    assert dr.async_get(hass).async_get(device.id).area_id is None

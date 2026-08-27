@@ -109,6 +109,29 @@ def _classify_tracked(hass: HomeAssistant, entity_id: str, record: dict) -> tupl
 
 
 
+@callback
+def _assign_scope_area(hass: HomeAssistant, entity, instance: StateInstance) -> None:
+    """Puts a state device in the area it targets, when it targets
+    exactly one - which is what both the setup offer and the upgrade
+    migration create. A scope spanning several areas, or targeting
+    devices and entities directly, has no single right answer and is
+    left unassigned.
+
+    Only ever fills in a *blank* area, never overwrites one, so moving a
+    state device by hand sticks. Done on the device rather than via
+    DeviceInfo.suggested_area, which is deprecated (breaks in HA 2026.9)
+    and takes an area *name*, creating the area as a side effect."""
+    areas = instance.target.get("area_id") or []
+    areas = [areas] if isinstance(areas, str) else list(areas)
+    if len(areas) != 1 or entity.registry_entry is None or entity.registry_entry.device_id is None:
+        return
+    registry = dr.async_get(hass)
+    device = registry.async_get(entity.registry_entry.device_id)
+    if device is None or device.area_id is not None:
+        return
+    registry.async_update_device(device.id, area_id=areas[0])
+
+
 class _StateTrackingSensor(SensorEntity):
     """One state device's claims - the actual storage, not a view of it.
 
@@ -150,6 +173,7 @@ class _StateTrackingSensor(SensorEntity):
 
     async def async_added_to_hass(self) -> None:
         self._registry.register(self._instance.subentry_id, self)
+        _assign_scope_area(self.hass, self, self._instance)
 
     async def async_will_remove_from_hass(self) -> None:
         self._registry.unregister(self._instance.subentry_id)
