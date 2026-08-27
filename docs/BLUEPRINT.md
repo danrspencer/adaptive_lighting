@@ -66,7 +66,7 @@ wall-clock second — most noticeable right at a phase boundary, when every such
 literally the same instant. Motion, manual runs, and Additional Triggers are never delayed - self-healing is,
 since it shares the same tick.
 
-The [dashboard curve card](../README.md#previewing-the-dashboard-card) also plots today's actual sunrise/sunset
+The [dashboard curve card](../CONTRIBUTING.md#previewing-the-dashboard-cards) also plots today's actual sunrise/sunset
 (from `sun.sun`) against the schedule, so it's easy to see at a glance how far the configured boundaries and
 Evening's earliest/latest clamp are actually tracking the sun.
 

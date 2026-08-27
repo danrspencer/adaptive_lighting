@@ -4,8 +4,24 @@
     {
       "name": "dashboard-preview",
       "runtimeExecutable": "python3",
-      "runtimeArgs": ["-m", "http.server", "8934"],
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8934"
+      ],
       "port": 8934
+    },
+    {
+      "name": "docs-site",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": [
+        "-m",
+        "http.server",
+        "8935",
+        "--directory",
+        "docs/_preview"
+      ],
+      "port": 8935
     }
   ]
 }

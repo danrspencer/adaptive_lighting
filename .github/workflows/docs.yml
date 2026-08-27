@@ -1,0 +1,64 @@
+name: docs
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# Lets the deploy job publish to GitHub Pages. Read-only elsewhere.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never let two deploys race; queue instead. In-progress runs finish
+# rather than being cancelled, so a half-published site can't happen.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Copies the integration's real dashboard card into the site and
+      # generates the two reference pages from their pristine sources.
+      # See the script's docstring for why both steps are build-time
+      # rather than committed.
+      - name: Prepare docs sources
+        run: python3 docs/_build/prepare.py
+
+      - uses: ruby/setup-ruby@v1
+        with:
+          # Jekyll 4, not the github-pages gem's Jekyll 3 - docs/_config.yml
+          # needs render_with_liquid. See the comment there.
+          ruby-version: '3.3'
+          bundler-cache: true
+          working-directory: docs
+
+      - name: Build site
+        working-directory: docs
+        # JEKYLL_ENV=production so the theme emits canonical URLs and
+        # skips its development-only output.
+        run: JEKYLL_ENV=production bundle exec jekyll build --trace
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/_site
+
+  # Only main publishes. Pull requests still run the build above, so a
+  # broken site fails review rather than fails after merge.
+  deploy:
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

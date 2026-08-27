@@ -1,0 +1,162 @@
+/* Styles for the interactive curve playground (docs/playground.html).
+   Scoped under .alp- prefixes so nothing here leaks into the rest of
+   the just-the-docs theme. */
+
+.alp-card-host {
+  /* The real Lovelace card is written against Home Assistant's own CSS
+     custom properties. HA supplies these; a docs page has to, or the
+     card renders with no colours at all. Values chosen to sit against
+     just-the-docs' light scheme rather than to mimic HA exactly. */
+  --primary-text-color: #27262b;
+  --secondary-text-color: #5c5962;
+  --divider-color: #e6e1e8;
+  --card-background-color: #ffffff;
+  --error-color: #d03d3d;
+  --ha-card-box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08), 0 4px 14px rgba(0, 0, 0, 0.06);
+
+  display: block;
+  margin: 0 0 1.5rem;
+}
+
+.alp-note {
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: #5c5962;
+  background: #f7f6f9;
+  border-left: 3px solid #d5d0da;
+  padding: 0.6rem 0.85rem;
+  border-radius: 0 4px 4px 0;
+  margin: 0 0 1.5rem;
+}
+
+.alp-panel {
+  border: 1px solid #e6e1e8;
+  border-radius: 8px;
+  padding: 0.9rem 1.1rem 1.1rem;
+  margin: 0 0 1rem;
+  background: #fdfdfe;
+}
+
+.alp-panel > h3 {
+  margin: 0 0 0.15rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
+.alp-panel-hint {
+  margin: 0 0 0.9rem;
+  font-size: 0.75rem;
+  color: #5c5962;
+}
+
+/* Two columns on anything wider than a phone; one below. */
+.alp-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 0.35rem 1.6rem;
+}
+
+.alp-control {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: baseline;
+  gap: 0 0.5rem;
+  padding: 0.3rem 0;
+}
+
+.alp-control label {
+  font-size: 0.8rem;
+  font-weight: 500;
+}
+
+.alp-control output {
+  font-size: 0.8rem;
+  font-variant-numeric: tabular-nums;
+  color: #5c5962;
+}
+
+.alp-control input[type='range'] {
+  grid-column: 1 / -1;
+  width: 100%;
+  margin: 0.15rem 0 0;
+  accent-color: #7253ed;
+}
+
+/* The HA entity each control maps to - the bridge between "I moved a
+   slider" and "here is what to change in Home Assistant". */
+.alp-entity {
+  grid-column: 1 / -1;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.65rem;
+  color: #837e8a;
+  overflow-wrap: anywhere;
+}
+
+.alp-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0 0 1.25rem;
+}
+
+.alp-btn {
+  font: inherit;
+  font-size: 0.8rem;
+  padding: 0.35rem 0.8rem;
+  border: 1px solid #d5d0da;
+  border-radius: 6px;
+  background: #fff;
+  color: #27262b;
+  cursor: pointer;
+}
+
+.alp-btn:hover {
+  background: #f2eefe;
+  border-color: #b9a6f5;
+}
+
+.alp-btn--primary {
+  background: #7253ed;
+  border-color: #7253ed;
+  color: #fff;
+}
+
+.alp-btn--primary:hover {
+  background: #5d3fd6;
+  border-color: #5d3fd6;
+  color: #fff;
+}
+
+.alp-status {
+  font-size: 0.75rem;
+  color: #5c5962;
+  min-height: 1.2em;
+}
+
+/* The derived-Evening readout: this is the one boundary that isn't set
+   directly, so it gets its own callout rather than sitting in the grid
+   looking like another input. */
+.alp-derived {
+  margin: 0.9rem 0 0;
+  padding: 0.6rem 0.85rem;
+  border-radius: 6px;
+  background: #f2eefe;
+  border: 1px solid #ddd2fb;
+  font-size: 0.8rem;
+  line-height: 1.5;
+}
+
+.alp-derived strong {
+  font-variant-numeric: tabular-nums;
+}
+
+.alp-error {
+  border: 1px solid #f0c2c2;
+  background: #fdf4f4;
+  color: #a32b2b;
+  padding: 0.8rem 1rem;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  margin: 0 0 1.5rem;
+}
