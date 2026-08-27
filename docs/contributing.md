@@ -1,6 +1,18 @@
+---
+title: Contributing
+nav_order: 6
+permalink: /contributing/
+render_with_liquid: false
+# Liquid is off for this page: it contains Home Assistant Jinja,
+# which shares Liquid's {{ }} delimiters. With Liquid on, those
+# examples render as empty strings and nothing errors. That also
+# means no relative_url filter here - links are plain relative
+# paths, which need no baseurl to be right.
+---
+
 # Contributing
 
-Not needed just to install and use this — see [README.md](README.md) for that. This is for working on the
+Not needed just to install and use this — see [README.md](../) for that. This is for working on the
 code itself.
 
 ## Repository layout
@@ -11,12 +23,12 @@ custom_components/adaptive_lighting_helpers/
     coordinator.py shared schedule computation behind the sensors/select
                    below - one instance per sensor added via the
                    integration's "Add Sensor" flow
-    sensor.py      day-phase/curve sensors (see docs/HELPERS.md)
-    select.py      phase-override select (same doc)
+    sensor.py      day-phase/curve sensors (see the integration reference)
+    select.py      phase-override select (same reference)
     number.py      brightness/colour-temperature curve config, as
-                   entities (same doc)
-    time.py        schedule boundary times, as entities (same doc)
-    switch.py      sticky-phase-override toggle, as an entity (same doc)
+                   entities (same reference)
+    time.py        schedule boundary times, as entities (same reference)
+    switch.py      sticky-phase-override toggle, as an entity (same reference)
     curve.py       brightness/colour-temperature schedule + Kelvin -> RGB
     grouping.py    reachability, multiplier bucketing, tolerance checks,
                    externally-set protection, two-step/combined and
@@ -76,10 +88,6 @@ dashboard/
                                  fuller section: curve card, phase
                                  override, and every schedule/curve
                                  config entity, laid out as tiles
-    preview.html                renders both real cards against
-                                 synthetic data, no Home Assistant
-                                 instance needed
-    generate_preview_data.py    generates that synthetic data
 
 tests/
     pytest suite for curve.py, grouping.py, and scenes.py.
@@ -95,62 +103,52 @@ checks, and transition routing are implemented in the integration and unit teste
 implementation notes, including the (fairly involved) history of getting a custom integration to load correctly
 at all.
 
-## Previewing the dashboard cards
+## Previewing the dashboard card
 
-```bash
-python3 dashboard/generate_preview_data.py
-python3 -m http.server 8934
-# open http://localhost:8934/dashboard/preview.html
-```
+The [curve playground](../playground.html) on this site renders the real card against synthetic data, with no
+Home Assistant instance involved — the page loads
+`custom_components/adaptive_lighting_helpers/www/adaptive-lighting-curve-card.js` itself and feeds it the state
+shape a live Home Assistant would. Build the site locally (below) to exercise a change to the card.
 
-Renders the real curve card against generated/synthetic data, without a Home Assistant instance.
+This replaced a standalone `dashboard/preview.html` harness and its synthetic-data generator, which did the same
+job less well.
 
 ## The documentation site
 
-Published at <https://danrspencer.github.io/adaptive_lighting/> from `docs/`, built with Jekyll and the
-`just-the-docs` theme by `.github/workflows/docs.yml`. Pull requests build the site but don't publish it;
-only a push to `main` deploys.
+Everything except `README.md` lives here, published at
+<https://danrspencer.github.io/adaptive_lighting/> from `docs/` and built with Jekyll and the `just-the-docs`
+theme by `.github/workflows/docs.yml`. Pull requests build the site but don't publish it; only a push to `main`
+deploys.
 
 ```bash
-python3 docs/_build/prepare.py
 cd docs && bundle install && bundle exec jekyll build
 ```
 
-To preview it locally, note the site has a `baseurl` of `/adaptive_lighting`, so `_site` has to be served
-one directory *below* the web root or every asset 404s. `.claude/launch.json`'s `docs-site` entry handles
-that via `docs/_preview/`, which symlinks `adaptive_lighting` → `_site`:
+To preview locally, note the site has a `baseurl` of `/adaptive_lighting`, so `_site` has to be served one
+directory *below* the web root or every asset 404s. `.claude/launch.json`'s `docs-site` entry handles that via
+`docs/_preview/`, which symlinks `adaptive_lighting` → `_site`:
 
 ```bash
 python3 -m http.server 8935 --directory docs/_preview
 # open http://localhost:8935/adaptive_lighting/
 ```
 
-Three things about this site are less obvious than they look, all covered by `tests/test_docs_site.py` and
-`tests/test_curve_js_parity.py`:
+Two things about it are less obvious than they look:
 
-- **`docs/BLUEPRINT.md` and `docs/HELPERS.md` are not published directly.** They're read on GitHub too, so
-  they deliberately carry no front matter — and Jekyll only renders a file as a *page* if it has a literal
-  front matter block (defaults in `_config.yml` merge into pages; they don't promote a static file into
-  one). `docs/_build/prepare.py` generates `reference-blueprint.md`/`reference-helpers.md` from them with
-  front matter prepended and cross-links rewritten. **Edit the upper-case originals**; the generated copies
-  are gitignored and rebuilt every time.
-
-  The generated names are deliberately not case variants of their sources. macOS filesystems are
-  case-insensitive, so `docs/blueprint.md` and `docs/BLUEPRINT.md` are the same file there — generating one
-  silently overwrites the source document.
-
-- **The site is built with Jekyll 4, not the `github-pages` gem.** Both reference documents contain Home
-  Assistant Jinja in their YAML examples, and Liquid uses the same `{% raw %}{{ }}{% endraw %}`
-  delimiters. Jekyll's default lax filter handling renders an unknown filter as an empty string, so those
-  examples would publish blank with no build error. `render_with_liquid: false` prevents that, and it's a
-  Jekyll 4 feature that GitHub Pages' own (Jekyll 3) builder doesn't have.
+- **Jekyll 4, not the `github-pages` gem.** The reference pages contain Home Assistant Jinja in their YAML
+  examples, and Liquid uses the same `{{ }}` delimiters. Jekyll's default lax filter handling renders an unknown
+  filter as an empty string, so those examples would publish blank with no build error. Each affected page sets
+  `render_with_liquid: false`, which is a Jekyll 4 feature that GitHub Pages' own (Jekyll 3) builder doesn't
+  have. Those pages therefore can't use the `relative_url` filter either, so their links are plain relative
+  paths — which need no baseurl to be correct.
 
 - **The playground runs the real dashboard card.** `docs/playground.html` loads the actual
-  `adaptive-lighting-curve-card.js` — copied in by `prepare.py`, never committed twice — and feeds it the
-  same state shape a live Home Assistant would. The schedule maths behind the sliders is
-  `docs/assets/js/curve.js`, a port of `curve.py`; `tests/test_curve_js_parity.py` runs it under node
-  against a grid of inputs and fails if the two ever disagree, so the docs can't quietly drift from the
-  integration.
+  `adaptive-lighting-curve-card.js`, copied in by the workflow rather than committed twice. The schedule maths
+  behind the sliders is `docs/assets/js/curve.js`, a port of `curve.py`; `tests/test_curve_js_parity.py` runs
+  both it and the card itself under node against a grid of inputs and fails if either drifts from `curve.py`.
+
+Every page needs front matter — Jekyll only renders a file as a *page* if it has a literal front matter block,
+and copies it through verbatim otherwise. `tests/test_docs_site.py` checks that.
 
 ## Testing
 

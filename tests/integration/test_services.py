@@ -265,7 +265,7 @@ async def test_apply_lighting_non_numeric_color_temp_kelvin_raises(setup_integra
 
 async def test_apply_lighting_accepts_an_explicit_null_rgb_color(setup_integration: HomeAssistant):
     """A hand-rolled 'bring your own sensor' entity is free to omit
-    rgb_color entirely (see docs/BLUEPRINT.md), and the blueprint's own
+    rgb_color entirely (see docs/blueprint.md), and the blueprint's own
     state_attr(adaptive_sensor, 'rgb_color') then renders a literal
     None, not an omitted key - vol.Length applied to None used to fail
     schema validation outright (vol.Length expects a sized value), which

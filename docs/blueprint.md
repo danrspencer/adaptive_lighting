@@ -1,22 +1,34 @@
+---
+title: Blueprint reference
+nav_order: 4
+permalink: /blueprint/
+render_with_liquid: false
+# Liquid is off for this page: it contains Home Assistant Jinja,
+# which shares Liquid's {{ }} delimiters. With Liquid on, those
+# examples render as empty strings and nothing errors. That also
+# means no relative_url filter here - links are plain relative
+# paths, which need no baseurl to be right.
+---
+
 # The Adaptive Lighting blueprint — feature reference
 
-> Part of [Adaptive Lighting](../README.md) — see there for why this project is shaped the way it is
-> (in particular, [why the schedule has four named phases](../README.md#why-four-phases-not-a-continuous-curve)
+> Part of [Adaptive Lighting](../) — see there for why this project is shaped the way it is
+> (in particular, [why the schedule has four named phases](../#why-four-phases-not-a-continuous-curve)
 > rather than a single continuous curve) and how to install it.
 
-Built on the [Adaptive Lighting Helpers](HELPERS.md) services, but the two are only loosely coupled — the
+Built on the [Adaptive Lighting Helpers](../helpers/) services, but the two are only loosely coupled — the
 blueprint just calls `apply_lighting` the same way it calls `light.turn_on`, and doesn't otherwise assume
 anything about how that service is implemented.
 
 ## Brightness & colour temperature schedule
 
-Tracks a target brightness and Kelvin value that follows the [Morning/Day/Evening/Night schedule](../README.md#why-four-phases-not-a-continuous-curve),
+Tracks a target brightness and Kelvin value that follows the [Morning/Day/Evening/Night schedule](../#why-four-phases-not-a-continuous-curve),
 applied once a minute to whichever of the room's lights are already on, so they drift with the schedule
 instead of jumping - regardless of whether the room currently reads as occupied (see
 [Occupancy-driven on/off](#occupancy-driven-onoff) - occupancy decides whether to turn lights on or off, never
 whether an already-on light keeps tracking the curve). The blueprint reads `brightness`/`color_temp`/`rgb_color`
 straight off the Adaptive Lighting Sensor's own attributes and passes them to `apply_lighting` as plain values -
-`apply_lighting` itself doesn't read any sensor entity at all (see [docs/HELPERS.md](HELPERS.md) for its full
+`apply_lighting` itself doesn't read any sensor entity at all (see [the integration reference](../helpers/) for its full
 field contract), so the Adaptive Lighting Sensor input isn't limited to this integration's own sensor - see
 ["Bring your own sensor"](#bring-your-own-sensor) below.
 
@@ -66,7 +78,7 @@ wall-clock second — most noticeable right at a phase boundary, when every such
 literally the same instant. Motion, manual runs, and Additional Triggers are never delayed - self-healing is,
 since it shares the same tick.
 
-The [dashboard curve card](../CONTRIBUTING.md#previewing-the-dashboard-cards) also plots today's actual sunrise/sunset
+The [dashboard curve card](../contributing/#previewing-the-dashboard-cards) also plots today's actual sunrise/sunset
 (from `sun.sun`) against the schedule, so it's easy to see at a glance how far the configured boundaries and
 Evening's earliest/latest clamp are actually tracking the sun.
 
@@ -130,11 +142,11 @@ A light changed by anything other than this integration's own last write — a w
 assistant, or another automation entirely (including one with no identifiable "user" of its own, such as one
 triggered directly by a physical button) — is left alone rather than being overwritten on the next adaptive tick.
 Detected by comparing the light's current `context.id` against the `context.id`(s) [Adaptive Lighting
-Helpers](HELPERS.md) itself last wrote that light with: if either still matches, nothing has touched it since our
+Helpers](../helpers/) itself last wrote that light with: if either still matches, nothing has touched it since our
 own last update and it's updated normally; if neither does, something else has, and it's left alone. A light with
 no recorded write at all yet (brand new, or right after this integration's own restart) is treated the same way —
 free to manage — rather than getting stuck unmanaged until it happens to change some other way. [Adaptive Lighting
-Helpers](HELPERS.md#override-protection) covers the full mechanism, including how a single write that silently
+Helpers](../helpers/#override-protection) covers the full mechanism, including how a single write that silently
 fails to land self-heals on the next tick instead of locking the light out permanently.
 
 The blueprint declares no ownership of its own. Which **state device** tracks a light is resolved by the
@@ -142,7 +154,7 @@ integration from its own configuration — by area, or by a target you point at 
 there's no blueprint input for this and none needed. Two automations driving the same room therefore share
 that room's claims and co-operate, rather than each treating the other's write as external; give them separate
 state devices if you want them tracked apart. See
-[docs/HELPERS.md](HELPERS.md#override-protection) for the resolution rules.
+[the integration reference](../helpers/#override-protection) for the resolution rules.
 
 **Running the automation manually** (hitting "Run" in the UI, or calling `automation.trigger` directly, rather
 than one of its own configured triggers firing) forces the whole tick through regardless of override
@@ -152,7 +164,7 @@ that - open an issue if you need it.
 
 **A device regaining power after an outage does *not* fall under the "not treated as an override" umbrella** —
 its own reconnect state report gets a fresh context too, indistinguishable from a real external change. [Adaptive
-Lighting Helpers](HELPERS.md) itself closes this gap directly: it clears a light's override-protection record the
+Lighting Helpers](../helpers/) itself closes this gap directly: it clears a light's override-protection record the
 moment it's *observed* going unavailable, so by the time it reconnects there's no stale record left for its new
 context to conflict with - it's simply "free to manage" again, the same as a brand new light, through completely
 ordinary means. No forced write, no scoped call, nothing blueprint-specific at all - a genuinely different light
@@ -178,7 +190,7 @@ nothing else currently on, is left off rather than switched on.
 
 If you want to deliberately force a light back under adaptive control from your own script without turning it
 off first, call `apply_lighting` directly with `force: true` - see
-[docs/HELPERS.md](HELPERS.md#override-protection) for the full contract.
+[the integration reference](../helpers/#override-protection) for the full contract.
 
 ## Scene handoff
 
@@ -246,7 +258,7 @@ deliberately can't turn a dark room on. Have a separate automation watch whateve
 Bulbs that can't transition brightness and colour temperature together (some IKEA TRÅDFRI models) can be tagged
 with a `no_combined_transition` label and are sent as two sequential half-length transitions instead of one.
 Everything else gets a single combined call. Entirely handled inside `apply_lighting` (see
-[docs/HELPERS.md](HELPERS.md)) — the blueprint itself has no branching for this, it's just a label you add to a
+[the integration reference](../helpers/)) — the blueprint itself has no branching for this, it's just a label you add to a
 light or device.
 
 The label can go on either the **entity** or its **device** — device is better, since it survives entity renames
@@ -257,7 +269,7 @@ all — no error, no log, just a bulb quietly back on combined transitions.
 Because that failure is invisible, the integration watches for it: if a bulb whose model is known to need
 two-step transitions isn't labelled, it raises a **repair** with a Fix button that applies the label for you
 (creating it correctly if it doesn't exist). The list of known models ships with the integration and can be
-extended per-install — see [docs/HELPERS.md](HELPERS.md#two-step-transition-bulbs) for the model patterns and
+extended per-install — see [the integration reference](../helpers/#two-step-transition-bulbs) for the model patterns and
 how to add one.
 
 ## RGB colour

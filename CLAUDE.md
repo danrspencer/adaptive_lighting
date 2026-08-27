@@ -49,16 +49,27 @@ touching it, and rooms migrated over individually. Linking the two
 blueprints to the same filename is exactly what caused the incident
 in lesson 6 below - don't reintroduce that collision.
 
-**Documentation layout, split for the same reason as the code:**
-README.md is the pitch - why this project exists, why the day is
-divided into four named phases (Morning/Day/Evening/Night) rather than
-a single continuous sun-elevation curve the way most adaptive-lighting
-tools work, and how to install it. The mechanical reference detail -
-full service contracts and YAML examples for the integration, the full
-per-feature/input breakdown for the blueprint - moved out to
-`docs/HELPERS.md` and `docs/BLUEPRINT.md` respectively, so someone
-deciding whether to use this doesn't have to wade through both to find
-the "why." The Morning-phase research citation
+**Documentation layout: README.md, and then the site.** README.md is
+the only Markdown left at the repo root, and it is the pitch - why this
+project exists, why the day is divided into four named phases
+(Morning/Day/Evening/Night) rather than a single continuous
+sun-elevation curve the way most adaptive-lighting tools work - plus
+links onward. Everything else lives in `docs/` and is published to
+<https://danrspencer.github.io/adaptive_lighting/>: `installation.md`,
+the `playground.html` interactive curve, `helpers.md` (full service and
+entity reference), `blueprint.md` (full per-feature/input breakdown),
+and `contributing.md` (repo layout, tests, how to build the site).
+
+These pages are **site pages, not files meant to be read on GitHub** -
+that distinction is load-bearing. An earlier arrangement kept
+`docs/blueprint.md`/`docs/helpers.md` pristine for GitHub readers and
+generated front-matter'd copies at build time, because GitHub renders a
+front matter block as a metadata table. Once they became site-only, the
+front matter went straight into the files and the whole generation step
+(`docs/_build/prepare.py`, plus its link rewriting) was deleted. Don't
+reintroduce it without reintroducing the reason.
+
+The Morning-phase research citation
 ([Xiao et al., 2022](https://pubmed.ncbi.nlm.nih.gov/36058557/) - 1.5h
 of bright morning light for a week improved office workers' sleep
 efficiency and reduced morning sleepiness vs regular office lighting)
@@ -114,7 +125,7 @@ Blueprint input mechanics worth knowing:
   `integration:` with `domain:`; don't mix a bare top-level `domain:`
   with a sibling `filter:` (same class of trap as lesson 14). Accepted
   trade-off: this hides a hand-rolled "bring your own sensor" entity
-  from the picker, so `docs/BLUEPRINT.md` documents pointing at one via
+  from the picker, so `docs/blueprint.md` documents pointing at one via
   "Edit in YAML".
 - **Input renames are breaking.** A stored input simply stops matching
   any input the blueprint declares, so every already-migrated room
@@ -372,7 +383,7 @@ decisions and constraints that aren't recoverable from the code.
 ### Services (`custom_components/adaptive_lighting_helpers/__init__.py`)
 
 Seven, all unit tested and confirmed working live. Full field contracts
-in `docs/HELPERS.md` and `services.yaml` - not repeated here.
+in `docs/helpers.md` and `services.yaml` - not repeated here.
 
 - `compute_lighting_groups` / `compute_curve` / `compute_scene_coverage`
   - pure planners, no side effects.
@@ -402,7 +413,7 @@ Each tracked entity carries two claims - `confirmed` (a write an earlier
 call observed landing) and `pending` (the most recent attempt). The full
 model, and why two rather than one, lives in `write_tracking.py`'s module
 docstring; the decision table lives in `override_protection.classify()`;
-the user-facing contract lives in `docs/HELPERS.md`. Three consumers
+the user-facing contract lives in `docs/helpers.md`. Three consumers
 share that one table - `grouping.py`'s `externally_set()`, `sensor.py`'s
 diagnostic status, and `check_ownership` - deliberately, because they
 previously drifted.
@@ -696,7 +707,7 @@ trigger/condition machinery only looks at entity state, not origin.
 - **`night_floor_kelvin` / `kelvin_rgb`** - see Curve math above.
 - **An opt-out for the two-step repair** - HA's issue registry already
   provides Ignore, and an ignored issue survives version bumps.
-  Documented in `docs/HELPERS.md` rather than reimplemented.
+  Documented in `docs/helpers.md` rather than reimplemented.
 
 ### Parked: scene handling in `apply_lighting`
 
@@ -770,18 +781,23 @@ HA derives the id from the name at creation.
   ignores HA's local brands API ([hacs/integration#5171](https://github.com/hacs/integration/issues/5171));
   HA's native UI is unaffected.
 - pyscript is fully gone from both this repo and the live host.
-- `dashboard/preview.html` + `generate_preview_data.py` render the real
-  cards against synthetic data with no HA instance. Serve the **repo
-  root** over HTTP (`.claude/launch.json`'s `dashboard-preview`), not
-  `file://` - the card's `fetch()` needs HTTP, and `file://` renders a
-  static snapshot with no script execution. Verify by reading the
-  rendered shadow DOM directly; screenshot capture has been unreliable
-  here.
+- **The docs site is how the card gets previewed without HA.**
+  `docs/playground.html` loads the real
+  `adaptive-lighting-curve-card.js` and feeds it the state shape a live
+  HA would, with sliders for every schedule and curve value. Build the
+  site and serve `docs/_preview/` (`.claude/launch.json`'s `docs-site`),
+  which symlinks `adaptive_lighting` -> `_site` so the site's
+  `/adaptive_lighting` baseurl resolves. Verify by reading the rendered
+  shadow DOM directly; screenshot capture has been unreliable here.
+  This replaced `dashboard/preview.html` + `generate_preview_data.py`
+  and a `render_preview_svg.py` that rendered a static SVG for the
+  README - all three deleted. The SVG renderer was a third copy of the
+  chart's drawing logic and had already drifted from the card.
 
 ## Testing
 
 `pip install pytest pytest-homeassistant-custom-component && pytest`
-from the repo root (see CONTRIBUTING.md). Python 3.14 - the floor
+from the repo root (see `docs/contributing.md`). Python 3.14 - the floor
 tracks whatever pytest-homeassistant-custom-component's pinned HA
 release requires, since this only ever runs inside a real HA install.
 `pip install -e ".[dev]"` does *not* work here and isn't used anywhere:
@@ -815,7 +831,7 @@ Two layers:
 `test_blueprint.py` is the **only** layer that can catch a bug in the
 blueprint's own trigger/condition/action wiring - syntactically fine,
 wrong only at runtime, invisible to YAML parsing or an isolated
-`ha_eval_template` check. Its classes mirror `docs/BLUEPRINT.md`'s
+`ha_eval_template` check. Its classes mirror `docs/blueprint.md`'s
 section headings so it reads as a spec of what the blueprint does.
 
 `tests/integration/conftest.py` overrides the plugin's own

@@ -1,134 +1,118 @@
 """
-Guards docs/_build/prepare.py, which is load-bearing for the docs site.
+Guards the documentation site's source pages.
 
-The site publishes docs/BLUEPRINT.md and docs/HELPERS.md, which are also
-read directly on GitHub. Keeping both audiences happy means the published
-copies are GENERATED - front matter prepended, cross-links rewritten -
-rather than the source files being edited. Several of the rules that
-makes necessary are silent when broken (a link that 404s only on the
-site, a Jinja example that renders blank, a generated filename that
-overwrites its own source), so they're pinned here.
+Everything except README.md lives in docs/ and is published to GitHub
+Pages. Two of the ways that breaks are silent - the site builds happily
+and the page is simply wrong - so they're pinned here rather than left to
+be noticed by a reader:
+
+1. A page with no front matter is not a page. Jekyll only *renders* a
+   file that has a literal front matter block; anything else is treated
+   as a static file and copied through verbatim, so the published URL
+   serves raw Markdown with no theme, no nav and no title. Front matter
+   defaults in _config.yml do not help - they merge into pages, they
+   don't promote a static file into one.
+
+2. Liquid eats Home Assistant Jinja. Both share the {{ }} delimiters, and
+   Jekyll's default lax filter handling renders an unknown filter as an
+   empty string - so a documented `{{ today_at('06:00:00') | as_timestamp }}`
+   publishes as a blank line, with no build error. Pages carrying Jinja
+   must set render_with_liquid: false, and having done so they can no
+   longer use Liquid's relative_url filter either.
 """
 
-import importlib.util
 import re
 from pathlib import Path
 
 import pytest
 
-REPO = Path(__file__).resolve().parent.parent
-PREPARE = REPO / "docs" / "_build" / "prepare.py"
+DOCS = Path(__file__).resolve().parent.parent / "docs"
+PAGES = sorted(list(DOCS.glob("*.md")) + list(DOCS.glob("*.html")))
 
 
-def _load_prepare():
-    spec = importlib.util.spec_from_file_location("docs_prepare", PREPARE)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+def _front_matter(page: Path) -> dict:
+    text = page.read_text(encoding="utf-8")
+    if not text.startswith("---\n"):
+        return {}
+    _, _, rest = text.partition("---\n")
+    block, sep, _ = rest.partition("\n---")
+    if not sep:
+        return {}
+    values = {}
+    for line in block.splitlines():
+        if line.startswith("#") or ":" not in line:
+            continue
+        key, _, value = line.partition(":")
+        values[key.strip()] = value.strip()
+    return values
 
 
-prepare = _load_prepare()
+def test_there_are_pages_to_check():
+    """Guards against this whole file silently passing over an empty
+    glob if docs/ is ever restructured."""
+    assert len(PAGES) >= 5, f"expected the site's pages, found {[p.name for p in PAGES]}"
 
 
-def test_generated_names_are_not_case_variants_of_their_sources():
-    """The macOS trap, pinned.
-
-    macOS filesystems are case-insensitive, so docs/blueprint.md and
-    docs/BLUEPRINT.md are the SAME FILE there - generating the former
-    silently overwrites the source document, and the loss is only
-    visible via git. Linux CI would never catch it, which is exactly why
-    it needs a test rather than care.
-    """
-    for source_name, generated_name, *_ in prepare.PAGES:
-        assert source_name.lower() != generated_name.lower(), (
-            f"{generated_name!r} is a case variant of its own source {source_name!r} - "
-            "on a case-insensitive filesystem, generating it would overwrite the source"
-        )
+@pytest.mark.parametrize("page", PAGES, ids=lambda p: p.name)
+def test_every_page_has_front_matter_with_a_title(page):
+    front = _front_matter(page)
+    assert front, (
+        f"{page.name} has no front matter block, so Jekyll will copy it through as a static "
+        "file instead of rendering it as a page"
+    )
+    assert "title" in front, f"{page.name} has front matter but no title, so it has no name in the nav"
 
 
-def test_every_page_declares_a_distinct_permalink():
-    permalinks = [permalink for *_, permalink in prepare.PAGES]
-    assert len(permalinks) == len(set(permalinks))
-    for permalink in permalinks:
-        # Directory-style, so "../" from either page is the site root -
-        # which is what the relative cross-links below rely on.
-        assert permalink.startswith("/") and permalink.endswith("/")
+# {{ ... }} means two different things across this site, and telling
+# them apart is the whole point of the two tests below. A page either
+# uses Liquid deliberately (the site's own `relative_url` links) or it
+# documents Home Assistant Jinja, which happens to share the delimiters.
+# It cannot do both: turning Liquid off to protect the Jinja also turns
+# off relative_url.
+LIQUID_EXPRESSION = re.compile(r"\{\{(.*?)\}\}", re.DOTALL)
+# The Liquid this site actually uses. Anything else inside {{ }} is
+# assumed to be Home Assistant Jinja being documented.
+SITE_LIQUID = ("relative_url", "site.", "page.")
 
 
-def test_front_matter_disables_liquid():
-    """Without this, Liquid eats the Jinja examples in both documents.
-
-    Liquid and Jinja share the {{ }} delimiters, and Jekyll's default lax
-    filter handling renders an unknown filter as an empty string - so
-    `{{ today_at('06:00:00') | as_timestamp }}` would publish as blank,
-    with no build error to notice.
-    """
-    fm = prepare.front_matter("Title", 4, "/somewhere/")
-    assert "render_with_liquid: false" in fm
-    assert fm.startswith("---\n") and fm.rstrip().endswith("---")
+def _expressions(page: Path) -> list[str]:
+    body = page.read_text(encoding="utf-8").split("\n---", 1)[-1]
+    return [m.group(1) for m in LIQUID_EXPRESSION.finditer(body)]
 
 
-@pytest.mark.parametrize(
-    "source_link, expected",
-    [
-        # Sibling reference docs -> the other one's permalink.
-        ("see [helpers](HELPERS.md)", "see [helpers](../helpers/)"),
-        ("see [x](HELPERS.md#override-protection)", "see [x](../helpers/#override-protection)"),
-        ("see [b](BLUEPRINT.md)", "see [b](../blueprint/)"),
-        ("see [b](BLUEPRINT.md#bring-your-own-sensor)", "see [b](../blueprint/#bring-your-own-sensor)"),
-        # The README is the site's home page.
-        ("see [readme](../README.md)", "see [readme](../)"),
-        (
-            "see [why](../README.md#why-four-phases-not-a-continuous-curve)",
-            "see [why](../#why-four-phases-not-a-continuous-curve)",
-        ),
-        # Files that aren't published at all -> out to the repo.
-        (
-            "see [c](../CONTRIBUTING.md#previewing-the-dashboard-cards)",
-            "see [c](https://github.com/danrspencer/adaptive_lighting/blob/main/CONTRIBUTING.md#previewing-the-dashboard-cards)",
-        ),
-        (
-            "see [y](../dashboard/adaptive-lighting-section.yaml)",
-            "see [y](https://github.com/danrspencer/adaptive_lighting/blob/main/dashboard/adaptive-lighting-section.yaml)",
-        ),
-    ],
-)
-def test_link_rewrites(source_link, expected):
-    assert prepare.rewrite_links(source_link) == expected
+@pytest.mark.parametrize("page", PAGES, ids=lambda p: p.name)
+def test_pages_documenting_jinja_disable_liquid(page):
+    """The failure this prevents is invisible: the page builds, and the
+    Jinja example publishes as an empty string."""
+    jinja = [e for e in _expressions(page) if not any(marker in e for marker in SITE_LIQUID)]
+    if not jinja:
+        return
+    front = _front_matter(page)
+    assert front.get("render_with_liquid") == "false", (
+        f"{page.name} documents Jinja ({jinja[0].strip()[:40]!r}) but doesn't set "
+        "render_with_liquid: false - Liquid will evaluate it and publish an empty string"
+    )
 
 
-def test_rewrites_leave_ordinary_text_and_anchors_alone():
-    """Same-page anchors and external links must survive untouched -
-    they're already correct on both GitHub and the site."""
-    for unchanged in [
-        "jump to [self](#self-healing)",
-        "read [the study](https://pubmed.ncbi.nlm.nih.gov/36058557/)",
-        "a literal BLUEPRINT.md mention outside a link",
-    ]:
-        assert prepare.rewrite_links(unchanged) == unchanged
+@pytest.mark.parametrize("page", PAGES, ids=lambda p: p.name)
+def test_liquid_free_pages_dont_use_liquid_filters(page):
+    """The other half of the same rule: with Liquid off, a relative_url
+    filter publishes as literal text instead of a link. Checks real
+    {{ ... }} usage, not the word appearing in prose."""
+    if _front_matter(page).get("render_with_liquid") != "false":
+        return
+    used = [e for e in _expressions(page) if any(marker in e for marker in SITE_LIQUID)]
+    assert not used, (
+        f"{page.name} has Liquid disabled, so {used[0].strip()[:40]!r} won't be evaluated - "
+        "use a plain relative path"
+    )
 
 
-def test_no_sibling_md_links_survive_in_the_generated_pages():
-    """Whole-document check: after rewriting, nothing should still point
-    at a sibling .md file, which would 404 on the published site."""
-    for source_name, *_ in prepare.PAGES:
-        rewritten = prepare.rewrite_links((REPO / "docs" / source_name).read_text(encoding="utf-8"))
-        # Only the link TARGETS matter. Several links legitimately have
-        # "docs/HELPERS.md" as their visible text while pointing at the
-        # rewritten target, and that text is correct on both GitHub and
-        # the site - matching on whole lines flags those as failures.
-        targets = re.findall(r"\]\(([^)]+)\)", rewritten)
-        stale = [t for t in targets if ".md" in t and "github.com" not in t]
-        assert not stale, f"{source_name} still has site-relative .md links after rewriting:\n" + "\n".join(stale[:5])
-
-
-def test_rewriting_preserves_jinja_examples_verbatim():
-    """The link rewriting must not disturb the Home Assistant templates
-    the documents are teaching - they're the content most likely to be
-    silently mangled and least likely to be noticed."""
-    for source_name, *_ in prepare.PAGES:
-        source = (REPO / "docs" / source_name).read_text(encoding="utf-8")
-        rewritten = prepare.rewrite_links(source)
-        jinja_before = [line for line in source.splitlines() if "{{" in line]
-        jinja_after = [line for line in rewritten.splitlines() if "{{" in line]
-        assert jinja_before == jinja_after, f"{source_name}: Jinja lines changed during link rewriting"
+@pytest.mark.parametrize("page", PAGES, ids=lambda p: p.name)
+def test_no_page_links_to_a_markdown_file(page):
+    """These pages used to be read on GitHub and linked to each other as
+    sibling .md files. On the site those are 404s."""
+    body = page.read_text(encoding="utf-8")
+    targets = re.findall(r"\]\(([^)]+)\)", body)
+    stale = [t for t in targets if ".md" in t and "github.com" not in t]
+    assert not stale, f"{page.name} links to Markdown files that aren't published: {stale[:5]}"

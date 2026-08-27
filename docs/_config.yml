@@ -5,25 +5,11 @@ baseurl: /adaptive_lighting
 
 theme: just-the-docs
 
-# BLUEPRINT.md and HELPERS.md are NOT built directly. They're read on
-# GitHub too, so they deliberately carry no front matter - and Jekyll
-# only renders a file as a page if it has a literal front matter block
-# (defaults get merged into pages; they don't promote a static file into
-# one). docs/_build/prepare.py generates blueprint.md / helpers.md from
-# them with front matter prepended and cross-links rewritten, so the two
-# originals are excluded here to avoid publishing a raw .md alongside.
 exclude:
-  - BLUEPRINT.md
-  - HELPERS.md
   - Gemfile
   - Gemfile.lock
   - vendor
-  - _build
 
-# just-the-docs supplies the layout but doesn't assume it: a page with
-# no `layout:` renders as bare content with no <head>, no nav and no
-# theme CSS at all. Setting it once here rather than in every page's
-# front matter (and so the generated reference pages get it too).
 defaults:
   - scope:
       path: ''
