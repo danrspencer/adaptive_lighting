@@ -107,6 +107,53 @@ python3 -m http.server 8934
 
 Renders the real curve card against generated/synthetic data, without a Home Assistant instance.
 
+## The documentation site
+
+Published at <https://danrspencer.github.io/adaptive_lighting/> from `docs/`, built with Jekyll and the
+`just-the-docs` theme by `.github/workflows/docs.yml`. Pull requests build the site but don't publish it;
+only a push to `main` deploys.
+
+```bash
+python3 docs/_build/prepare.py
+cd docs && bundle install && bundle exec jekyll build
+```
+
+To preview it locally, note the site has a `baseurl` of `/adaptive_lighting`, so `_site` has to be served
+one directory *below* the web root or every asset 404s. `.claude/launch.json`'s `docs-site` entry handles
+that via `docs/_preview/`, which symlinks `adaptive_lighting` → `_site`:
+
+```bash
+python3 -m http.server 8935 --directory docs/_preview
+# open http://localhost:8935/adaptive_lighting/
+```
+
+Three things about this site are less obvious than they look, all covered by `tests/test_docs_site.py` and
+`tests/test_curve_js_parity.py`:
+
+- **`docs/BLUEPRINT.md` and `docs/HELPERS.md` are not published directly.** They're read on GitHub too, so
+  they deliberately carry no front matter — and Jekyll only renders a file as a *page* if it has a literal
+  front matter block (defaults in `_config.yml` merge into pages; they don't promote a static file into
+  one). `docs/_build/prepare.py` generates `reference-blueprint.md`/`reference-helpers.md` from them with
+  front matter prepended and cross-links rewritten. **Edit the upper-case originals**; the generated copies
+  are gitignored and rebuilt every time.
+
+  The generated names are deliberately not case variants of their sources. macOS filesystems are
+  case-insensitive, so `docs/blueprint.md` and `docs/BLUEPRINT.md` are the same file there — generating one
+  silently overwrites the source document.
+
+- **The site is built with Jekyll 4, not the `github-pages` gem.** Both reference documents contain Home
+  Assistant Jinja in their YAML examples, and Liquid uses the same `{% raw %}{{ }}{% endraw %}`
+  delimiters. Jekyll's default lax filter handling renders an unknown filter as an empty string, so those
+  examples would publish blank with no build error. `render_with_liquid: false` prevents that, and it's a
+  Jekyll 4 feature that GitHub Pages' own (Jekyll 3) builder doesn't have.
+
+- **The playground runs the real dashboard card.** `docs/playground.html` loads the actual
+  `adaptive-lighting-curve-card.js` — copied in by `prepare.py`, never committed twice — and feeds it the
+  same state shape a live Home Assistant would. The schedule maths behind the sliders is
+  `docs/assets/js/curve.js`, a port of `curve.py`; `tests/test_curve_js_parity.py` runs it under node
+  against a grid of inputs and fails if the two ever disagree, so the docs can't quietly drift from the
+  integration.
+
 ## Testing
 
 ```bash

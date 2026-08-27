@@ -1,0 +1,91 @@
+---
+title: Curve playground
+nav_order: 2
+---
+
+<h1>Curve playground</h1>
+
+<p>
+  This is the integration's <em>real</em> dashboard card — the same
+  <code>adaptive-lighting-curve-card.js</code> that ships inside the
+  integration and renders on your own dashboard, not a picture of it.
+  Move any slider and the schedule is recomputed and handed back to the
+  card exactly the way a live Home Assistant would.
+</p>
+
+<div class="alp-card-host" id="alp-card-host"></div>
+
+<p class="alp-note">
+  Each bar is one five-minute slice of the day: its <strong>height</strong> is
+  brightness and its <strong>colour</strong> is that moment's colour temperature,
+  converted to RGB the same way the lights are told to render it. The vertical
+  line is "now" — drag <strong>Time of day</strong> to move it. The schedule maths
+  behind this page is a port of the integration's own <code>curve.py</code>, kept
+  honest by a test that fails CI if the two ever disagree.
+</p>
+
+<div class="alp-actions">
+  <button type="button" class="alp-btn alp-btn--primary" data-preset="default">Defaults</button>
+  <button type="button" class="alp-btn" data-preset="winter">Winter sunset</button>
+  <button type="button" class="alp-btn" data-preset="midsummer">Midsummer sunset</button>
+  <button type="button" class="alp-btn" data-preset="late-riser">Late riser</button>
+  <button type="button" class="alp-btn" data-preset="very-warm-night">Very warm night</button>
+  <button type="button" class="alp-btn" id="alp-share">Copy link to these settings</button>
+</div>
+
+<p class="alp-status" id="alp-status"></p>
+
+<div class="alp-panel">
+  <h3>Time of day</h3>
+  <p class="alp-panel-hint">
+    Moves the "now" marker. Nothing about the schedule changes — this is just
+    where you're standing in the day.
+  </p>
+  <div class="alp-control">
+    <label for="alp-now">Time of day</label>
+    <output for="alp-now" id="alp-now-out"></output>
+    <input type="range" id="alp-now" min="0" max="1439" step="5" />
+  </div>
+</div>
+
+<div class="alp-panel">
+  <h3>Schedule</h3>
+  <p class="alp-panel-hint">
+    When each phase begins. Every one of these is a <code>time</code> entity on the
+    schedule you add in Home Assistant — except sunset, which comes from
+    <code>sun.sun</code>.
+  </p>
+  <div class="alp-grid" id="alp-times"></div>
+  <p class="alp-derived" id="alp-derived"></p>
+</div>
+
+<div class="alp-panel">
+  <h3>Brightness</h3>
+  <p class="alp-panel-hint">
+    Each phase's brightness. Evening's is a starting point rather than a hold: it
+    fades toward Night's value over the run-up to Night Start.
+  </p>
+  <div class="alp-grid" id="alp-brightness"></div>
+</div>
+
+<div class="alp-panel">
+  <h3>Colour temperature</h3>
+  <p class="alp-panel-hint">
+    Morning holds its value, Day ramps down from it toward Day End, and Evening
+    ramps from Day End down to its own value before fading into Night's.
+  </p>
+  <div class="alp-grid" id="alp-kelvin"></div>
+</div>
+
+<h2>What the phases are for</h2>
+
+<p>
+  The four phases aren't four points on one continuous sun-tracking curve — each
+  exists for its own reason, which is why they're configured separately. There's
+  more on the thinking behind that on the <a href="{{ '/' | relative_url }}">home
+  page</a>, and the full input-by-input reference in the
+  <a href="{{ '/blueprint/' | relative_url }}">blueprint reference</a>.
+</p>
+
+<link rel="stylesheet" href="{{ '/assets/css/playground.css' | relative_url }}" />
+<script type="module" src="{{ '/assets/js/playground.js' | relative_url }}"></script>

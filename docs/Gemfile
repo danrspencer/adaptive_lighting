@@ -1,0 +1,11 @@
+# The docs site's own dependencies, separate from the repo's Python
+# ones. Only .github/workflows/docs.yml and anyone previewing the site
+# locally use these - nothing in custom_components/ or the blueprint
+# depends on Ruby at all.
+source 'https://rubygems.org'
+
+# Jekyll 4 specifically, not the github-pages gem (which pins Jekyll 3):
+# docs/_config.yml relies on render_with_liquid, a Jekyll 4 feature, to
+# stop Liquid eating the Jinja examples in BLUEPRINT.md/HELPERS.md.
+gem 'jekyll', '~> 4.3'
+gem 'just-the-docs', '~> 0.10'

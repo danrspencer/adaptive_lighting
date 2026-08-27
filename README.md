@@ -7,6 +7,10 @@ and anything a scene already has covered is left to the scene.
 
 ![Adaptive Lighting Curve card, showing brightness and colour temperature through the day](dashboard/curve-preview.svg)
 
+**📖 [Documentation site](https://danrspencer.github.io/adaptive_lighting/)** — including an
+**[interactive curve playground](https://danrspencer.github.io/adaptive_lighting/playground.html)** where you can
+drag the schedule and curve settings around and watch the real dashboard card redraw.
+
 ## Contents
 
 - [Why four phases, not a continuous curve](#why-four-phases-not-a-continuous-curve)
