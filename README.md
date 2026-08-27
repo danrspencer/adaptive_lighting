@@ -5,11 +5,11 @@ the afternoon, dimming to a relaxed glow as evening sets in, and low and warm on
 turn their lights on and off as people come and go, manual changes are left alone until you're done with them,
 and anything a scene already has covered is left to the scene.
 
-![Adaptive Lighting Curve card, showing brightness and colour temperature through the day](dashboard/curve-preview.svg)
+**📖 [Documentation site](https://danrspencer.github.io/adaptive_lighting/)**
 
-**📖 [Documentation site](https://danrspencer.github.io/adaptive_lighting/)** — including an
-**[interactive curve playground](https://danrspencer.github.io/adaptive_lighting/playground.html)** where you can
-drag the schedule and curve settings around and watch the real dashboard card redraw.
+The clearest way to see what this does is the
+**[interactive curve playground](https://danrspencer.github.io/adaptive_lighting/playground.html)** — it renders
+the real dashboard card, and you can drag the schedule and curve settings around and watch it redraw.
 
 ## Contents
 

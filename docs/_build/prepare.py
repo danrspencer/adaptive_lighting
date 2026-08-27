@@ -6,12 +6,11 @@ Everything this does exists to keep ONE source of truth for content that
 has two audiences - people reading the repo on GitHub, and the published
 docs site - without either one degrading the other:
 
-1. Copies the integration's real dashboard card and the curve preview
-   art into docs/assets/. Both live outside docs/ (in
-   custom_components/.../www/ and dashboard/), and Jekyll can only serve
-   files under its own source directory. Copying at build time rather
-   than committing a second copy means the site can never show a stale
-   card.
+1. Copies the integration's real dashboard card into docs/assets/. It
+   lives outside docs/ (in custom_components/.../www/), and Jekyll can
+   only serve files under its own source directory. Copying at build
+   time rather than committing a second copy means the site can never
+   show a stale card.
 
 2. Generates site pages from docs/BLUEPRINT.md and docs/HELPERS.md.
    Those two files are read directly on GitHub, so they deliberately
@@ -46,13 +45,12 @@ REPO = DOCS.parent
 
 GITHUB_BLOB = "https://github.com/danrspencer/adaptive_lighting/blob/main"
 
-# (source, destination) for the two files that live outside docs/.
+# (source, destination) for the files that live outside docs/.
 ASSET_COPIES = [
     (
         REPO / "custom_components" / "adaptive_lighting_helpers" / "www" / "adaptive-lighting-curve-card.js",
         DOCS / "assets" / "js" / "adaptive-lighting-curve-card.js",
     ),
-    (REPO / "dashboard" / "curve-preview.svg", DOCS / "assets" / "img" / "curve-preview.svg"),
 ]
 
 # The reference docs, and the front matter each generated copy gets.

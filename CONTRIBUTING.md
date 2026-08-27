@@ -80,8 +80,6 @@ dashboard/
                                  synthetic data, no Home Assistant
                                  instance needed
     generate_preview_data.py    generates that synthetic data
-    render_preview_svg.py       renders the README's screenshot as a
-                                 standalone SVG
 
 tests/
     pytest suite for curve.py, grouping.py, and scenes.py.
