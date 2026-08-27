@@ -18,7 +18,13 @@ from pytest_homeassistant_custom_component.common import MockConfigEntry, async_
 from homeassistant.util import dt as dt_util
 
 from custom_components.adaptive_lighting_helpers.button import async_setup_entry as button_setup
-from custom_components.adaptive_lighting_helpers.const import CONF_TARGET, DOMAIN, SUBENTRY_TYPE_STATE
+from custom_components.adaptive_lighting_helpers.const import (
+    CONF_ENTRY_TYPE,
+    CONF_TARGET,
+    DOMAIN,
+    ENTRY_TYPE_TRACKING,
+    SUBENTRY_TYPE_STATE,
+)
 from custom_components.adaptive_lighting_helpers.coordinator import state_instances
 from custom_components.adaptive_lighting_helpers.sensor import async_setup_entry as sensor_setup
 from custom_components.adaptive_lighting_helpers.write_tracking import ClaimRegistry
@@ -35,7 +41,9 @@ async def _setup(hass: HomeAssistant, *scopes: ConfigSubentryData):
     real entities, without going through async_forward_entry_setups -
     which would resolve the manifest's frontend dependency (see
     test_services.py's own note)."""
-    entry = MockConfigEntry(domain=DOMAIN, data={}, subentries_data=list(scopes))
+    entry = MockConfigEntry(
+        domain=DOMAIN, data={CONF_ENTRY_TYPE: ENTRY_TYPE_TRACKING}, subentries_data=list(scopes)
+    )
     entry.add_to_hass(hass)
     registry = ClaimRegistry(hass, entry)
     hass.data.setdefault(DOMAIN, {})[entry.entry_id] = registry
@@ -134,7 +142,11 @@ async def test_a_write_before_the_scopes_entity_exists_is_dropped(hass: HomeAssi
     write can genuinely arrive first. Dropping it costs one tick of
     tracking; queueing it would be machinery for a lighting override."""
     area = ar.async_get(hass).async_get_or_create("Kitchen")
-    entry = MockConfigEntry(domain=DOMAIN, data={}, subentries_data=[_scope("Kitchen", {"area_id": [area.id]})])
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_ENTRY_TYPE: ENTRY_TYPE_TRACKING},
+        subentries_data=[_scope("Kitchen", {"area_id": [area.id]})],
+    )
     entry.add_to_hass(hass)
     registry = ClaimRegistry(hass, entry)  # no entities registered yet
     _light(hass, "light.a", area_id=area.id)
@@ -321,6 +333,8 @@ async def test_setup_offers_one_state_device_per_area_that_has_lights(stub_entry
     er.async_get(hass).async_update_entity(door.entity_id, area_id=garage.id)
 
     result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
+    assert result["type"] == "menu"
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"next_step_id": "tracking"})
     assert result["type"] == "form"
     suggested = result["data_schema"]({})["areas"]
     assert sorted(suggested) == sorted([hall.id, kitchen.id])
@@ -339,6 +353,7 @@ async def test_setup_with_no_areas_creates_the_entry_and_no_scopes(stub_entry_se
     offer, so the entry is created straight away and lights simply stay
     untracked until a state device exists."""
     result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"next_step_id": "tracking"})
 
     assert result["type"] == "create_entry"
     assert state_instances(hass.config_entries.async_entries(DOMAIN)[0]) == []
@@ -347,40 +362,63 @@ async def test_setup_with_no_areas_creates_the_entry_and_no_scopes(stub_entry_se
 # --- upgrading an existing entry -----------------------------------------
 
 
-async def test_upgrading_seeds_a_state_device_per_area_with_lights(stub_entry_setup, hass: HomeAssistant):
-    """Before v2 there were no state devices at all. Without seeding,
-    an upgrade leaves every light resolving to nothing and override
-    protection silently off - lights still driven, but one taken by hand
-    overwritten on the next tick."""
+async def test_upgrading_splits_the_entry_and_keeps_the_schedule_config(stub_entry_setup, hass: HomeAssistant):
+    """The existing entry becomes the schedules one, keeping its sensor
+    subentries and with them every schedule time and curve value the
+    user has set - real configuration worth preserving. Its state
+    subentries go; the tracking entry re-seeds equivalents, which cost
+    nothing since a scope carries only a target and claims aren't
+    persisted."""
     from custom_components.adaptive_lighting_helpers import async_migrate_entry
+    from custom_components.adaptive_lighting_helpers.const import (
+        CONF_ENTRY_TYPE as CET,
+        ENTRY_TYPE_SCHEDULES,
+        SUBENTRY_TYPE_SENSOR,
+    )
 
     kitchen = ar.async_get(hass).async_get_or_create("Kitchen")
-    ar.async_get(hass).async_get_or_create("Garage")  # no lights
     _light(hass, "light.k", area_id=kitchen.id)
 
-    entry = MockConfigEntry(domain=DOMAIN, data={}, version=1)
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={},
+        version=2,
+        subentries_data=[
+            ConfigSubentryData(
+                subentry_type=SUBENTRY_TYPE_SENSOR, title="Ground Floor", unique_id="ground_floor", data={}
+            ),
+            _scope("Old Scope", {"area_id": [kitchen.id]}),
+        ],
+    )
     entry.add_to_hass(hass)
 
     assert await async_migrate_entry(hass, entry)
+    await hass.async_block_till_done()
 
-    assert [s.title for s in state_instances(entry)] == ["Kitchen"]
-    assert state_instances(entry)[0].target == {"area_id": [kitchen.id]}
-    assert entry.version == 2
+    assert entry.version == 3
+    assert entry.data[CET] == ENTRY_TYPE_SCHEDULES
+    # The schedule subentry survives; the state one doesn't.
+    assert [s.subentry_type for s in entry.subentries.values()] == [SUBENTRY_TYPE_SENSOR]
+
+    tracking = [e for e in hass.config_entries.async_entries(DOMAIN) if e.data.get(CET) == ENTRY_TYPE_TRACKING]
+    assert len(tracking) == 1
+    assert [s.title for s in state_instances(tracking[0])] == ["Kitchen"]
 
 
 async def test_upgrading_an_already_migrated_entry_adds_nothing(stub_entry_setup, hass: HomeAssistant):
-    """The version bump is the guard, so deleting a state device after
-    upgrading sticks rather than being undone on the next restart."""
+    """The version bump is the guard, so neither the split nor the
+    seeding is redone on the next restart."""
     from custom_components.adaptive_lighting_helpers import async_migrate_entry
 
     kitchen = ar.async_get(hass).async_get_or_create("Kitchen")
     _light(hass, "light.k", area_id=kitchen.id)
-    entry = MockConfigEntry(domain=DOMAIN, data={}, version=2)
+    entry = MockConfigEntry(domain=DOMAIN, data={}, version=3)
     entry.add_to_hass(hass)
 
     assert await async_migrate_entry(hass, entry)
 
     assert state_instances(entry) == []
+    assert len(hass.config_entries.async_entries(DOMAIN)) == 1
 
 
 async def test_a_state_device_lands_in_the_area_it_targets(hass: HomeAssistant):
@@ -456,3 +494,41 @@ async def test_counters_refresh_when_a_lights_live_state_changes(hass: HomeAssis
 
     assert refreshed, "the poll must tell the counters to recompute"
     assert overridden.native_value == 0
+
+
+async def test_each_entry_type_owns_only_its_own_sensors(hass: HomeAssistant):
+    """Both entry types use the sensor platform, so the branch deciding
+    which entities belong to which is load-bearing: without it a
+    schedules entry would try to build tracking entities (and look up a
+    claim registry it doesn't have), and vice versa."""
+    from custom_components.adaptive_lighting_helpers.const import (
+        CONF_ENTRY_TYPE as CET,
+        ENTRY_TYPE_SCHEDULES,
+        SUBENTRY_TYPE_SENSOR,
+    )
+    from custom_components.adaptive_lighting_helpers.coordinator import ScheduleCoordinator, schedule_instances
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={CET: ENTRY_TYPE_SCHEDULES},
+        subentries_data=[
+            ConfigSubentryData(
+                subentry_type=SUBENTRY_TYPE_SENSOR, title="Ground Floor", unique_id="ground_floor", data={}
+            )
+        ],
+    )
+    entry.add_to_hass(hass)
+    for instance in schedule_instances(entry):
+        coordinator = ScheduleCoordinator(hass, instance)
+        # Plain refresh: async_config_entry_first_refresh needs the
+        # coordinator to carry a config entry, which only happens inside
+        # a real entry setup.
+        await coordinator.async_refresh()
+        hass.data.setdefault(DOMAIN, {})[instance.subentry_id] = coordinator
+
+    added: list = []
+    await sensor_setup(hass, entry, lambda entities, **kw: added.extend(entities))
+
+    assert [e.entity_id for e in added] == ["sensor.ground_floor_adaptive_lighting"]
+    # No claims storage on a schedules entry - it has no registry at all.
+    assert not any(hasattr(e, "claims") for e in added)

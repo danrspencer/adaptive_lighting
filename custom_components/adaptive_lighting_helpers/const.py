@@ -32,3 +32,13 @@ CONF_TARGET = "target"
 # reconstruct afterwards: by the time anyone looks, the curve has moved
 # and the evidence is gone. See sensor.py's _refresh_statuses.
 EVENT_LIGHT_OVERRIDDEN = "adaptive_lighting_helpers_light_overridden"
+
+# This integration installs as two separate config entries rather than
+# one, so the integration page shows two top-level blocks - schedules and
+# tracking - instead of flattening both kinds of thing into one list of
+# sibling subentries. Grouping subentries by type isn't possible: HA's
+# frontend renders one section per subentry with no hook to group them,
+# so the entry is the only level where this can be expressed.
+CONF_ENTRY_TYPE = "entry_type"
+ENTRY_TYPE_SCHEDULES = "schedules"
+ENTRY_TYPE_TRACKING = "tracking"

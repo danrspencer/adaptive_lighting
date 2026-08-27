@@ -57,7 +57,7 @@ from typing import Any
 import voluptuous as vol
 from homeassistant.components.frontend import add_extra_js_url
 from homeassistant.components.http import StaticPathConfig
-from homeassistant.config_entries import ConfigEntry, ConfigSubentry
+from homeassistant.config_entries import SOURCE_IMPORT, ConfigEntry, ConfigSubentry
 from homeassistant.const import Platform
 from homeassistant.core import Context, HomeAssistant, ServiceCall, ServiceResponse, SupportsResponse, callback
 from homeassistant.helpers import config_validation as cv
@@ -67,7 +67,14 @@ from homeassistant.helpers.event import async_track_state_change_event, async_tr
 from homeassistant.helpers.typing import ConfigType
 from homeassistant.util import slugify
 
-from .const import CONF_TARGET, DOMAIN, SUBENTRY_TYPE_STATE
+from .const import (
+    CONF_ENTRY_TYPE,
+    CONF_TARGET,
+    DOMAIN,
+    ENTRY_TYPE_SCHEDULES,
+    ENTRY_TYPE_TRACKING,
+    SUBENTRY_TYPE_STATE,
+)
 from .config_flow import _areas_with_lights
 from .coordinator import CURVE_KEYS, ScheduleCoordinator, schedule_instances
 from .curve import phase_at, targets_for_phase
@@ -77,18 +84,12 @@ from .scenes import SceneLookup, compute_scene_coverage
 from .two_step_check import async_start_watching
 from .write_tracking import PRUNE_CHECK_INTERVAL, ClaimRegistry
 
-# Named for the per-schedule-instance entities that make up most of it,
-# but no longer only those: sensor and button also carry the
-# entry-scoped write-tracking and per-owner entities, which exist even
-# on an entry with zero schedule instances.
-SCHEDULE_PLATFORMS = [
-    Platform.SENSOR,
-    Platform.SELECT,
-    Platform.NUMBER,
-    Platform.TIME,
-    Platform.SWITCH,
-    Platform.BUTTON,
-]
+# One list per entry type - see const.py's CONF_ENTRY_TYPE for why this
+# integration installs as two entries rather than one. Both use the
+# sensor platform; each platform module decides which entities it owns
+# by checking the entry's type.
+SCHEDULE_PLATFORMS = [Platform.SENSOR, Platform.SELECT, Platform.NUMBER, Platform.TIME, Platform.SWITCH]
+TRACKING_PLATFORMS = [Platform.SENSOR, Platform.BUTTON]
 
 
 COMPUTE_LIGHTING_GROUPS_SCHEMA = vol.Schema(
@@ -328,37 +329,62 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
 
 
 async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    """v1 -> v2: seed a state device per area that has lights.
+    """v2 -> v3: split the single entry into schedules and tracking.
 
-    Before v2 there were no state devices - a light's tracking scope was
-    derived from the calling automation's own entity_id. Without this,
-    upgrading leaves an entry with no scopes at all, every light
-    resolving to nothing, and therefore override protection silently
-    off: lights still get driven, but one taken by hand is overwritten
-    on the next tick rather than being left alone.
+    Both kinds of thing used to live under one entry as sibling
+    subentries, which HA's integration page renders as one section each
+    - so a house with a scope per room got a wall of peers with no
+    grouping. An entry is the only level at which the distinction can be
+    expressed (see const.py's CONF_ENTRY_TYPE).
 
-    Seeds exactly what a fresh install's setup step offers, from the
-    user's own area configuration - not invented from a caller-supplied
-    string, which is the "devices appearing by magic" this release
-    replaced. Runs once, because the version bump does; deleting a state
-    device afterwards sticks."""
-    if entry.version >= 2:
+    The existing entry becomes the **schedules** one, keeping its sensor
+    subentries and, with them, every schedule time and curve value the
+    user has set - those are real configuration and are worth preserving.
+    Its state subentries are dropped and the tracking entry re-seeds
+    equivalents from the same areas: a scope carries only a target, and
+    claims aren't persisted at all, so there is nothing there to lose.
+
+    (v1 -> v2 seeded state devices onto the single entry. That still runs
+    first for anyone upgrading from v1, and this step then moves them;
+    running it is harmless either way, since the seeding is idempotent
+    per area and the subentries are about to be replaced.)"""
+    if entry.version >= 3:
         return True
-    for area_id, name in _areas_with_lights(hass):
-        hass.config_entries.async_add_subentry(
-            entry,
-            ConfigSubentry(
-                data=MappingProxyType({CONF_TARGET: {"area_id": [area_id]}}),
-                subentry_type=SUBENTRY_TYPE_STATE,
-                title=name,
-                unique_id=slugify(name),
-            ),
-        )
-    hass.config_entries.async_update_entry(entry, version=2)
+
+    if entry.version < 2:
+        for area_id, name in _areas_with_lights(hass):
+            hass.config_entries.async_add_subentry(
+                entry,
+                ConfigSubentry(
+                    data=MappingProxyType({CONF_TARGET: {"area_id": [area_id]}}),
+                    subentry_type=SUBENTRY_TYPE_STATE,
+                    title=name,
+                    unique_id=slugify(name),
+                ),
+            )
+
+    for subentry in list(entry.subentries.values()):
+        if subentry.subentry_type == SUBENTRY_TYPE_STATE:
+            hass.config_entries.async_remove_subentry(entry, subentry.subentry_id)
+
+    hass.config_entries.async_update_entry(
+        entry,
+        version=3,
+        title="Adaptive Lighting Schedules",
+        unique_id=f"{DOMAIN}_{ENTRY_TYPE_SCHEDULES}",
+        data={**entry.data, CONF_ENTRY_TYPE: ENTRY_TYPE_SCHEDULES},
+    )
+    # Created as its own entry rather than here, so it goes through the
+    # same flow a fresh install uses and can't drift from it.
+    hass.async_create_task(
+        hass.config_entries.flow.async_init(DOMAIN, context={"source": SOURCE_IMPORT}, data={})
+    )
     return True
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
+    is_tracking = entry.data.get(CONF_ENTRY_TYPE) == ENTRY_TYPE_TRACKING
+
     # Shared across every apply_lighting call, from whichever automation
     # made it - see write_tracking.py for why (grouping.py's
     # externally_set() check only cares "did adaptive control write this
@@ -376,22 +402,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Called once here (catches anything that went stale while HA was
     # down) and again every PRUNE_CHECK_INTERVAL below (keeps the
     # promise current while running, not just at the next restart).
-    await write_tracker.async_prune_stale()
-
-    async def _periodic_prune(now) -> None:
+    if is_tracking:
         await write_tracker.async_prune_stale()
 
-    entry.async_on_unload(
-        async_track_time_interval(hass, _periodic_prune, PRUNE_CHECK_INTERVAL, cancel_on_shutdown=True)
-    )
-    entry.async_on_unload(write_tracker.async_start_listening(hass))
+        async def _periodic_prune(now) -> None:
+            await write_tracker.async_prune_stale()
+
+        entry.async_on_unload(
+            async_track_time_interval(hass, _periodic_prune, PRUNE_CHECK_INTERVAL, cancel_on_shutdown=True)
+        )
+        entry.async_on_unload(write_tracker.async_start_listening(hass))
 
     # Raises a fixable repair when a bulb that's known to need two-step
     # transitions isn't carrying the label that routes it there - the
     # one part of this integration's behaviour that depends on registry
     # data a user has to maintain by hand, and which fails silently when
     # they forget (see two_step.py).
-    entry.async_on_unload(async_start_watching(hass, entry))
+    if is_tracking:
+        entry.async_on_unload(async_start_watching(hass, entry))
 
     async def compute_lighting_groups(call: ServiceCall) -> ServiceResponse:
         """adaptive_lighting_helpers.compute_lighting_groups
@@ -759,70 +787,76 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "uncovered_entities": result.uncovered_entities,
         }
 
-    hass.services.async_register(
-        DOMAIN,
-        "compute_lighting_groups",
-        compute_lighting_groups,
-        schema=COMPUTE_LIGHTING_GROUPS_SCHEMA,
-        supports_response=SupportsResponse.ONLY,
-    )
-    hass.services.async_register(
-        DOMAIN,
-        "compute_curve",
-        compute_curve,
-        schema=COMPUTE_CURVE_SCHEMA,
-        supports_response=SupportsResponse.ONLY,
-    )
-    hass.services.async_register(
-        DOMAIN,
-        "compute_scene_coverage",
-        compute_scene_coverage_service,
-        schema=COMPUTE_SCENE_COVERAGE_SCHEMA,
-        supports_response=SupportsResponse.ONLY,
-    )
-    hass.services.async_register(
-        DOMAIN,
-        "apply_lighting",
-        apply_lighting,
-        schema=APPLY_LIGHTING_SCHEMA,
-        supports_response=SupportsResponse.OPTIONAL,
-    )
-    hass.services.async_register(
-        DOMAIN,
-        "check_ownership",
-        check_ownership,
-        schema=CHECK_OWNERSHIP_SCHEMA,
-        supports_response=SupportsResponse.ONLY,
-    )
-    hass.services.async_register(
-        DOMAIN,
-        "record_ownership",
-        record_ownership,
-        schema=RECORD_OWNERSHIP_SCHEMA,
-        supports_response=SupportsResponse.OPTIONAL,
-    )
-    hass.services.async_register(
-        DOMAIN,
-        "clear_ownership",
-        clear_ownership,
-        schema=CLEAR_OWNERSHIP_SCHEMA,
-        supports_response=SupportsResponse.OPTIONAL,
-    )
+    # The services belong to the tracking entry: every one of them is
+    # about which lights are being driven and by whom, and they need the
+    # claim registry this entry owns.
+    if is_tracking:
+        hass.services.async_register(
+            DOMAIN,
+            "compute_lighting_groups",
+            compute_lighting_groups,
+            schema=COMPUTE_LIGHTING_GROUPS_SCHEMA,
+            supports_response=SupportsResponse.ONLY,
+        )
+        hass.services.async_register(
+            DOMAIN,
+            "compute_curve",
+            compute_curve,
+            schema=COMPUTE_CURVE_SCHEMA,
+            supports_response=SupportsResponse.ONLY,
+        )
+        hass.services.async_register(
+            DOMAIN,
+            "compute_scene_coverage",
+            compute_scene_coverage_service,
+            schema=COMPUTE_SCENE_COVERAGE_SCHEMA,
+            supports_response=SupportsResponse.ONLY,
+        )
+        hass.services.async_register(
+            DOMAIN,
+            "apply_lighting",
+            apply_lighting,
+            schema=APPLY_LIGHTING_SCHEMA,
+            supports_response=SupportsResponse.OPTIONAL,
+        )
+        hass.services.async_register(
+            DOMAIN,
+            "check_ownership",
+            check_ownership,
+            schema=CHECK_OWNERSHIP_SCHEMA,
+            supports_response=SupportsResponse.ONLY,
+        )
+        hass.services.async_register(
+            DOMAIN,
+            "record_ownership",
+            record_ownership,
+            schema=RECORD_OWNERSHIP_SCHEMA,
+            supports_response=SupportsResponse.OPTIONAL,
+        )
+        hass.services.async_register(
+            DOMAIN,
+            "clear_ownership",
+            clear_ownership,
+            schema=CLEAR_OWNERSHIP_SCHEMA,
+            supports_response=SupportsResponse.OPTIONAL,
+        )
 
-    # Reloads the entry on any entry/subentry change - covers the main
-    # entry's reconfigure flow, and (since adding/removing/reconfiguring a
-    # subentry doesn't otherwise trigger a reload on its own) named
-    # sensors added via the "Add Sensor" subentry flow too. config_flow.py
-    # deliberately uses async_update_and_abort rather than
-    # *_reload_and_abort so this is the only thing that reloads - the
-    # subentry version of *_reload_and_abort raises if an update listener
-    # is registered, and duplicating it here would double-reload anyway.
+        # Reloads the entry on any entry/subentry change - covers the main
+        # entry's reconfigure flow, and (since adding/removing/reconfiguring a
+        # subentry doesn't otherwise trigger a reload on its own) named
+        # sensors added via the "Add Sensor" subentry flow too. config_flow.py
+        # deliberately uses async_update_and_abort rather than
+        # *_reload_and_abort so this is the only thing that reloads - the
+        # subentry version of *_reload_and_abort raises if an update listener
+        # is registered, and duplicating it here would double-reload anyway.
+
     entry.async_on_unload(entry.add_update_listener(_async_reload_entry))
 
-    # Entry-scoped (not per-instance), so the write-tracking diagnostic
-    # sensor (sensor.py's _WriteTrackingSensor) can look it up regardless
-    # of how many schedule instances - possibly zero - exist.
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = write_tracker
+    if is_tracking:
+        hass.data.setdefault(DOMAIN, {})[entry.entry_id] = write_tracker
+        _async_remove_legacy_owner_devices(hass, entry)
+        await hass.config_entries.async_forward_entry_setups(entry, TRACKING_PLATFORMS)
+        return True
 
     instances = schedule_instances(entry)
     if instances:
@@ -855,8 +889,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # global copy of a refresh the entity already owns.
         entry.async_on_unload(async_track_state_change_event(hass, ["sun.sun"], _refresh_all))
 
-    _async_remove_legacy_owner_devices(hass, entry)
-
     # Unconditional, not gated on instances - the write-tracking sensor
     # (sensor.py) is entry-scoped and should exist even with zero
     # schedule instances configured. Harmless when instances is empty:
@@ -882,22 +914,26 @@ async def _async_reload_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
-    hass.services.async_remove(DOMAIN, "compute_lighting_groups")
-    hass.services.async_remove(DOMAIN, "compute_curve")
-    hass.services.async_remove(DOMAIN, "compute_scene_coverage")
-    hass.services.async_remove(DOMAIN, "apply_lighting")
-    hass.services.async_remove(DOMAIN, "check_ownership")
-    hass.services.async_remove(DOMAIN, "record_ownership")
-    hass.services.async_remove(DOMAIN, "clear_ownership")
+    if entry.data.get(CONF_ENTRY_TYPE) == ENTRY_TYPE_TRACKING:
+        for service in (
+            "compute_lighting_groups",
+            "compute_curve",
+            "compute_scene_coverage",
+            "apply_lighting",
+            "check_ownership",
+            "record_ownership",
+            "clear_ownership",
+        ):
+            hass.services.async_remove(DOMAIN, service)
+        unloaded = await hass.config_entries.async_unload_platforms(entry, TRACKING_PLATFORMS)
+        hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
+        return unloaded
 
     instances = schedule_instances(entry)
     unloaded = await hass.config_entries.async_unload_platforms(entry, SCHEDULE_PLATFORMS)
-    hass.data.get(DOMAIN, {}).pop(entry.entry_id, None)
     for instance in instances:
         hass.data.get(DOMAIN, {}).pop(instance.subentry_id, None)
     return unloaded
-
-    return True
 
 
 def _owner_devices(hass: HomeAssistant, entry: ConfigEntry) -> list[dr.DeviceEntry]:

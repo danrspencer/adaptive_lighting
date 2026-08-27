@@ -26,6 +26,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers import label_registry as lr
 
+from custom_components.adaptive_lighting_helpers.const import CONF_ENTRY_TYPE, ENTRY_TYPE_TRACKING
 from custom_components.adaptive_lighting_helpers import async_setup_entry
 from custom_components.adaptive_lighting_helpers.const import CONF_TWO_STEP_MODELS
 from custom_components.adaptive_lighting_helpers.repairs import async_create_fix_flow
@@ -82,7 +83,7 @@ async def _setup(hass: HomeAssistant, **options) -> MockConfigEntry:
     sensor, entry-scoped regardless of schedule instances - see
     sensor.py's _WriteTrackingSensor) - see test_services.py's
     _setup_entry for the full explanation."""
-    entry = MockConfigEntry(domain=DOMAIN, data={}, options=options)
+    entry = MockConfigEntry(domain=DOMAIN, data={CONF_ENTRY_TYPE: ENTRY_TYPE_TRACKING}, options=options)
     entry.add_to_hass(hass)
     entry.mock_state(hass, ConfigEntryState.LOADED)
     assert await async_setup_entry(hass, entry)

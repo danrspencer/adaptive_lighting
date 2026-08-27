@@ -56,13 +56,21 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect, async_dis
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, EVENT_LIGHT_OVERRIDDEN
+from .const import CONF_ENTRY_TYPE, DOMAIN, ENTRY_TYPE_TRACKING, EVENT_LIGHT_OVERRIDDEN
 from .coordinator import ScheduleCoordinator, ScheduleInstance, StateInstance, schedule_instances, state_instances
 from .override_protection import classify
 from .write_tracking import SIGNAL_WRITE_TRACKING_UPDATED, ClaimRegistry
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback) -> None:
+    # Both entry types use this platform, and each owns a different set
+    # of entities - see const.py's CONF_ENTRY_TYPE.
+    if entry.data.get(CONF_ENTRY_TYPE) != ENTRY_TYPE_TRACKING:
+        for instance in schedule_instances(entry):
+            coordinator: ScheduleCoordinator = hass.data[DOMAIN][instance.subentry_id]
+            async_add_entities([_AdaptiveLightingSensor(coordinator, instance)], config_subentry_id=instance.subentry_id)
+        return
+
     registry: ClaimRegistry = hass.data[DOMAIN][entry.entry_id]
     for instance in state_instances(entry):
         async_add_entities(
@@ -73,10 +81,6 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
             ],
             config_subentry_id=instance.subentry_id,
         )
-
-    for instance in schedule_instances(entry):
-        coordinator: ScheduleCoordinator = hass.data[DOMAIN][instance.subentry_id]
-        async_add_entities([_AdaptiveLightingSensor(coordinator, instance)], config_subentry_id=instance.subentry_id)
 
 
 def _classify_tracked(hass: HomeAssistant, entity_id: str, record: dict) -> tuple[str, Any, Any, Any]:

@@ -48,16 +48,43 @@ from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers import selector
 from homeassistant.util import slugify
 
-from .const import CONF_TARGET, CONF_TWO_STEP_MODELS, DOMAIN, SUBENTRY_TYPE_SENSOR, SUBENTRY_TYPE_STATE
+from .const import (
+    CONF_ENTRY_TYPE,
+    CONF_TARGET,
+    CONF_TWO_STEP_MODELS,
+    DOMAIN,
+    ENTRY_TYPE_SCHEDULES,
+    ENTRY_TYPE_TRACKING,
+    SUBENTRY_TYPE_SENSOR,
+    SUBENTRY_TYPE_STATE,
+)
 from .two_step import DEFAULT_TWO_STEP_MODEL_PATTERNS
 
 SUBENTRY_FIELDS = {vol.Required("name"): selector.TextSelector()}
 
 
 class AdaptiveLightingHelpersConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
-    VERSION = 2
+    VERSION = 3
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        """Two entries, not one: schedules and tracking are different
+        kinds of thing, and an entry is the only level at which that
+        distinction can be shown. HA's integration page renders one
+        section per subentry with no way to group them by type, so
+        keeping both under a single entry flattens them into one long
+        list of siblings."""
+        return self.async_show_menu(step_id="user", menu_options=[ENTRY_TYPE_SCHEDULES, ENTRY_TYPE_TRACKING])
+
+    async def async_step_schedules(self, user_input: dict[str, Any] | None = None) -> FlowResult:
+        """Nothing to ask for. Add the day-phase/curve sensors
+        themselves afterwards from this entry's own page."""
+        await self.async_set_unique_id(f"{DOMAIN}_{ENTRY_TYPE_SCHEDULES}")
+        self._abort_if_unique_id_configured()
+        return self.async_create_entry(
+            title="Adaptive Lighting Schedules", data={CONF_ENTRY_TYPE: ENTRY_TYPE_SCHEDULES}
+        )
+
+    async def async_step_tracking(self, user_input: dict[str, Any] | None = None) -> FlowResult:
         """Offers a state device per area that currently contains a
         light, pre-selected, and creates them with the entry.
 
@@ -65,33 +92,20 @@ class AdaptiveLightingHelpersConfigFlow(config_entries.ConfigFlow, domain=DOMAIN
         everyone wants to track by, and an unticked list is a wall of
         work before anything does anything. Trimmable, and skippable
         entirely - nothing here is required, and more can be added later
-        from the integration's own page.
+        from this entry's own page.
 
         Areas with no lights are left out: a state device that can never
         resolve anything is just an empty device to wonder about."""
-        await self.async_set_unique_id(DOMAIN)
+        await self.async_set_unique_id(f"{DOMAIN}_{ENTRY_TYPE_TRACKING}")
         self._abort_if_unique_id_configured()
 
         areas = _areas_with_lights(self.hass)
         if user_input is not None or not areas:
             chosen = (user_input or {}).get("areas", [])
-            return self.async_create_entry(
-                title="Adaptive Lighting Helpers",
-                data={},
-                subentries=[
-                    {
-                        "subentry_type": SUBENTRY_TYPE_STATE,
-                        "title": name,
-                        "unique_id": slugify(name),
-                        "data": {CONF_TARGET: {"area_id": [area_id]}},
-                    }
-                    for area_id, name in areas
-                    if area_id in chosen
-                ],
-            )
+            return self._create_tracking_entry([(a, n) for a, n in areas if a in chosen])
 
         return self.async_show_form(
-            step_id="user",
+            step_id="tracking",
             data_schema=vol.Schema(
                 {
                     vol.Optional("areas", default=[area_id for area_id, _ in areas]): selector.AreaSelector(
@@ -101,10 +115,37 @@ class AdaptiveLightingHelpersConfigFlow(config_entries.ConfigFlow, domain=DOMAIN
             ),
         )
 
+    async def async_step_import(self, import_data: dict[str, Any]) -> FlowResult:
+        """Creates the tracking entry during the v2 -> v3 split, where
+        there is nobody to show a form to - see __init__.py's
+        async_migrate_entry."""
+        await self.async_set_unique_id(f"{DOMAIN}_{ENTRY_TYPE_TRACKING}")
+        self._abort_if_unique_id_configured()
+        return self._create_tracking_entry(_areas_with_lights(self.hass))
+
+    def _create_tracking_entry(self, areas: list[tuple[str, str]]) -> FlowResult:
+        return self.async_create_entry(
+            title="Adaptive Lighting Tracking",
+            data={CONF_ENTRY_TYPE: ENTRY_TYPE_TRACKING},
+            subentries=[
+                {
+                    "subentry_type": SUBENTRY_TYPE_STATE,
+                    "title": name,
+                    "unique_id": slugify(name),
+                    "data": {CONF_TARGET: {"area_id": [area_id]}},
+                }
+                for area_id, name in areas
+            ],
+        )
+
     @classmethod
     @callback
     def async_get_supported_subentry_types(cls, config_entry: ConfigEntry) -> dict[str, type[ConfigSubentryFlow]]:
-        return {SUBENTRY_TYPE_SENSOR: SensorSubentryFlow, SUBENTRY_TYPE_STATE: StateSubentryFlow}
+        # Each entry offers only its own kind, which is the whole point
+        # of splitting them.
+        if config_entry.data.get(CONF_ENTRY_TYPE) == ENTRY_TYPE_TRACKING:
+            return {SUBENTRY_TYPE_STATE: StateSubentryFlow}
+        return {SUBENTRY_TYPE_SENSOR: SensorSubentryFlow}
 
     @staticmethod
     @callback
