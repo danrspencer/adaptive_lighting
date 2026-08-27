@@ -342,34 +342,6 @@ async def test_a_record_with_no_owner_creates_no_sensors(hass: HomeAssistant):
     assert [e for e in added if type(e).__name__ == "_OwnerCountSensor"] == []
 
 
-async def test_turning_the_option_off_removes_the_entities(hass: HomeAssistant):
-    """Toggling off should actually mean off. Left alone, these would sit
-    in the registry as restored-but-never-recreated rows - litter that
-    outlives the feature that made it."""
-    from homeassistant.helpers import entity_registry as er
-
-    from custom_components.adaptive_lighting_helpers.const import CONF_OWNER_SENSORS, DOMAIN
-    from custom_components.adaptive_lighting_helpers.sensor import async_setup_entry as sensor_setup
-
-    entry = MockConfigEntry(domain=DOMAIN, data={}, options={CONF_OWNER_SENSORS: False})
-    entry.add_to_hass(hass)
-    tracker = LastWriteTracker(hass)
-    await tracker.async_load()
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = tracker
-
-    registry = er.async_get(hass)
-    stale = registry.async_get_or_create(
-        "sensor", DOMAIN, f"{entry.entry_id}_owner_automation.kitchen_controlled", config_entry=entry
-    )
-    # An unrelated entity on the same entry must survive the sweep.
-    keeper = registry.async_get_or_create("sensor", DOMAIN, f"{entry.entry_id}_write_tracking", config_entry=entry)
-
-    await sensor_setup(hass, entry, lambda entities, **kw: None)
-
-    assert registry.async_get(stale.entity_id) is None
-    assert registry.async_get(keeper.entity_id) is not None
-
-
 async def test_an_anonymous_write_does_not_orphan_a_light_from_its_owner(hass: HomeAssistant):
     """A force/anonymous write records owner_id None, which becomes the
     new `latest`, pushing the owned claim down into `observed`. The light
@@ -562,113 +534,186 @@ async def test_pressing_clears_that_owners_records_and_leaves_other_owners_alone
     assert kitchen.extra_state_attributes["tracked"] == 0
 
 
-async def test_disabling_sweeps_each_platforms_own_entities_not_the_others(hass: HomeAssistant):
-    """Both platforms' per-owner entities share the "<entry>_owner_"
-    unique_id prefix, so the disable sweep has to filter on the domain
-    too - otherwise whichever set up second would delete the first's."""
-    from homeassistant.helpers import entity_registry as er
-
-    from custom_components.adaptive_lighting_helpers.button import async_setup_entry as button_setup
-    from custom_components.adaptive_lighting_helpers.const import CONF_OWNER_SENSORS, DOMAIN
-
-    entry = MockConfigEntry(domain=DOMAIN, data={}, options={CONF_OWNER_SENSORS: False})
-    entry.add_to_hass(hass)
-    tracker = LastWriteTracker(hass)
-    await tracker.async_load()
-    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = tracker
-
-    registry = er.async_get(hass)
-    stale_button = registry.async_get_or_create(
-        "button", DOMAIN, f"{entry.entry_id}_owner_automation.kitchen_clear", config_entry=entry
-    )
-    stale_sensor = registry.async_get_or_create(
-        "sensor", DOMAIN, f"{entry.entry_id}_owner_automation.kitchen_controlled", config_entry=entry
-    )
-
-    await button_setup(hass, entry, lambda entities, **kw: None)
-
-    assert registry.async_get(stale_button.entity_id) is None
-    # The sensor platform's own entity is not this platform's to remove.
-    assert registry.async_get(stale_sensor.entity_id) is not None
+# --- the owner device -----------------------------------------------------
+#
+# Three entities per owner is three things to delete when an owner_id
+# dies. A device makes that one delete that takes its entities with it,
+# and gives the three one place to be renamed and one area.
 
 
-# --- putting per-owner entities in the owner's area -----------------------
+def _owner_device(hass: HomeAssistant, owner_id: str):
+    from homeassistant.helpers import device_registry as dr
+
+    from custom_components.adaptive_lighting_helpers.const import DOMAIN
+
+    return dr.async_get(hass).async_get_device(identifiers={(DOMAIN, f"owner_{owner_id}")})
 
 
-async def _area_of(hass: HomeAssistant, entity) -> str | None:
-    """Runs the entity's async_added_to_hass against a real registry entry,
-    which is what assign_owner_area needs to exist before it can act."""
-    from homeassistant.helpers import entity_registry as er
-
-    registry = er.async_get(hass)
-    entry = registry.async_get_or_create(
-        entity.entity_id.split(".")[0], "adaptive_lighting_helpers", entity.unique_id
-    )
-    entity.entity_id = entry.entity_id
-    entity.registry_entry = entry
-    await entity.async_added_to_hass()
-    return registry.async_get(entry.entity_id).area_id
+async def _seed(hass: HomeAssistant, *pairs: tuple[str, str]) -> None:
+    ctx = Context()
+    seed = LastWriteTracker(hass)
+    await seed.async_load()
+    for entity_id, owner in pairs:
+        _set_light(hass, entity_id, "on", brightness=200, color_temp_kelvin=3000, context=ctx)
+        await _record(seed, entity_id, owner, ctx.id)
 
 
-async def test_per_owner_entities_land_in_the_area_of_the_entity_the_owner_names(hass: HomeAssistant):
+async def test_all_of_an_owners_entities_share_one_device_and_owners_get_their_own(hass: HomeAssistant):
+    await _seed(hass, ("light.a", "automation.kitchen"), ("light.b", "automation.hall"))
+
+    sensors, _ = await _setup_sensor_platform(hass, owner_sensors=True)
+    buttons, _ = await _setup_button_platform(hass, owner_sensors=True)
+
+    kitchen = _owner_device(hass, "automation.kitchen")
+    hall = _owner_device(hass, "automation.hall")
+    assert kitchen is not None and hall is not None
+    assert kitchen.id != hall.id
+    assert kitchen.name == "Kitchen"
+
+    kitchen_entities = [
+        e
+        for e in sensors + buttons
+        if type(e).__name__ in ("_OwnerCountSensor", "_OwnerClearButton")
+        and e.device_info["identifiers"] == kitchen.identifiers
+    ]
+    assert len(kitchen_entities) == 3
+    # Short names, composed by HA against the device name.
+    assert sorted(e.name for e in kitchen_entities) == ["Clear", "Controlled", "Overridden"]
+    # ...while entity_ids stay exactly as they were, so nothing churns.
+    assert sorted(e.entity_id for e in kitchen_entities) == [
+        "button.kitchen_adaptive_clear",
+        "sensor.kitchen_adaptive_controlled",
+        "sensor.kitchen_adaptive_overridden",
+    ]
+
+
+async def test_the_device_lands_in_the_area_of_the_entity_the_owner_names(hass: HomeAssistant):
     """An owner_id is in practice the calling automation's entity_id, and
     that automation is usually already assigned to the room it looks
-    after - so following it sorts these entities into that room."""
+    after - so following it sorts the device into that room."""
     from homeassistant.helpers import area_registry as ar, entity_registry as er
 
     kitchen = ar.async_get(hass).async_get_or_create("Kitchen")
     automation = er.async_get(hass).async_get_or_create("automation", "automation", "kitchen-lights-uid")
     er.async_get(hass).async_update_entity(automation.entity_id, area_id=kitchen.id)
 
-    ctx = Context()
-    _set_light(hass, "light.a", "on", brightness=200, color_temp_kelvin=3000, context=ctx)
-    seed = LastWriteTracker(hass)
-    await seed.async_load()
-    await _record(seed, "light.a", automation.entity_id, ctx.id)
+    await _seed(hass, ("light.a", automation.entity_id))
+    await _setup_button_platform(hass, owner_sensors=True)
 
-    added, _ = await _setup_button_platform(hass, owner_sensors=True)
-    assert await _area_of(hass, added[0]) == kitchen.id
+    assert _owner_device(hass, automation.entity_id).area_id == kitchen.id
 
 
-async def test_an_owner_that_names_nothing_resolvable_is_left_unassigned(hass: HomeAssistant):
+async def test_an_owner_that_names_nothing_resolvable_leaves_the_device_unassigned(hass: HomeAssistant):
     """owner_id is an arbitrary caller-supplied string. When it isn't an
-    entity we can resolve an area for, these stay where they were before
-    any of this existed - unassigned, not guessed at."""
-    ctx = Context()
-    _set_light(hass, "light.a", "on", brightness=200, color_temp_kelvin=3000, context=ctx)
-    seed = LastWriteTracker(hass)
-    await seed.async_load()
-    await _record(seed, "light.a", "some-hand-rolled-owner", ctx.id)
+    entity we can resolve an area for, the device stays unassigned rather
+    than being guessed at."""
+    await _seed(hass, ("light.a", "some-hand-rolled-owner"))
+    await _setup_button_platform(hass, owner_sensors=True)
 
-    added, _ = await _setup_button_platform(hass, owner_sensors=True)
-    assert await _area_of(hass, added[0]) is None
+    assert _owner_device(hass, "some-hand-rolled-owner").area_id is None
 
 
 async def test_an_area_set_by_hand_is_not_overwritten(hass: HomeAssistant):
-    """Moving one of these to a different room has to stick - the derived
+    """Moving a device to a different room has to stick - the derived
     area only ever fills in a blank."""
-    from homeassistant.helpers import area_registry as ar, entity_registry as er
+    from homeassistant.helpers import area_registry as ar, device_registry as dr, entity_registry as er
 
-    registry = er.async_get(hass)
     area_reg = ar.async_get(hass)
     kitchen = area_reg.async_get_or_create("Kitchen")
     utility = area_reg.async_get_or_create("Utility")
-    automation = registry.async_get_or_create("automation", "automation", "kitchen-lights-uid")
-    registry.async_update_entity(automation.entity_id, area_id=kitchen.id)
+    automation = er.async_get(hass).async_get_or_create("automation", "automation", "kitchen-lights-uid")
+    er.async_get(hass).async_update_entity(automation.entity_id, area_id=kitchen.id)
 
-    ctx = Context()
-    _set_light(hass, "light.a", "on", brightness=200, color_temp_kelvin=3000, context=ctx)
-    seed = LastWriteTracker(hass)
-    await seed.async_load()
-    await _record(seed, "light.a", automation.entity_id, ctx.id)
+    await _seed(hass, ("light.a", automation.entity_id))
+    await _setup_button_platform(hass, owner_sensors=True)
+    device = _owner_device(hass, automation.entity_id)
+    dr.async_get(hass).async_update_device(device.id, area_id=utility.id)
 
-    added, _ = await _setup_button_platform(hass, owner_sensors=True)
-    button = added[0]
-    entry = registry.async_get_or_create("button", "adaptive_lighting_helpers", button.unique_id)
-    registry.async_update_entity(entry.entity_id, area_id=utility.id)
-    button.entity_id = entry.entity_id
-    button.registry_entry = registry.async_get(entry.entity_id)
+    # A second setup - i.e. the next restart - must leave that alone.
+    await _setup_button_platform(hass, owner_sensors=True)
 
-    await button.async_added_to_hass()
+    assert _owner_device(hass, automation.entity_id).area_id == utility.id
 
-    assert registry.async_get(entry.entity_id).area_id == utility.id
+
+async def test_turning_the_option_off_removes_the_owner_devices_and_their_entities(hass: HomeAssistant):
+    """Toggling off should actually mean off. Removing the device is what
+    takes all three entities with it."""
+    from homeassistant.helpers import device_registry as dr, entity_registry as er
+
+    from custom_components.adaptive_lighting_helpers import _async_remove_owner_devices_if_disabled
+    from custom_components.adaptive_lighting_helpers.const import CONF_OWNER_SENSORS, DOMAIN
+
+    await _seed(hass, ("light.a", "automation.kitchen"))
+    entry = MockConfigEntry(domain=DOMAIN, data={}, options={CONF_OWNER_SENSORS: True})
+    entry.add_to_hass(hass)
+    tracker = LastWriteTracker(hass)
+    await tracker.async_load()
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = tracker
+
+    from custom_components.adaptive_lighting_helpers.button import async_setup_entry as button_setup
+
+    await button_setup(hass, entry, lambda entities, **kw: None)
+    device = _owner_device(hass, "automation.kitchen")
+    assert device is not None
+    # config_entry matters: HA only sweeps a removed device's entities
+    # when their config_entry_id is one of the device's own.
+    child = er.async_get(hass).async_get_or_create(
+        "button",
+        DOMAIN,
+        f"{entry.entry_id}_owner_automation.kitchen_clear",
+        device_id=device.id,
+        config_entry=entry,
+    )
+    # A schedule-instance device on the same entry is not ours to remove.
+    schedule = dr.async_get(hass).async_get_or_create(
+        config_entry_id=entry.entry_id, identifiers={(DOMAIN, "some-subentry-id")}, name="Ground Floor"
+    )
+
+    hass.config_entries.async_update_entry(entry, options={CONF_OWNER_SENSORS: False})
+    _async_remove_owner_devices_if_disabled(hass, entry)
+    await hass.async_block_till_done()
+
+    assert _owner_device(hass, "automation.kitchen") is None
+    assert er.async_get(hass).async_get(child.entity_id) is None
+    assert dr.async_get(hass).async_get(schedule.id) is not None
+
+
+async def test_deleting_an_owner_device_is_allowed_and_clears_that_owners_records(hass: HomeAssistant):
+    """The point of the device: cleaning up a dead owner_id is one
+    delete. Clearing its records as part of that is what makes the delete
+    stick - otherwise the very records the device is derived from rebuild
+    it on the next write."""
+    from custom_components.adaptive_lighting_helpers import async_remove_config_entry_device
+    from custom_components.adaptive_lighting_helpers.const import CONF_OWNER_SENSORS, DOMAIN
+
+    await _seed(hass, ("light.a", "automation.kitchen"), ("light.b", "automation.hall"))
+    entry = MockConfigEntry(domain=DOMAIN, data={}, options={CONF_OWNER_SENSORS: True})
+    entry.add_to_hass(hass)
+    tracker = LastWriteTracker(hass)
+    await tracker.async_load()
+    hass.data.setdefault(DOMAIN, {})[entry.entry_id] = tracker
+
+    from custom_components.adaptive_lighting_helpers.button import async_setup_entry as button_setup
+
+    await button_setup(hass, entry, lambda entities, **kw: None)
+
+    assert await async_remove_config_entry_device(hass, entry, _owner_device(hass, "automation.kitchen")) is True
+    assert sorted(tracker.snapshot()) == ["light.b"]
+
+
+async def test_a_schedule_device_is_refused(hass: HomeAssistant):
+    """Defining the delete hook at all turns HA's Delete button on for
+    every device on the entry. A schedule instance's device is removed by
+    deleting its sensor, not here."""
+    from homeassistant.helpers import device_registry as dr
+
+    from custom_components.adaptive_lighting_helpers import async_remove_config_entry_device
+    from custom_components.adaptive_lighting_helpers.const import DOMAIN
+
+    entry = MockConfigEntry(domain=DOMAIN, data={}, options={})
+    entry.add_to_hass(hass)
+    schedule = dr.async_get(hass).async_get_or_create(
+        config_entry_id=entry.entry_id, identifiers={(DOMAIN, "some-subentry-id")}, name="Ground Floor"
+    )
+
+    assert await async_remove_config_entry_device(hass, entry, schedule) is False
