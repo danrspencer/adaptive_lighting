@@ -48,7 +48,7 @@ from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers import selector
 from homeassistant.util import slugify
 
-from .const import CONF_TWO_STEP_MODELS, DOMAIN, SUBENTRY_TYPE_SENSOR
+from .const import CONF_OWNER_SENSORS, CONF_TWO_STEP_MODELS, DOMAIN, SUBENTRY_TYPE_SENSOR
 from .two_step import DEFAULT_TWO_STEP_MODEL_PATTERNS
 
 SUBENTRY_FIELDS = {vol.Required("name"): selector.TextSelector()}
@@ -78,8 +78,9 @@ class AdaptiveLightingHelpersConfigFlow(config_entries.ConfigFlow, domain=DOMAIN
 
 
 class AdaptiveLightingHelpersOptionsFlow(config_entries.OptionsFlow):
-    """The only install-wide setting: which bulb models need two-step
-    transitions.
+    """The install-wide settings: which bulb models need two-step
+    transitions, and whether to create the optional per-owner count
+    sensors.
 
     Kept on the main entry rather than per sensor because it describes
     hardware, not a schedule - which bulbs in this house can't take a
@@ -107,10 +108,14 @@ class AdaptiveLightingHelpersOptionsFlow(config_entries.OptionsFlow):
                     {
                         vol.Optional(CONF_TWO_STEP_MODELS, default=""): selector.TextSelector(
                             selector.TextSelectorConfig(multiline=True)
-                        )
+                        ),
+                        vol.Optional(CONF_OWNER_SENSORS, default=False): selector.BooleanSelector(),
                     }
                 ),
-                {CONF_TWO_STEP_MODELS: current or "\n".join(DEFAULT_TWO_STEP_MODEL_PATTERNS)},
+                {
+                    CONF_TWO_STEP_MODELS: current or "\n".join(DEFAULT_TWO_STEP_MODEL_PATTERNS),
+                    CONF_OWNER_SENSORS: self.config_entry.options.get(CONF_OWNER_SENSORS, False),
+                },
             ),
         )
 
