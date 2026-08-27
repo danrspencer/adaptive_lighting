@@ -26,161 +26,59 @@ data:
   transition: 2
   brightness_multipliers: { light.kitchen_2: 0.5 }
   prefer_rgb_color: true # optional - see "RGB colour" below
-  owner_id: "{{ this.entity_id }}" # optional - see "Override protection" below
   force: false # optional - see "Override protection" below
 ```
 
 ### Override protection
 
-A light already on gets left alone once something other than this integration's own last write has touched
-it since — a person, another automation, or a device regaining power. Two independent pieces of information
-feed into that check:
+Adaptive lighting should stop driving a light once somebody else has taken it — a person at a switch, a scene,
+another automation — and pick it up again when they let go. That needs an answer to "was the last change to
+this light *ours*", which is what the claims below record.
 
-- **`context.id`** — not something you set; it's Home Assistant's own built-in causality marker. Every state
-  change carries one, and every service call gets one too - either passed explicitly, or a fresh, unrelated
-  one HA generates for it. Every write `apply_lighting` itself issues is recorded against the `context.id` it
-  used, so a later call can tell "has anything touched this light since my last write" just by comparing the
-  light's current context against what was recorded.
-- **`owner_id`** (optional, any string) — entirely your own invention, how a caller identifies *itself*. The
-  blueprint passes its own `this.entity_id` (e.g. `automation.living_room_lights`), so each room's writes
-  carry a stable identity distinguishing "the Living Room automation" from "the Kitchen automation" - two
-  calls that otherwise look identical to Home Assistant.
+**Claims belong to a state device, not to a caller.** A state device is a named tracking scope you configure
+(Settings → Devices & Services → Adaptive Lighting Helpers → Add state device), pointed at an area, some
+devices, or specific lights. Every light resolves to exactly one:
 
-Each entity keeps not one recorded write but two - `observed` and `latest`.
+1. a state device whose target names the **entity**
+2. …names its **device**
+3. …names its **area**
+4. otherwise **not tracked at all**
 
-`observed` is a state we have seen and know is safe to write over. It gets there four ways, only one of which
-we authored: a write an earlier call saw the bulb adopt, the pre-write baseline for a first-ever write, the
-snapshot taken at startup, and the snapshot taken when a device returns from unavailable. What unites them is
-confidence, not authorship - in each case nothing unexplained has happened to the light.
+Most specific wins; ties break on the state device's name, so the answer is stable across restarts. A light
+matching nothing is simply never tracked — it stays permanently manageable. That's deliberate: a catch-all
+bucket would silently absorb a light that's missing an area, where an absent scope is a visible signal.
 
-`latest` is the most recent write we sent, not yet independently re-observed. Together they let a
-single dropped write self-heal instead of permanently locking the light out: `apply_lighting` records the
-`context.id` it *issued*, not the one the physical bulb actually adopted - those two calls are asynchronous,
-so nothing here waits to confirm a command really landed before recording it. If it silently failed, a
-single-record design would compare the light's real, unchanged context against the one recorded, find a
-mismatch, and conclude - permanently - that the light was touched externally, since nothing that happens
-afterward can retroactively make the live context equal a value the device never adopted. (Confirmed live: a
-kitchen light dropped a colour-mode command at a phase boundary and sat stuck on the stale colour temperature
-for over an hour, excluded from every tick in between.)
+Because the scope is decided by configuration rather than by whoever wrote last, **two automations driving the
+same room share that room's claims and co-operate.** Neither reads the other's write as an intruder. If you
+want them tracked separately, give them separate state devices.
 
-The fix doesn't need to know *why* a write failed, only to notice when one did and try again: on each call,
-if the light's live context matches `latest`, that previous attempt is now known to have landed and gets
-promoted (`observed <- latest`) before the new attempt overwrites `latest`. If live context instead still
-matches the *old* `observed`, that means `latest` never landed - `observed` is left exactly as it was and
-only `latest` is replaced. Either way the light is retried on the very next tick rather than locked out;
-`observed` is only ever replaced by a fresh observation, never by assumption, so it survives any number of
-consecutive dropped writes.
+`apply_lighting` takes no ownership argument at all. `force: true` still writes through regardless of who
+holds a light, and the write is still recorded, so protection works again on the next non-forced call.
 
-A light's very first-ever write has no earlier `observed` to fall back on if it drops - so the context.id
-live *before* that first write (almost certainly not this integration's own) is recorded as the baseline
-instead, with no owner attached. That's not claiming the pre-existing state as this caller's write; it's
-using "the light hasn't changed" as the same retry signal every later dropped write relies on - if the first
-write drops, the light's context stays at exactly that pre-write value, and the next call recognises the
-match and retries cleanly rather than treating a brand-new attempt as having no history at all.
+#### What's recorded, and why there are two claims
 
-Each claim records a `context_id` and, for two-step transitions only, a second `secondary_context_id`. A
-two-step transition (the `no_combined_transition` label - see below) issues brightness and colour as two
-separate `light.turn_on` calls, so it produces two contexts: the colour step's is the claim's primary
-`context_id`, the brightness step's is the secondary. Both are matched, because a bulb reporting back after
-only the first step is a normal intermediate state for those bulbs. Every other claim leaves
-`secondary_context_id` null.
+Each tracked light carries two claims on its state device:
 
-The check itself asks, in this order, for one specific light:
+- **`observed`** — a state we've seen and know is safe to write over. Populated four ways, only one of which
+  we authored: a write an earlier call saw the bulb adopt, the pre-write baseline for a first-ever write, and
+  the snapshot taken when a device returns from unavailable. What they share is *confidence*, not authorship.
+- **`latest`** — the most recent write we sent, not yet re-observed.
 
-1. **Is the light currently off?** Free to manage - nothing to protect.
-2. **Was `force: true` passed?** Free to manage, unconditionally (the write is still recorded normally - see
-   below).
-3. **Was `owner_id` omitted?** Free to manage, unconditionally (recorded with `owner_id: null`).
-4. **Is there no `observed` and no `latest` claim at all for this light?** A genuinely brand new entity,
-   never yet considered - free to manage.
-5. **Does the light's current `context.id` match `latest`?** Its owner claims it, unless that owner is a
-   *different* `owner_id` than the one asking now - in which case, externally set.
-6. **Otherwise, does it match `observed`?** Same check: that claim's owner decides it, a different
-   `owner_id` (including the synthetic first-write baseline's, which claims nobody) means the write is free
-   to proceed.
-7. **Neither matches, and an `observed` claim exists.** Something has touched this light since either
-   recorded write - externally set; left alone. Unless *either* claim recorded what its write actually asked
-   for (brightness/colour-temperature, or brightness/RGB) and the light's *current* value still matches that,
-   within the same tolerance `apply_lighting` uses to decide "already correct" - `latest`'s target is
-   checked first, then `observed`'s. See below for why neither counts as external.
+Two rather than one because `apply_lighting` records the context it *issued*; nothing waits to confirm the
+bulb adopted it. With a single record, one dropped write locks a light out permanently — the next tick
+compares the light's real, unchanged context against a value the device never adopted, and nothing afterwards
+can make those equal.
 
-Steps 5 and 6 each compare against **either of that claim's context ids**, not just one. Most claims only
-have one; a claim recorded by a two-step transition has two, because that transition genuinely issues two
-separate `light.turn_on` calls (brightness, then colour) under two different contexts. A bulb confirming
-only the first step is a normal intermediate state for those bulbs, not an external touch, so either
-context matching counts as ours.
+A context mismatch alone still isn't proof: HA's `Entity._context` expires 5 seconds after the service call,
+so a bulb whose round-trip takes longer reports back under an unrelated context while echoing exactly what
+was asked for. Each claim therefore also records its `target`, and the comparison falls back to values.
 
-A `context.id` mismatch alone isn't conclusive proof of an external touch, even with both claims present:
-Home Assistant's own `Entity._context` expires 5 seconds after the service call that set it, so a real device
-whose Zigbee/MQTT round-trip confirmation takes longer than that reports its state back under a brand-new,
-unrelated context - even though it's echoing exactly the value that was asked for. Without step 7's exception
-above, that echo reads as an external touch, and - since nothing here ever un-marks a light while it stays
-continuously on (only turning it off does) - it's excluded from every future tick indefinitely, invisible
-until the phase next changes and it silently doesn't follow. Confirmed live: two kitchen spotlights sat
-excluded this way for over an hour, still correctly lit the entire time.
+#### Nothing survives a restart, on purpose
 
-`observed`'s target is checked for a different reason, and catches a different case: a light that never
-adopted the most recent write *at all* is, by definition, still showing exactly what the last write that
-*did* land asked for. Checking only `latest` there would leave a genuinely dropped write looking like an
-external change.
+Claims are not persisted. These are lighting overrides — losing them means a bulb someone wanted purple goes
+back to being managed. After a restart nothing is tracked, so every light is manageable, which is exactly the
+state you'd want anyway.
 
-Step 7's value comparison also recognises a colour-temperature match that a flat Kelvin tolerance alone would
-miss: Zigbee bulbs communicate colour temperature in **mireds** (`1,000,000 / kelvin`, always a whole number),
-not Kelvin, so Home Assistant converts a Kelvin value to mireds before sending it to the device and converts
-the device's own reported mireds back to Kelvin for display - two lossy `floor()` conversions. Two Kelvin
-values that floor to the identical mired reading are indistinguishable to the device, even when the gap
-between them (in Kelvin terms) is much larger than the tolerance - confirmed live: `4373K` asked for, `4385K`
-reported back (both floor to mired `228`), a 12K gap against a 10K default tolerance, with the bulb having
-done exactly what it was told. A single mired step is worth as little as ~5K near 2700K but ~20K+ near 4500K,
-so no single flat Kelvin tolerance could reliably cover this on its own - the mired-equivalence check is
-always-on, on top of whatever `color_temp_tolerance` is configured.
-
-Steps 5 and 6 are both really the same question ("does a recorded owner conflict with the one asking now?"),
-just checked against two different claims instead of one - two different callers writing the *same* light
-with *different* `owner_id`s never look "externally set" to *each other* by context alone, since each one's
-own write is always the most recent context from its own point of view; only comparing `owner_id` catches it.
-Concretely: Kitchen's automation force-writes a light Living Room normally owns (`owner_id:
-"automation.kitchen_lights"`, `force: true`), and nothing else touches the light afterward. Living Room's
-next regular tick sees a perfectly valid, matching `context.id` - nothing's changed since Kitchen's write -
-but the recorded `owner_id` is Kitchen's, not its own, so it still correctly leaves the light alone rather
-than "helpfully" overwriting Kitchen's deliberate change. `context.id` answers "has *anything* changed";
-`owner_id` answers "was it *me*."
-
-Two ways to bypass the check for a single call:
-
-- **Leave `owner_id` unset entirely** — skips the check and always writes, but doesn't claim the write for
-  anyone: a *later* call, even one passing a real `owner_id`, sees no conflicting claim either (a write
-  recorded with no owner doesn't count against anybody) — so this is a clean, fully anonymous "just do it."
-- **Pass `force: true`** — also skips the check, but *alongside* a real `owner_id`, so the write is
-  attributed to that caller. A later, non-forced call under that same `owner_id` then correctly recognises
-  it as its own, rather than finding an orphaned record and getting stuck treating its *own* forced write as
-  external. Use this when the caller wants to force through **and** keep normal protection working
-  afterward — e.g. a script the user runs deliberately to bring a light back under adaptive control without
-  turning it off first.
-
-A device regaining power gets a fresh context of its own too, so at this level alone it looks identical to a
-real external change - but this integration handles that case for you automatically, regardless of who's
-calling `apply_lighting`: it clears an entity's own protection record the moment it's *observed* going
-unavailable/unknown, so by the time it reconnects there's no stale record left for its new context to
-conflict with - a perfectly ordinary, non-forced call manages it again, the same as a brand new entity. No
-caller-side handling needed for this specific case - the blueprint's own `recovered` trigger exists purely so
-this happens *promptly* (the moment a light actually recovers, rather than waiting for whatever next calls
-`apply_lighting` for that room) - see [docs/BLUEPRINT.md](BLUEPRINT.md#override-detection).
-
-A plain Home Assistant restart needs its own handling, separate from the above: it gives *every* entity a
-fresh context the moment HA comes back up, even a light that never actually went unavailable and whose
-reported value hasn't changed at all - a genuine drop is only one of the two ways a light's context can change
-without this integration seeing it happen. Left alone, every already-tracked light would look externally set
-the moment HA restarts, and - since an externally-set light is never written - stay that way until something
-else happened to touch it. This integration closes the gap two ways together, since either alone misses some
-lights: on startup, it snapshots the current live context of every tracked entity that's *already* reporting a
-real state as its new baseline (the same "no real claim, but nothing's changed" logic a first-ever write
-already uses); and, since a real restart puts nearly every entity through `unavailable`/`unknown` first, and
-this one-shot pass runs early enough that some are still mid-reconnect when it does, the clear-on-unavailable
-listener above also watches the *opposite* direction - the moment any tracked entity is seen coming back from
-unavailable/unknown to a real state, it gets the identical snapshot treatment, live, rather than staying
-stuck until whatever caught it at startup happens again. Either way, a plain, non-forced call manages the
-light normally on the very next tick instead of treating the restart itself as an override.
 
 ### Using override protection standalone
 
@@ -192,9 +90,8 @@ use them directly on its own entities:
 action: adaptive_lighting_helpers.check_ownership
 data:
   entities: [light.kitchen_1]
-  owner_id: "{{ this.entity_id }}"
 response_variable: ownership
-# ownership.results["light.kitchen_1"] -> {"blocked": false, "status": "controlled", "owner_id": "...", "matched_via": "latest-context"}
+# ownership.results["light.kitchen_1"] -> {"blocked": false, "status": "controlled", "matched_via": "latest-context"}
 # matched_via is "context" (a direct match on either of the claim's context ids) or "value" (the
 # delayed-echo/mired rescue above, against either claim's target) for a `controlled` status, null
 # otherwise - useful for understanding *why* a light is considered ours, not just that it is.
@@ -205,14 +102,13 @@ response_variable: ownership
 action: adaptive_lighting_helpers.record_ownership
 data:
   entities: [light.kitchen_1]
-  owner_id: "{{ this.entity_id }}"
   targets:
     light.kitchen_1: { brightness: 200, color_temp_kelvin: 3000 }
 ```
 
 `apply_lighting`/`compute_lighting_groups` use the exact same underlying logic internally (a direct Python
 call, not a service-to-service round trip) - `check_ownership`'s `status` values are the same ones
-`sensor.adaptive_lighting_write_tracking` shows (see below), and `targets` is the same shape `apply_lighting`
+each state device's `claims` attribute shows (see below), and `targets` is the same shape `apply_lighting`
 itself records automatically on every write it makes.
 
 A third service, `clear_ownership`, is the manual escape hatch for a light stuck reporting `overridden` with no
@@ -240,12 +136,13 @@ Every time a tracked light passes into someone else's hands, this fires
 
 ```yaml
 entity_id: light.kitchen_1
-owner_id: automation.kitchen_lights   # who lost it
+scope: Kitchen                        # the state device that lost it
+device_id: ...                        # so the row lands in that device's Activity
 previous_status: controlled
 live_context_id: 01M11...
 live: { state: on, brightness: 12, color_temp_kelvin: 6500, rgb_color: null }
-observed: { context_id: ..., target: {...}, owner_id: ..., recorded_at: ... }
-latest:   { context_id: ..., target: {...}, owner_id: ..., recorded_at: ... }
+observed: { context_id: ..., target: {...}, recorded_at: ... }
+latest:   { context_id: ..., target: {...}, recorded_at: ... }
 ```
 
 The point is the pairing of `live` against each claim's `target`. That comparison is what tells you whether a
@@ -270,96 +167,51 @@ trigger:
     event_type: adaptive_lighting_helpers_light_overridden
 ```
 
-### Per-owner entities (optional)
+### The state device's entities
 
-Reading the global sensor above needs the custom **Adaptive Lighting Write Tracking** card, because everything
-is in one `entities` attribute that no stock card can usefully render. If you'd rather stay in plain Home
-Assistant UI, turn on **Create per-owner entities** in the integration's options (Settings → Devices &
-Services → Adaptive Lighting Helpers → Configure).
+Each state device carries four entities, all on its own device so they're renamed and deleted together:
 
-That adds a **device** for each `owner_id` that has written lights through this integration, carrying three
-entities:
-
-| entity | state |
+| entity | |
 |---|---|
-| `sensor.<owner>_adaptive_controlled` | how many of its lights it is currently driving |
-| `sensor.<owner>_adaptive_overridden` | how many are currently held by something else |
-| `button.<owner>_adaptive_clear` | press to discard that owner's tracked state |
+| `sensor.<name>_adaptive_tracking` | **the claims themselves.** State is the number of lights tracked; the `claims` attribute holds the per-light `observed`/`latest` records |
+| `sensor.<name>_adaptive_controlled` | how many of its lights it is currently driving |
+| `sensor.<name>_adaptive_overridden` | how many are currently held by something else |
+| `button.<name>_adaptive_clear` | press to discard this scope's tracked state |
 
-The two sensors carry `owner_id`, `lights` (the entity_ids making up that count) and `total_tracked`. They're plain
-numbers, so they graph, get long-term statistics, and work in any entity card:
+The tracking sensor is the storage, not a view of it — what you see in Developer Tools is the same object
+override protection acts on. Its `claims` attribute is excluded from the recorder (it changes on every tick
+and runs to kilobytes), so it has no history; the two counters are plain numbers that graph and produce
+long-term statistics.
 
-```yaml
-type: entities
-entities:
-  - sensor.kitchen_lights_adaptive_controlled
-  - sensor.kitchen_lights_adaptive_overridden
-  - button.kitchen_lights_adaptive_clear
-```
+**The two counts deliberately don't sum to the tracked total**: a light that's off or unavailable is in
+neither, because override protection doesn't apply to it at all.
 
-**The Clear button** is `clear_ownership` for a whole room, and the stock-UI equivalent of the write-tracking
-card's per-light **Clear** - the escape hatch for a light stuck `overridden` with no other way back. Pressing
-it discards **every** record belonging to that owner, not only the overridden ones: it's meant to be a
-guaranteed reset rather than one that depends on agreeing about which lights are stuck, which is exactly what
-you can't rely on when you reach for it.
+**A light being overridden is a supported outcome, not a fault** — something else deliberately took it and
+adaptive lighting correctly stepped back. These report who holds what; they aren't a health check.
 
-The cost of that is worth knowing. The owner's healthy lights lose their claims too, so each one is
-unprotected until its next write, which is treated like a brand-new entity's first write. For a live room
-automation that's a single tick. If you want to clear just one light, use the card, or call `clear_ownership`
-with that entity. The button's `tracked` attribute says how many records a press would discard, and because
-it's a button its state is the last-pressed timestamp - so "when did I last reset this room" ends up in
-history for free.
+**The Clear button** discards *every* claim the scope holds, not just the overridden ones — a guaranteed
+reset rather than one that depends on agreeing about which lights are stuck. The cost: the scope's healthy
+lights lose their claims too, so each is unprotected until its next write. For a live room automation that's
+one tick.
 
-**A light being overridden is a supported outcome, not a fault** - something else deliberately took it and
-adaptive lighting correctly stepped back. These sensors report who currently holds what; they aren't a health
-check, and a non-zero `overridden` count doesn't mean anything is wrong.
 
-The two counts deliberately don't sum to `total_tracked`: a light that's off or unavailable is in neither,
-because override protection doesn't apply to it at all.
+### Inspecting tracked state
 
-**One device per owner** means the three are grouped, renamed and deleted together. Renaming the device
-retitles all three (the entity_ids don't move), and **deleting it removes all three at once** - the way to
-clean up an `owner_id` that no longer exists. Deleting also clears that owner's tracked records, without which
-the device would simply be rebuilt from them on the next write.
-
-*Caveat:* supporting that Delete button means Home Assistant offers one on **every** device this integration
-owns, including the per-schedule devices, where it fails with "rejected by integration". Those are removed by
-deleting the sensor itself (Settings → Devices & Services → the subentry), which is unchanged.
-
-**Areas.** An `owner_id` is an arbitrary string, but in practice it's the calling automation's own
-`entity_id` - and that automation is usually already assigned to the room it looks after. When it resolves to
-a registered entity with an area (its own, or its device's), the owner device is put in that area too, so it
-turns up under the room rather than in an unsorted heap. Anything that doesn't resolve is left unassigned.
-Moving a device by hand sticks - a derived area only ever fills in a blank.
-
-Off by default, because a busy house gains a few dozen entities. Owners are derived from the tracked
-records themselves, so nothing extra is stored and a restart brings the same devices back. An owner whose
-records all age out (nothing written for a day) keeps its sensors, reporting 0, rather than having them
-vanish and reappear every time a room goes unused - delete a genuinely dead one from the entity registry, or
-toggle the option off and on. Turning the option off removes them all.
-
-### Inspecting write-tracking state
-
-`sensor.adaptive_lighting_write_tracking` makes the mechanism above inspectable directly, rather than only
-indirectly through `compute_lighting_groups`'s `combined`/`needing_off` output (which tells you *whether* a
-light is currently excluded, never *why*). Its state is the number of lights currently tracked; its `entities`
-attribute holds, per light, the raw `observed`/`latest` claims plus a computed `status` and `owner_id` -
-whichever claim's owner actually matched to produce that `status` (`null` for `off`/`unavailable`/`overridden`/a
-claimless `controlled`, since there's nothing to attribute in those cases - the same value `check_ownership`
-returns for a given entity, surfaced here without needing to ask on anyone's behalf), plus `matched_via` -
-`"latest-context"`, `"latest-value"`, `"observed-context"` or `"observed-value"` for a `latest`/`controlled` status, `null` otherwise - saying *how* that match was
-determined, so a viewer doesn't have to guess whether a light is "controlled" because its own reported
-context.id matched directly, or because it was rescued via the delayed-echo/mired-equivalence value comparison
-described above. The **Adaptive Lighting Write Tracking** dashboard card shows this as a small annotation
-under each status badge.
+Each state device's `sensor.<name>_adaptive_tracking` makes the mechanism above inspectable directly, rather
+than only indirectly through `compute_lighting_groups`'s `combined`/`needing_off` output (which tells you
+*whether* a light is currently excluded, never *why*). Its `claims` attribute holds, per light, the raw
+`observed`/`latest` records. `check_ownership` turns those into the computed `status` and `matched_via` -
+`"latest-context"`, `"latest-value"`, `"observed-context"` or `"observed-value"` - saying *how* a match was
+determined, so you needn't guess whether a light is `controlled` because its reported `context.id` matched
+directly, or because it was rescued via the delayed-echo/mired-equivalence value comparison described above.
 
 Records are discarded automatically once they've gone a full day without being written or observed - not just
-for lights that are still around but quiet, which is harmless (see the numbered check above: no record at all
-reads the same as `untracked`, never blocked, so a pruned-too-early record for a still-real light simply
-re-establishes itself on its next write), but specifically for an entity *deleted from Home Assistant outright*
-(a Zigbee2MQTT group removed at the source, say) - the one case none of the recovery/restart handling above can
-ever detect, since there's no state left in Home Assistant to observe going away. Runs once at startup and
-hourly while running; nothing to configure.
+for lights that are still around but quiet, which is harmless (no record at all reads the same as
+`untracked`, never blocked, so a pruned-too-early record simply re-establishes itself on its next write), but
+specifically for an entity *deleted from Home Assistant outright* (a Zigbee2MQTT group removed at the source,
+say) - the one case none of the recovery handling above can detect, since there's no state left to observe
+going away. Runs once at startup and hourly while running; nothing to configure.
+
 
 - `controlled` — we are in control: the live `context.id` matches a claim, or it matches neither
   claim's `context.id` but its current value still matches what `latest`'s or `observed`'s own `target`
@@ -368,32 +220,22 @@ hourly while running; nothing to configure.
   light on the previous one, not a real external change. Either way, not excluded from the next tick.
 - `overridden` — matches neither claim's `context.id`, and the current value doesn't match either claim's own
   target either. Something has genuinely touched this light since either recorded write - whether that means
-  "externally set" for a given caller also depends on `owner_id` (see the numbered check above), which this
-  sensor can't evaluate without knowing which `owner_id` would be asking.
+  "externally set" also depends on `force`, which this sensor can't know about.
 - `unavailable` — the entity currently has no live state to compare against.
 - `off` — the light's live state is `off` (not `unavailable`/`unknown`). Override protection is moot for a
   light that isn't on (see the `is_state(entity_id, "on")` precondition at the very top of the numbered check
   above) - it will be freely managed the next time it's turned on, regardless of any `observed`/`latest`
   claim recorded while it was last on.
 
-This entity is entry-scoped, not tied to any one schedule instance (it exists even with zero "Add Sensor"
-instances configured), and deliberately has no device of its own - the write-tracking data it shows isn't
-naturally owned by any one room's device, and giving it one would mean it shows up in the device-rename/
-area-picker dialog the next time the integration is added, which this project avoids elsewhere for the same
-reason (see CLAUDE.md's "Auto-seeded Default sensor" entry). It updates immediately on every write or
-clear-on-unavailable event, and also polls every 15s - a light's live state can change independently of
-`write_tracking.py` ever being touched (a restart, most obviously), and only polling keeps `status` correct in
-that case too.
+Each state device's tracking sensor updates immediately on every write or clear-on-unavailable event, and
+also polls - a light's live state can change independently of anything this integration does (a restart, an
+entity reconnecting, a light dimmed by hand), and only polling keeps its view correct in that case too.
 
-Each claim also carries `recorded_at` (ISO 8601, or `null` for the synthetic first-write baseline - see
-`async_record`'s docstring) - when write_tracking.py actually stamped that claim. It's what lets the
-**Adaptive Lighting Write Tracking** dashboard card (`custom:adaptive-lighting-write-tracking-card`, ships with
-the integration the same way the curve card does - see
-[dashboard/write-tracking-card.yaml](../dashboard/write-tracking-card.yaml) for the snippet to paste in) trace a
-claim's raw `context.id` back to what actually happened: clicking "Trace" on a claim queries HA's own logbook
-(`logbook/get_events`, filtered by `context_id`) over a narrow window around `recorded_at`, rather than this
-integration trying to re-derive "what caused this" itself. A claim with no `recorded_at` can't be traced this
-way - there's no time window to search.
+Each claim also carries `recorded_at` (ISO 8601, or `null` for the synthetic first-write baseline), i.e. when
+the claim was stamped. Combined with the claim's `context_id`, that is enough to trace a claim back to what
+actually happened via HA's own logbook (`logbook/get_events`, filtered by `context_id`) over a narrow window
+around `recorded_at`.
+
 
 ## `adaptive_lighting_helpers.compute_lighting_groups`
 

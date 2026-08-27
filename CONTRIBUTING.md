@@ -24,9 +24,12 @@ custom_components/adaptive_lighting_helpers/
     scenes.py      scene-coverage gap filling (apply a scene, then a
                    default for whatever it doesn't cover)
     write_tracking.py
-                   persisted (Store-backed) record of what context.id
-                   this integration itself last wrote each light with -
-                   what grouping.py's externally_set() compares against
+                   which state device tracks each light, and what
+                   context.id this integration last wrote it with - the
+                   record grouping.py's externally_set() compares
+                   against. Deliberately not persisted: the claims live
+                   on each state device's tracking entity and die with a
+                   restart, which leaves every light manageable
     manifest.json, config_flow.py, services.yaml, strings.json,
     translations/  standard HA integration/HACS scaffolding
     brand/icon.png, brand/icon@2x.png
@@ -35,18 +38,15 @@ custom_components/adaptive_lighting_helpers/
                    (since HA 2026.3.0), no external submission needed
     www/adaptive-lighting-curve-card.js
                    the day-phase/curve dashboard card
-    www/adaptive-lighting-write-tracking-card.js
-                   the write-tracking diagnostic dashboard card - see
-                   write_tracking.py above
-    Both are served and auto-loaded by the integration itself (see
-    __init__.py's async_setup) - they ship and update with the
+    Served and auto-loaded by the integration itself (see
+    __init__.py's async_setup) - it ships and updates with the
     integration, no manual Lovelace resource registration needed
     curve.py, grouping.py, and scenes.py are pure Python, no Home
     Assistant dependency - testable directly, and usable from anywhere
     that wants the math without the HA service/sensor wrapper around
     it. __init__.py, coordinator.py, sensor.py, select.py, number.py,
-    time.py, switch.py, and write_tracking.py (via HA's Store helper)
-    are the only files that touch `hass`.
+    time.py, switch.py, button.py, and write_tracking.py are the only
+    files that touch `hass`.
 
 hacs.json
     HACS repository metadata for the integration.
@@ -76,10 +76,6 @@ dashboard/
                                  fuller section: curve card, phase
                                  override, and every schedule/curve
                                  config entity, laid out as tiles
-    write-tracking-card.yaml   write-tracking diagnostic card config to
-                                 add to a view - no per-room config,
-                                 unlike the curve card, since the
-                                 sensor it reads is entry-scoped
     preview.html                renders both real cards against
                                  synthetic data, no Home Assistant
                                  instance needed
@@ -109,9 +105,7 @@ python3 -m http.server 8934
 # open http://localhost:8934/dashboard/preview.html
 ```
 
-Renders both real card components against generated/synthetic data, without a Home Assistant instance. The
-write-tracking card's "Trace" button is exercised against a mocked `callWS` in `preview.html` itself, not a real
-logbook - there's no recorder/logbook data to query without a live instance.
+Renders the real curve card against generated/synthetic data, without a Home Assistant instance.
 
 ## Testing
 
@@ -129,6 +123,7 @@ Two layers, both under `tests/`:
 - `tests/integration/` - real Home Assistant, via
   [pytest-homeassistant-custom-component](https://github.com/MatthewFlamm/pytest-homeassistant-custom-component).
   `test_services.py` exercises the actual registered services (`__init__.py`, `write_tracking.py`) end to end;
+  `test_state_devices.py` covers scope resolution and the per-scope entities that hold the claims;
   `test_blueprint.py` loads the real blueprint file into a test automation and fires real triggers - the only
   place bugs living in the blueprint's own trigger/condition/action wiring can be caught at all, as opposed to
   pure YAML/template checks that are syntactically fine but wrong at runtime (see its own module docstring for
@@ -149,7 +144,5 @@ against real hardware, the day-phase/curve sensors deployed and iterated on live
 per-sensor devices), `apply_lighting`'s RGB colour support (`prefer_rgb_color`) confirmed live end to end -
 both the routing decision (a real bulb correctly bucketed by its actual `supported_color_modes`) and the
 `light.turn_on` dispatch itself (a real bulb landing in `xy` colour mode with the expected `rgb_color`) - and
-`apply_lighting`'s context.id/`owner_id`-based override protection confirmed live too: a foreign write is
-correctly left alone, a same-owner write correctly isn't, a different `owner_id` is correctly treated as
-external even with an unchanged context.id, and omitting `owner_id` entirely correctly forces a write through
-regardless. See CLAUDE.md's "Current status" section for the full rundown.
+`apply_lighting`'s context.id-based override protection confirmed live too: a foreign write is correctly left
+alone, our own write correctly isn't, and `force: true` correctly writes through regardless. See CLAUDE.md's "Current status" section for the full rundown.

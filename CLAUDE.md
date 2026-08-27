@@ -186,7 +186,7 @@ blueprint in this repo. Keep them that way.
    conditions all fall out for free from that. The one piece that
    *does* now need persisted state, contrary to this lesson's original
    framing, is knowing what to compare the current state against -
-   `write_tracking.py`'s `Store`-backed record of what context.id this
+   `write_tracking.py`'s in-memory record of what context.id this
    integration itself last wrote each entity with. The lesson still
    holds where it always mattered: a trigger's one-shot firing is not a
    substitute for a check performed fresh on every tick.
@@ -426,9 +426,9 @@ rather than assumed:
   honest** - `light.utility_spot_1` advertises max 4000 and reports
   5813. So `_already_set` accepts the raw target *or* the range-clamped
   one, never only the clamped one.
-- `force` and omitting `owner_id` both bypass the check, but differ:
-  `force` still claims the write for later calls to recognise, omitting
-  `owner_id` leaves it unclaimed.
+- `force` is the only bypass. There is no caller-supplied owner: a
+  light's claims belong to the state device its target covers, so any
+  caller writing that light writes through the same scope.
 
 **Known limitation, not solved.** Once `classify()` returns `overridden`,
 `build_groups()` excludes the entity from every group, so nothing ever

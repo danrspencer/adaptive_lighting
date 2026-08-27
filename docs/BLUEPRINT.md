@@ -137,13 +137,12 @@ free to manage — rather than getting stuck unmanaged until it happens to chang
 Helpers](HELPERS.md#override-protection) covers the full mechanism, including how a single write that silently
 fails to land self-heals on the next tick instead of locking the light out permanently.
 
-The blueprint identifies itself to this check via `apply_lighting`'s `owner_id` parameter, set to its own
-`this.entity_id` — so a room's automation only ever recognises its *own* previous writes as "not overridden";
-even a write from a different room's automation counts as external. There's no blueprint input for this, and
-none needed — it's automatic per room. `owner_id` is passed on every single call the blueprint makes, including
-the manual-run case below that bypasses the check with `force: true` — force and owner_id aren't opposites;
-forcing *with* an owner_id still attributes the write, so the room's next regular tick correctly recognises it
-as its own rather than getting stuck treating its own forced write as external.
+The blueprint declares no ownership of its own. Which **state device** tracks a light is resolved by the
+integration from its own configuration — by area, or by a target you point at devices or specific lights — so
+there's no blueprint input for this and none needed. Two automations driving the same room therefore share
+that room's claims and co-operate, rather than each treating the other's write as external; give them separate
+state devices if you want them tracked apart. See
+[docs/HELPERS.md](HELPERS.md#override-protection) for the resolution rules.
 
 **Running the automation manually** (hitting "Run" in the UI, or calling `automation.trigger` directly, rather
 than one of its own configured triggers firing) forces the whole tick through regardless of override
@@ -178,7 +177,7 @@ a light that reconnects already on gets brought to the adaptive target, one that
 nothing else currently on, is left off rather than switched on.
 
 If you want to deliberately force a light back under adaptive control from your own script without turning it
-off first, call `apply_lighting` directly with `force: true` (with or without an `owner_id` of your own) - see
+off first, call `apply_lighting` directly with `force: true` - see
 [docs/HELPERS.md](HELPERS.md#override-protection) for the full contract.
 
 ## Scene handoff
