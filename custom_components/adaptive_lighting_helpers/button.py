@@ -31,7 +31,7 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .const import DOMAIN
-from .sensor import owner_of, owner_slug, setup_owner_entities
+from .sensor import assign_owner_area, owner_of, owner_slug, setup_owner_entities
 from .write_tracking import SIGNAL_WRITE_TRACKING_UPDATED, LastWriteTracker
 
 
@@ -43,7 +43,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         write_tracker,
         async_add_entities,
         Platform.BUTTON,
-        lambda owner_id: [_OwnerClearButton(hass, entry, write_tracker, owner_id)],
+        lambda owner_id, area_id: [_OwnerClearButton(hass, entry, write_tracker, owner_id, area_id)],
     )
 
 
@@ -69,11 +69,17 @@ class _OwnerClearButton(ButtonEntity):
     _attr_icon = "mdi:broom"
 
     def __init__(
-        self, hass: HomeAssistant, entry: ConfigEntry, write_tracker: LastWriteTracker, owner_id: str
+        self,
+        hass: HomeAssistant,
+        entry: ConfigEntry,
+        write_tracker: LastWriteTracker,
+        owner_id: str,
+        area_id: str | None = None,
     ) -> None:
         self.hass = hass
         self._write_tracker = write_tracker
         self._owner_id = owner_id
+        self._area_id = area_id
         # Keyed on the *full* owner_id for the same reason
         # _OwnerCountSensor is - see its comment. The shared
         # "<entry_id>_owner_" prefix is what setup_owner_entities'
@@ -84,6 +90,7 @@ class _OwnerClearButton(ButtonEntity):
         self._attr_name = f"{slug.replace('_', ' ').title()} Adaptive Clear"
 
     async def async_added_to_hass(self) -> None:
+        assign_owner_area(self.hass, self, self._area_id)
         self.async_on_remove(
             async_dispatcher_connect(self.hass, SIGNAL_WRITE_TRACKING_UPDATED, self._handle_update)
         )

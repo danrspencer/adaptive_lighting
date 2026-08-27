@@ -52,7 +52,7 @@ from homeassistant.components.sensor import SensorEntity, SensorStateClass
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory, Platform
 from homeassistant.core import HomeAssistant, callback
-from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_connect
 from homeassistant.helpers.entity import Entity
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -80,8 +80,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         write_tracker,
         async_add_entities,
         Platform.SENSOR,
-        lambda owner_id: [
-            _OwnerCountSensor(hass, entry, write_tracker, owner_id, status)
+        lambda owner_id, area_id: [
+            _OwnerCountSensor(hass, entry, write_tracker, owner_id, status, area_id)
             for status in ("controlled", "overridden")
         ],
     )
@@ -99,7 +99,7 @@ def setup_owner_entities(
     write_tracker: LastWriteTracker,
     async_add_entities: AddEntitiesCallback,
     platform: Platform,
-    factory: Callable[[str], list[Entity]],
+    factory: Callable[[str, str | None], list[Entity]],
 ) -> None:
     """Creates one platform's per-owner entities, and keeps up with
     owners that appear later.
@@ -148,7 +148,7 @@ def setup_owner_entities(
             if owner in known:
                 continue
             known.add(owner)
-            new.extend(factory(owner))
+            new.extend(factory(owner, owner_area_id(hass, owner)))
         if new:
             async_add_entities(new)
 
@@ -209,6 +209,54 @@ def _owners(snapshot: dict) -> set[str]:
     return {owner for record in snapshot.values() if (owner := owner_of(record)) is not None}
 
 
+def owner_area_id(hass: HomeAssistant, owner_id: str) -> str | None:
+    """The area of whatever entity an owner_id names, if it names one.
+
+    An owner_id is an arbitrary caller-supplied string, but in practice
+    it's the calling automation's own entity_id - and that automation is
+    usually already assigned to the room it looks after. Following it
+    puts these entities in that same room for free, so they turn up
+    under the area rather than in an unsorted heap.
+
+    None whenever that can't be established - not an entity_id, not in
+    the registry, or the entity has no area of its own and no device to
+    inherit one from. The entities are simply left unassigned then,
+    which is what they did before this existed."""
+    if "." not in owner_id:
+        return None
+    registry = er.async_get(hass)
+    entry = registry.async_get(owner_id)
+    if entry is None:
+        return None
+    if entry.area_id:
+        return entry.area_id
+    if entry.device_id and (device := dr.async_get(hass).async_get(entry.device_id)) is not None:
+        return device.area_id
+    return None
+
+
+@callback
+def assign_owner_area(hass: HomeAssistant, entity: Entity, area_id: str | None) -> None:
+    """Called from a per-owner entity's async_added_to_hass, once its
+    registry entry exists.
+
+    Only ever fills in a *blank* area, never overwrites one - moving one
+    of these by hand has to stick. The flip side, accepted: an area
+    deliberately cleared back to nothing is treated as never-set and gets
+    refilled on the next restart. Setting it to something else instead is
+    both the more likely intent and the case that's respected.
+
+    Assigned on the registry entry rather than by giving these entities a
+    device, which would be the idiomatic way to get an area. See
+    _WriteTrackingSensor's docstring: any device on this config entry
+    makes HA's device-rename/area-picker dialog appear when *any* flow on
+    the entry completes, including the options flow these entities are
+    turned on from."""
+    if area_id is None or entity.registry_entry is None or entity.registry_entry.area_id:
+        return
+    er.async_get(hass).async_update_entity(entity.entity_id, area_id=area_id)
+
+
 def owner_slug(owner_id: str) -> str:
     """entity_id-safe form of an owner. Strips the domain first
     (automation.kitchen_lights -> kitchen_lights), matching what the
@@ -246,12 +294,19 @@ class _OwnerCountSensor(SensorEntity):
     _attr_native_unit_of_measurement = "lights"
 
     def __init__(
-        self, hass: HomeAssistant, entry: ConfigEntry, write_tracker: LastWriteTracker, owner_id: str, status: str
+        self,
+        hass: HomeAssistant,
+        entry: ConfigEntry,
+        write_tracker: LastWriteTracker,
+        owner_id: str,
+        status: str,
+        area_id: str | None = None,
     ) -> None:
         self.hass = hass
         self._write_tracker = write_tracker
         self._owner_id = owner_id
         self._status = status
+        self._area_id = area_id
         self._attr_icon = "mdi:lightbulb-group" if status == "controlled" else "mdi:lightbulb-alert-outline"
         # Keyed on the *full* owner_id, not the slug, so two owners that
         # happen to strip to the same slug (automation.kitchen and
@@ -263,6 +318,7 @@ class _OwnerCountSensor(SensorEntity):
         self._attr_name = f"{slug.replace('_', ' ').title()} Adaptive {status.title()}"
 
     async def async_added_to_hass(self) -> None:
+        assign_owner_area(self.hass, self, self._area_id)
         self.async_on_remove(
             async_dispatcher_connect(self.hass, SIGNAL_WRITE_TRACKING_UPDATED, self._handle_update)
         )

@@ -590,3 +590,85 @@ async def test_disabling_sweeps_each_platforms_own_entities_not_the_others(hass:
     assert registry.async_get(stale_button.entity_id) is None
     # The sensor platform's own entity is not this platform's to remove.
     assert registry.async_get(stale_sensor.entity_id) is not None
+
+
+# --- putting per-owner entities in the owner's area -----------------------
+
+
+async def _area_of(hass: HomeAssistant, entity) -> str | None:
+    """Runs the entity's async_added_to_hass against a real registry entry,
+    which is what assign_owner_area needs to exist before it can act."""
+    from homeassistant.helpers import entity_registry as er
+
+    registry = er.async_get(hass)
+    entry = registry.async_get_or_create(
+        entity.entity_id.split(".")[0], "adaptive_lighting_helpers", entity.unique_id
+    )
+    entity.entity_id = entry.entity_id
+    entity.registry_entry = entry
+    await entity.async_added_to_hass()
+    return registry.async_get(entry.entity_id).area_id
+
+
+async def test_per_owner_entities_land_in_the_area_of_the_entity_the_owner_names(hass: HomeAssistant):
+    """An owner_id is in practice the calling automation's entity_id, and
+    that automation is usually already assigned to the room it looks
+    after - so following it sorts these entities into that room."""
+    from homeassistant.helpers import area_registry as ar, entity_registry as er
+
+    kitchen = ar.async_get(hass).async_get_or_create("Kitchen")
+    automation = er.async_get(hass).async_get_or_create("automation", "automation", "kitchen-lights-uid")
+    er.async_get(hass).async_update_entity(automation.entity_id, area_id=kitchen.id)
+
+    ctx = Context()
+    _set_light(hass, "light.a", "on", brightness=200, color_temp_kelvin=3000, context=ctx)
+    seed = LastWriteTracker(hass)
+    await seed.async_load()
+    await _record(seed, "light.a", automation.entity_id, ctx.id)
+
+    added, _ = await _setup_button_platform(hass, owner_sensors=True)
+    assert await _area_of(hass, added[0]) == kitchen.id
+
+
+async def test_an_owner_that_names_nothing_resolvable_is_left_unassigned(hass: HomeAssistant):
+    """owner_id is an arbitrary caller-supplied string. When it isn't an
+    entity we can resolve an area for, these stay where they were before
+    any of this existed - unassigned, not guessed at."""
+    ctx = Context()
+    _set_light(hass, "light.a", "on", brightness=200, color_temp_kelvin=3000, context=ctx)
+    seed = LastWriteTracker(hass)
+    await seed.async_load()
+    await _record(seed, "light.a", "some-hand-rolled-owner", ctx.id)
+
+    added, _ = await _setup_button_platform(hass, owner_sensors=True)
+    assert await _area_of(hass, added[0]) is None
+
+
+async def test_an_area_set_by_hand_is_not_overwritten(hass: HomeAssistant):
+    """Moving one of these to a different room has to stick - the derived
+    area only ever fills in a blank."""
+    from homeassistant.helpers import area_registry as ar, entity_registry as er
+
+    registry = er.async_get(hass)
+    area_reg = ar.async_get(hass)
+    kitchen = area_reg.async_get_or_create("Kitchen")
+    utility = area_reg.async_get_or_create("Utility")
+    automation = registry.async_get_or_create("automation", "automation", "kitchen-lights-uid")
+    registry.async_update_entity(automation.entity_id, area_id=kitchen.id)
+
+    ctx = Context()
+    _set_light(hass, "light.a", "on", brightness=200, color_temp_kelvin=3000, context=ctx)
+    seed = LastWriteTracker(hass)
+    await seed.async_load()
+    await _record(seed, "light.a", automation.entity_id, ctx.id)
+
+    added, _ = await _setup_button_platform(hass, owner_sensors=True)
+    button = added[0]
+    entry = registry.async_get_or_create("button", "adaptive_lighting_helpers", button.unique_id)
+    registry.async_update_entity(entry.entity_id, area_id=utility.id)
+    button.entity_id = entry.entity_id
+    button.registry_entry = registry.async_get(entry.entity_id)
+
+    await button.async_added_to_hass()
+
+    assert registry.async_get(entry.entity_id).area_id == utility.id
