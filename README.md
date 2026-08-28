@@ -1,4 +1,6 @@
-# Adaptive Lighting
+# FLARE
+
+**F**lexible **L**ighting **A**utomation & **R**econciliation **E**ngine.
 
 Your lights, matched to the shape of your day — bright and cool to help you wake up, gradually warming through
 the afternoon, dimming to a relaxed glow as evening sets in, and low and warm once the house is asleep. Rooms
@@ -11,17 +13,17 @@ The quickest way to see what this actually does is the
 **[interactive curve playground](https://danrspencer.github.io/adaptive_lighting/playground.html)** — it runs the
 real dashboard card, and you can drag the schedule and curve settings around and watch it redraw.
 
-- **[Installation](https://danrspencer.github.io/adaptive_lighting/installation.html)** — HACS, the blueprint, and the dashboard card
-- **[Integration reference](https://danrspencer.github.io/adaptive_lighting/helpers/)** — every service and entity
+- **[Quickstart](https://danrspencer.github.io/adaptive_lighting/installation/)** — HACS, the blueprint, and the dashboard card
+- **[Power users](https://danrspencer.github.io/adaptive_lighting/advanced/)** — every service and entity, scene handoff, and building without the blueprint
 - **[Blueprint reference](https://danrspencer.github.io/adaptive_lighting/blueprint/)** — every input, feature by feature
 - **[Contributing](https://danrspencer.github.io/adaptive_lighting/contributing/)** — repository layout and the test suite
 
 ## Why four phases, not a continuous curve
 
-Most "adaptive lighting" tools compute one continuous curve straight from the sun's position — brightness and
+Most adaptive-lighting tools compute one continuous curve straight from the sun's position — brightness and
 colour temperature interpolated smoothly between sunrise and sunset, nothing else to it. That's a reasonable
 default, but it treats every part of your day the same way: just "more or less light," rather than light with a
-*purpose*. This project instead uses four named phases, each justified on its own terms:
+*purpose*. FLARE instead uses four named phases, each justified on its own terms:
 
 - **Morning** exists to help you wake up, not to track sunrise. It starts at a fixed time before you'd normally
   be up, independent of the season — a sun-tracking curve would have it arrive at 5am in June and 8am in
@@ -42,7 +44,7 @@ default, but it treats every part of your day the same way: just "more or less l
 
 Installed separately, and useful separately.
 
-**Adaptive Lighting Helpers** is a Home Assistant integration. It exposes the phase schedule above, plus
+**FLARE** is a Home Assistant integration. It exposes the phase schedule above, plus
 per-light grouping (reachability, tolerance, override protection, two-step transitions, optional RGB colour) and
 scene-coverage gap filling, as plain Home Assistant services — `compute_lighting_groups`, `compute_curve` and
 `compute_scene_coverage` are pure planners that hand back data; `apply_lighting` wraps the same grouping logic
