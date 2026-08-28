@@ -1,11 +1,10 @@
 ---
-title: Dashboard section generator
-parent: Quickstart
-nav_order: 1
-permalink: /installation/dashboard/
+title: Dashboard Generator
+nav_order: 4
+permalink: /dashboard/
 ---
 
-<h1>Dashboard section generator</h1>
+<h1>Dashboard Generator</h1>
 
 <p>
   Every schedule sensor (Settings &rarr; Devices &amp; Services &rarr; <strong>FLARE
@@ -46,7 +45,20 @@ permalink: /installation/dashboard/
   on the curve card aren't decorative — a card inside a <code>sections</code> view doesn't
   inherit its section's full width just because the section itself is full-width,
   so both are needed for the curve to actually span the section instead of rendering
-  at roughly a third of it.
+  at roughly a third of it. The same setting is what packs several cards onto one
+  row elsewhere in the section — <code>columns</code> is out of the section's own
+  12-column grid, so e.g. <code>3</code> fits four gauges per row instead of one.
+</p>
+
+<p>
+  The eight curve values and eight transition minutes render as <strong>gauge</strong>
+  cards rather than tiles: each is one number in a fixed range (brightness 0–255,
+  colour temperature 1000–10000 Kelvin, transition 0–1440 minutes), and a gauge shows
+  where today's value sits in that range at a glance — which is the point of glancing
+  at this section in the first place. Tap one to open its editor. Phase, Sticky and
+  the five schedule times stay as tiles, since neither a dropdown state nor a time of
+  day has a meaningful "how full is this" reading; Phase gets the inline
+  <code>select-options</code> feature so it's a dropdown rather than tap-to-open.
 </p>
 
 <h2 id="repeat-per-schedule">Repeat per schedule</h2>
