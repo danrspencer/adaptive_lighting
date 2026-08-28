@@ -99,6 +99,23 @@ const PRESETS = {
 
 const state = { ...DEFAULT_STATE };
 
+/** A duration in minutes -> "30 min" / "1 h" / "1 h 30 min".
+ *
+ * Deliberately NOT fmtMinutes: that formats a time of day, wrapping at
+ * 1440, so a full-day transition rendered as "00:00" - reading as zero,
+ * the exact opposite of what it does. */
+function fmtDuration(mins) {
+  const m = Math.round(mins);
+  if (m === 0) return 'off (hard cut)';
+  const h = Math.floor(m / 60);
+  const rest = m % 60;
+  // Anything this long always clamps to the phase it runs in, so say so
+  // rather than showing a number nothing can reach.
+  if (m >= 1440) return 'whole phase';
+  if (!h) return `${rest} min`;
+  return rest ? `${h} h ${rest} min` : `${h} h`;
+}
+
 /** Minutes-since-midnight -> "HH:MM". */
 function fmtMinutes(mins) {
   const m = ((Math.round(mins) % 1440) + 1440) % 1440;
@@ -292,10 +309,7 @@ const TRANSITION_OPTS = {
   min: 0,
   max: 1440,
   step: 5,
-  // 0 and "the whole phase" are the two ends worth naming: a duration
-  // longer than its phase clamps to it, so the top of the range means
-  // "always be transitioning" rather than anything out of bounds.
-  format: (v) => (v === 0 ? 'off (hard cut)' : fmtMinutes(v)),
+  format: fmtDuration,
 };
 
 const controlEls = [];

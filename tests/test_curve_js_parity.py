@@ -278,3 +278,44 @@ def test_dashboard_card_matches_curve_py():
         if tuple(kelvin_to_rgb(k)) != tuple(got)
     ]
     assert not rgb_mismatches, "the card's kelvinToRgb has drifted:\n" + "\n".join(rgb_mismatches[:10])
+
+
+# --- buildPoints ------------------------------------------------------
+#
+# The grid above drives brightnessForPhase/kelvinForPhase directly, which
+# left buildPoints - the function the playground actually renders -
+# completely uncovered. A signature change broke it into NaN for every
+# point and every test still passed; the page just drew nothing.
+
+BUILD_POINTS_DRIVER = f"""
+import {{ buildPoints, DEFAULT_CURVE_VALUES }} from {json.dumps(CURVE_JS.as_posix())};
+
+const boundaries = {{ morningTs: 6 * 3600, dayStartTs: 8 * 3600, eveningTs: 18 * 3600, nightTs: 22 * 3600 }};
+const sets = [
+  DEFAULT_CURVE_VALUES,
+  {{ ...DEFAULT_CURVE_VALUES, day_kelvin_transition: 0, evening_brightness_transition: 0 }},
+  {{ ...DEFAULT_CURVE_VALUES, night_kelvin_transition: 1440 }},
+];
+const out = sets.map((v) => {{
+  const points = buildPoints(0, boundaries, v);
+  return {{
+    length: points.length,
+    finite: points.every((p) => Number.isFinite(p.brightness) && Number.isFinite(p.kelvin)),
+    brightnessRange: [Math.min(...points.map((p) => p.brightness)), Math.max(...points.map((p) => p.brightness))],
+  }};
+}});
+process.stdout.write(JSON.stringify({{ out }}));
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_build_points_produces_a_full_day_of_real_numbers():
+    """Every point finite, and the day actually varies - a curve stuck at
+    one value would also be "finite" while being just as broken."""
+    result = _node_eval(BUILD_POINTS_DRIVER, {})
+
+    for i, case in enumerate(result["out"]):
+        assert case["length"] == 289, f"value set {i} produced {case['length']} points, not a full day"
+        assert case["finite"], f"value set {i} produced NaN - buildPoints is being called wrongly"
+        low, high = case["brightnessRange"]
+        assert low < high, f"value set {i} never changes brightness across the whole day"
