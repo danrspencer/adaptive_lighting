@@ -30,11 +30,22 @@ _LABELS = {
     "morning_brightness": "Morning Brightness",
     "morning_kelvin": "Morning Colour Temperature",
     "day_brightness": "Day Brightness",
-    "day_end_kelvin": "Day End Colour Temperature",
+    "day_kelvin": "Day Colour Temperature",
     "evening_brightness": "Evening Brightness",
     "evening_kelvin": "Evening Colour Temperature",
     "night_brightness": "Night Brightness",
     "night_kelvin": "Night Colour Temperature",
+    # Named for the phase the transition runs *in* - it is that phase's
+    # exit, so "Day Colour Transition" is how long before Day ends to
+    # start easing to Evening's colour.
+    "morning_brightness_transition": "Morning Brightness Transition",
+    "morning_kelvin_transition": "Morning Colour Transition",
+    "day_brightness_transition": "Day Brightness Transition",
+    "day_kelvin_transition": "Day Colour Transition",
+    "evening_brightness_transition": "Evening Brightness Transition",
+    "evening_kelvin_transition": "Evening Colour Transition",
+    "night_brightness_transition": "Night Brightness Transition",
+    "night_kelvin_transition": "Night Colour Transition",
 }
 
 
@@ -57,7 +68,15 @@ class _CurveNumber(RestoreNumber, NumberEntity):
         self.entity_id = instance.number_entity_id(key)
         self._attr_device_info = instance.device_info
         self._attr_name = _LABELS[key]
-        if key.endswith("_brightness"):
+        if key.endswith("_transition"):
+            self._attr_native_min_value = 0
+            # A whole day: any value too long for the phase it runs in
+            # clamps to that phase, so the top of the range is simply
+            # "always be transitioning" rather than an error.
+            self._attr_native_max_value = 1440
+            self._attr_native_unit_of_measurement = "min"
+            self._attr_native_step = 1
+        elif key.endswith("_brightness"):
             self._attr_native_min_value = 0
             self._attr_native_max_value = 255
             self._attr_native_step = 1

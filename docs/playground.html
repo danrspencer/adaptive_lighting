@@ -71,10 +71,23 @@ nav_order: 3
 <div class="alp-panel">
   <h3 id="colour-temperature">Colour temperature</h3>
   <p class="alp-panel-hint">
-    Morning holds its value, Day ramps down from it toward Day End, and Evening
-    ramps from Day End down to its own value before fading into Night's.
+    Each phase holds its own colour and eases to the next one over that
+    phase's transition, below.
   </p>
   <div class="alp-grid" id="alp-kelvin"></div>
+</div>
+
+<div class="alp-panel">
+  <h3 id="transitions">Transitions</h3>
+  <p class="alp-panel-hint">
+    How long <em>before</em> each phase ends to start easing toward the next
+    one — so the new phase's values have arrived exactly as it begins. Set one
+    to zero for a deliberate, visible change at that boundary. Anything longer
+    than the phase it runs in simply covers the whole phase, which is why Day's
+    colour transition defaults to a full day: it slides from Morning's colour to
+    Evening's across the entire afternoon.
+  </p>
+  <div class="alp-grid" id="alp-transitions"></div>
 </div>
 
 <h2 id="what-the-phases-are-for">What the phases are for</h2>
