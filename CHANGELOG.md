@@ -7,6 +7,24 @@ The version in `custom_components/flare/manifest.json` is what
 HACS shows as installed, so it and the release tag are checked against each other in
 CI — see `.github/workflows/release.yml`.
 
+## [0.5.1] - 2026-08-28
+
+### Changed
+
+- The curve card names itself after the schedule sensor it is pointed
+  at, rather than always reading "FLARE" — so two cards on one
+  dashboard are told apart without configuring a title. An explicit
+  `title: ""` still suppresses the header entirely.
+
+### Fixed
+
+- Documentation: seven broken links, entity ids in the reference table
+  that still carried the old domain (`sensor.<name_>adaptive_lighting`
+  rather than `sensor.<name>_flare`), and a copy-paste dashboard
+  snippet that still set `day_end_kelvin` and omitted the transition
+  entities. Contributing has moved to `CONTRIBUTING.md` in the
+  repository.
+
 ## [0.5.0] - 2026-08-28
 
 ### Changed
