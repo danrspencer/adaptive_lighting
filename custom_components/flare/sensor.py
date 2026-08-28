@@ -83,20 +83,20 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry, async_add_e
         )
 
 
-def _classify_tracked(hass: HomeAssistant, entity_id: str, record: dict) -> tuple[str, Any, Any, Any]:
+def _classify_tracked(hass: HomeAssistant, entity_id: str, record: dict) -> tuple[str, Any, Any]:
     """One light's current status, shared by every sensor in this module
     so they can't drift apart - this integration has already had one bug
     from two separate copies of this comparison disagreeing (see
     override_protection.py's module docstring).
 
-    Returns (status, claim_owner_id, matched_via, live_context_id).
+    Returns (status, matched_via, live_context_id).
     "unavailable" is this layer's own case: classify() only ever sees a
     real on/off, so it has no equivalent."""
     state = hass.states.get(entity_id)
     live_context_id = state.context.id if state is not None else None
     if state is None or state.state in ("unavailable", "unknown"):
-        return "unavailable", None, None, live_context_id
-    raw_status, claim_owner, matched_via = classify(
+        return "unavailable", None, live_context_id
+    raw_status, matched_via = classify(
         state.state == "on",
         record.get("observed"),
         record.get("latest"),
@@ -108,8 +108,8 @@ def _classify_tracked(hass: HomeAssistant, entity_id: str, record: dict) -> tupl
     # "untracked" (no claim at all, or only one unverified attempt)
     # displays as "controlled": from a viewer's point of view both mean
     # "not excluded from the next tick". The distinction only matters to
-    # externally_set()'s own owner-conflict logic.
-    return ("controlled" if raw_status == "untracked" else raw_status), claim_owner, matched_via, live_context_id
+    # is_blocked()'s own decision, not to this diagnostic status.
+    return ("controlled" if raw_status == "untracked" else raw_status), matched_via, live_context_id
 
 
 
@@ -214,7 +214,7 @@ class _StateTrackingSensor(SensorEntity):
         effect, and HA reads that property on every state write."""
         statuses = {}
         for entity_id, record in self.claims.items():
-            status, _owner, _via, live_context_id = _classify_tracked(self.hass, entity_id, record)
+            status, _via, live_context_id = _classify_tracked(self.hass, entity_id, record)
             statuses[entity_id] = status
             if self._last_statuses is None:
                 continue
@@ -229,9 +229,17 @@ class _StateTrackingSensor(SensorEntity):
         self, entity_id: str, record: dict, previous: str | None, live_context_id: str | None
     ) -> None:
         state = self.hass.states.get(entity_id)
-        device = dr.async_get(self.hass).async_get_device(
-            identifiers=self._instance.device_info["identifiers"]
-        )
+        # async_get_device(identifiers=...) is deprecated - identifiers
+        # are no longer guaranteed unique across every config entry, only
+        # within one, so the by-identifier lookup now also needs the
+        # config_entry_id an already-added entity carries on its own
+        # registry_entry.
+        device = None
+        if self.registry_entry is not None and self.registry_entry.config_entry_id is not None:
+            identifier = next(iter(self._instance.device_info["identifiers"]))
+            device = dr.async_get(self.hass).async_get_device_by_identifier(
+                identifier, self.registry_entry.config_entry_id
+            )
         self.hass.bus.async_fire(
             EVENT_LIGHT_OVERRIDDEN,
             {
@@ -320,7 +328,7 @@ class _ScopeCountSensor(SensorEntity):
         lights: list[str] = []
         records = self._registry.records_for_scope(self._instance.subentry_id)
         for entity_id, record in records.items():
-            status, _owner, _via, _ctx = _classify_tracked(self.hass, entity_id, record)
+            status, _via, _ctx = _classify_tracked(self.hass, entity_id, record)
             if status == self._status:
                 lights.append(entity_id)
         return sorted(lights), len(records)

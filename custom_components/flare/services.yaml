@@ -124,6 +124,18 @@ compute_lighting_groups:
       default: false
       selector:
         boolean:
+    scope_device_id:
+      name: Tracking scope
+      description: >-
+        The FLARE state device (Settings -> Devices & Services -> FLARE
+        Tracking) whose claims decide what's already externally-set.
+        Leave unset and nothing is treated as externally-set - every
+        entity is planned as though free to manage.
+      selector:
+        device:
+          filter:
+            - integration: flare
+              model: Tracking Scope
 
 apply_lighting:
   name: Apply adaptive lighting
@@ -135,11 +147,10 @@ apply_lighting:
     data, but dispatched for you. Takes the same brightness/
     color_temp_kelvin/rgb_color fields compute_lighting_groups does - if
     you're feeding these from a sensor entity's attributes yourself (e.g.
-    the adaptive_lighting blueprint in this repo, reading its own
-    adaptive_sensor input), that's just an ordinary template on the
-    caller's side; this service itself doesn't read any entity. Standalone
-    - call this from your own automation, it doesn't require the
-    adaptive_lighting blueprint in this repo.
+    the FLARE blueprint in this repo, reading its own FLARE Sensor
+    input), that's just an ordinary template on the caller's side; this
+    service itself doesn't read any entity. Standalone - call this from
+    your own automation, it doesn't require the FLARE blueprint.
   fields:
     entities:
       name: Entities
@@ -263,6 +274,18 @@ apply_lighting:
       default: false
       selector:
         boolean:
+    scope_device_id:
+      name: Tracking scope
+      description: >-
+        The FLARE state device (Settings -> Devices & Services -> FLARE
+        Tracking) this write belongs to. Leave unset to write the
+        light(s) without tracking them at all - no claim is recorded,
+        so nothing is protected on a later call.
+      selector:
+        device:
+          filter:
+            - integration: flare
+              model: Tracking Scope
 
 compute_curve:
   name: Compute adaptive curve point
@@ -271,7 +294,7 @@ compute_curve:
     returns the target brightness, colour temperature, RGB colour, and
     phase name for a given instant (or now, if not specified). Standalone
     - useful for building your own day-phase sensor or automation without
-    the adaptive_lighting blueprint.
+    the FLARE blueprint.
   fields:
     morning:
       name: Morning boundary
@@ -532,10 +555,10 @@ check_control:
     logic at all. Read-only - call record_write afterwards if you do
     write the entity, so a later check recognises that write.
 
-    Also reports which state device tracks each entity, or null when
-    none does. That distinction matters: an untracked light is never
-    blocked, but not because anything checked - nothing is watching it
-    at all.
+    Checks against scope_device_id's own claims; leaving it unset checks
+    against no claims at all, so every entity comes back as though
+    nothing is tracking it. The response's "scope" field simply echoes
+    scope_device_id's own title back.
   fields:
     entities:
       name: Entities
@@ -544,6 +567,17 @@ check_control:
       selector:
         entity:
           multiple: true
+    scope_device_id:
+      name: Tracking scope
+      description: >-
+        The FLARE state device (Settings -> Devices & Services -> FLARE
+        Tracking) to check these entities' claims against. Leave unset
+        to check against no claims at all.
+      selector:
+        device:
+          filter:
+            - integration: flare
+              model: Tracking Scope
     brightness_tolerance:
       name: Brightness tolerance
       description: >-
@@ -588,8 +622,7 @@ record_write:
     bookkeeping apply_lighting uses internally.
 
     Returns the entities actually recorded, which need not be everything
-    passed in: a light matching no state device isn't tracked, and is
-    skipped.
+    passed in: with no scope_device_id, nothing is recorded at all.
   fields:
     entities:
       name: Entities
@@ -598,6 +631,17 @@ record_write:
       selector:
         entity:
           multiple: true
+    scope_device_id:
+      name: Tracking scope
+      description: >-
+        The FLARE state device (Settings -> Devices & Services -> FLARE
+        Tracking) to record this write into. Leave unset and the call is
+        a no-op - there is nowhere to record into.
+      selector:
+        device:
+          filter:
+            - integration: flare
+              model: Tracking Scope
     targets:
       name: Targets
       description: >-
@@ -615,14 +659,14 @@ record_write:
 clear_claims:
   name: Clear claims
   description: >-
-    Discards entities' tracked observed/latest claims entirely - the
-    manual escape hatch for an entity stuck reporting as overridden with
-    no other way back (a claim can go permanently stale for an entity
-    that's excluded from every future write once overridden, since
-    nothing ever gets the chance to record a fresh one - see
-    the integration reference's "Override protection" section). The next write to
-    a cleared entity, from anyone, is treated exactly like a brand-new
-    entity's first write.
+    Discards entities' tracked observed/latest claims within
+    scope_device_id - the manual escape hatch for an entity stuck
+    reporting as overridden with no other way back (a claim can go
+    permanently stale for an entity that's excluded from every future
+    write once overridden, since nothing ever gets the chance to record
+    a fresh one - see the integration reference's "Override protection"
+    section). The next write to a cleared entity, from anyone, is
+    treated exactly like a brand-new entity's first write.
   fields:
     entities:
       name: Entities
@@ -631,3 +675,14 @@ clear_claims:
       selector:
         entity:
           multiple: true
+    scope_device_id:
+      name: Tracking scope
+      description: >-
+        The FLARE state device (Settings -> Devices & Services -> FLARE
+        Tracking) to clear these entities' claims from. Leave unset and
+        the call is a no-op - there is nothing to clear.
+      selector:
+        device:
+          filter:
+            - integration: flare
+              model: Tracking Scope

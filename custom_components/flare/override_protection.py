@@ -1,8 +1,11 @@
 """
-Decides, for a given entity and caller (`owner_id`), whether a write
-should be allowed through or blocked because something else has
-touched the entity since this caller's own last write - the "override
-protection" mechanism. Pure logic - no `hass` instance needed, same
+Decides, for a given entity, whether a write should be allowed through
+or blocked because something else has touched the entity since - the
+"override protection" mechanism. Which state device an entity's claims
+belong to (its "scope") is decided by the caller, one layer up in
+write_tracking.py; this module only classifies the claims it's handed,
+with no notion of scope or caller identity of its own. Pure logic - no
+`hass` instance needed, same
 pattern as curve.py/scenes.py/grouping.py: HA access (live state,
 Store-backed persistence, the unavailable/recovery listener) stays in
 write_tracking.py, which is the thing that actually calls this module.
@@ -76,7 +79,6 @@ class _ContextClaim(TypedDict):
     # None for a single combined-write claim, which only ever has one
     # context to begin with.
     secondary_context_id: Optional[str]
-    owner_id: Optional[str]
     # ISO 8601, or None for the synthetic first-write baseline (see
     # write_tracking.py's async_record docstring).
     recorded_at: Optional[str]
@@ -198,9 +200,9 @@ def classify(
     brightness_tolerance: int = 2,
     color_temp_tolerance: int = 10,
     rgb_color_tolerance: int = 10,
-) -> tuple[str, Optional[str], Optional[str]]:
+) -> tuple[str, Optional[str]]:
     """The decision table - given everything known about one entity right
-    now, returns `(status, claim_owner_id, matched_via)`.
+    now, returns `(status, matched_via)`.
 
     - `"off"` - not on. Override protection is moot; checked first,
       before any claim.
@@ -237,14 +239,6 @@ def classify(
     Context matching covers *either* of a claim's two context ids; most
     claims have one, a two-step transition's has two.
 
-    `claim_owner_id` is the matching claim's owner, `None` where there's
-    nothing to attribute. Deliberately not resolved against the caller
-    here - that only matters to someone asking "is this mine", never to
-    something merely displaying the classification. Every matched case
-    returns an owner, value-rescues included, so the caller-side check
-    applies uniformly: a light whose value happens to match a
-    *different* owner's target must not read as free-to-manage.
-
     `matched_via` names which claim matched and how -
     `"latest-context"`, `"latest-value"`, `"observed-context"` or
     `"observed-value"` - and is `None` for every other status. Purely
@@ -254,25 +248,25 @@ def classify(
     most recent write is what the bulb is showing, `observed-*` means it
     isn't, and an older write is."""
     if observed is None and latest is None:
-        return ("untracked" if is_on else "off"), None, None
+        return ("untracked" if is_on else "off"), None
     if _context_matches(latest, current_context):
-        return "controlled", latest.get("owner_id"), "latest-context"
+        return "controlled", "latest-context"
     if _context_matches(observed, current_context):
-        return "controlled", observed.get("owner_id"), "observed-context"
+        return "controlled", "observed-context"
     if not is_on:
         # Off is a state a claim can ask for, so it is compared like any
         # other: an off light matches only a claim that asked for off.
         # A claim asking for brightness means somebody else turned this
         # light off, which is an override.
         if _asked_for_off(latest):
-            return "controlled", latest.get("owner_id"), "latest-value"
+            return "controlled", "latest-value"
         if _asked_for_off(observed):
-            return "controlled", observed.get("owner_id"), "observed-value"
+            return "controlled", "observed-value"
         if observed is None:
-            return "untracked", None, None
-        return "overridden", None, None
+            return "untracked", None
+        return "overridden", None
     if observed is None:
-        return "untracked", None, None
+        return "untracked", None
     if latest is not None and target_matches_values(
         latest.get("target"),
         current_brightness,
@@ -282,7 +276,7 @@ def classify(
         color_temp_tolerance,
         rgb_color_tolerance,
     ):
-        return "controlled", latest.get("owner_id"), "latest-value"
+        return "controlled", "latest-value"
     if target_matches_values(
         observed.get("target"),
         current_brightness,
@@ -292,8 +286,8 @@ def classify(
         color_temp_tolerance,
         rgb_color_tolerance,
     ):
-        return "controlled", observed.get("owner_id"), "observed-value"
-    return "overridden", None, None
+        return "controlled", "observed-value"
+    return "overridden", None
 
 
 def is_blocked(status: str, force: bool = False) -> bool:
@@ -302,13 +296,13 @@ def is_blocked(status: str, force: bool = False) -> bool:
     EntityLookup.externally_set() and the check_control service need on
     top of the shared classification, kept here so neither re-derives it.
 
-    There is no longer any owner comparison to make. A light's claims
-    live on exactly one state device, resolved from configuration rather
-    than from whichever caller wrote last (see write_tracking.py's
-    scope_for), so a `controlled` claim is by construction the claim of
-    the scope that owns this light. Two automations driving one room
-    write into the same claims and therefore co-operate, instead of each
-    reading the other as an intruder.
+    There is no owner comparison to make. Which state device an
+    entity's claims live on is the caller's own choice, made once per
+    call (see write_tracking.py) - a `controlled` claim is by
+    construction the claim of whatever scope the caller named. Two
+    callers naming the same scope for one light write into the same
+    claims and therefore co-operate, instead of each reading the other
+    as an intruder.
 
     `force` still bypasses outright."""
     if force:

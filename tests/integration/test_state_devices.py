@@ -73,7 +73,14 @@ def _light(hass: HomeAssistant, entity_id: str, *, area_id=None, device_id=None,
 
 
 async def _record(registry: ClaimRegistry, entity_id: str, context_id: str, target=None):
+    """Resolves the entity's scope the same way a real caller would -
+    look it up, then state it explicitly - rather than relying on the
+    integration to search for it. None (no matching scope at all) is
+    passed straight through; async_record treats that as a no-op, same
+    as any other caller passing no scope."""
+    instance = registry.scope_for(entity_id)
     await registry.async_record(
+        instance.subentry_id if instance else None,
         [entity_id],
         {entity_id: f"before-{entity_id}"},
         context_id,
@@ -135,7 +142,7 @@ async def test_a_light_matching_no_scope_is_not_tracked_and_stays_manageable(has
     await _record(registry, "light.elsewhere", "ctx-1", {"brightness": 200, "color_temp_kelvin": 3000})
     assert registry.all_records() == {}
     # Untracked means classify() has nothing to block on.
-    assert registry.latest_context_id("light.elsewhere") is None
+    assert registry.latest_context_id(None, "light.elsewhere") is None
 
 
 async def test_a_write_before_the_scopes_entity_exists_is_dropped(hass: HomeAssistant):
@@ -211,7 +218,8 @@ async def test_two_callers_writing_one_light_share_the_scopes_claims(hass: HomeA
 
     # One record, in one place, carrying the most recent write.
     assert list(registry.all_records()) == ["light.a"]
-    assert registry.latest_context_id("light.a") == "ctx-automation-two"
+    scope = registry.scope_for("light.a").subentry_id
+    assert registry.latest_context_id(scope, "light.a") == "ctx-automation-two"
 
 
 async def test_a_light_going_unavailable_is_cleared_from_its_scope(hass: HomeAssistant):
@@ -350,6 +358,13 @@ async def test_the_override_event_carries_the_scopes_device_id(hass: HomeAssista
         config_entry_id=entry.entry_id, identifiers=instance.device_info["identifiers"], name="Kitchen"
     )
     tracker = next(e for e in added if hasattr(e, "claims"))
+    # _fire_overridden looks the device up by identifier + config_entry_id
+    # via the entity's own registry_entry - a real added entity has one;
+    # this stripped-down harness needs it set by hand, same as
+    # test_a_state_device_lands_in_the_area_it_targets already does.
+    tracker.registry_entry = er.async_get(hass).async_get_or_create(
+        "sensor", DOMAIN, tracker.unique_id, config_entry=entry, device_id=device.id
+    )
 
     events: list = []
     hass.bus.async_listen("flare_light_overridden", events.append)

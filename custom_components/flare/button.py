@@ -86,7 +86,7 @@ class _ScopeClearButton(ButtonEntity):
         # async_clear publishes the affected scopes and fires
         # SIGNAL_WRITE_TRACKING_UPDATED, so the counters catch up on
         # their own, and it's a no-op for a scope tracking nothing.
-        await self._registry.async_clear(self._tracked())
+        await self._registry.async_clear(self._instance.subentry_id, self._tracked())
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:

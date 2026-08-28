@@ -450,8 +450,27 @@ rather than assumed:
   5813. So `_already_set` accepts the raw target *or* the range-clamped
   one, never only the clamped one.
 - `force` is the only bypass. There is no caller-supplied owner: a
-  light's claims belong to the state device its target covers, so any
-  caller writing that light writes through the same scope.
+  light's claims belong to whatever scope the caller names, so any
+  caller naming that scope writes through it.
+- **Scope is caller-supplied, not resolved.** Every tracking service
+  (`apply_lighting`, `compute_lighting_groups`, `check_control`,
+  `record_write`, `clear_claims`) takes an optional `scope_device_id` -
+  a real HA device, one per state device (`StateInstance.device_info`).
+  `ClaimRegistry.resolve_scope_device()` turns that into a subentry_id;
+  omitting it means "write, but track nothing" (no claim, nothing
+  excluded as externally-set), and a device_id that isn't one of this
+  entry's own state devices raises `ServiceValidationError` rather than
+  behaving like it was omitted. The old implicit resolver,
+  `scope_for()` (entity → device → area, searched across every
+  configured state device), still exists but is internal-only now -
+  used solely by the three call sites with no caller to ask at all:
+  `async_start_listening`'s state-changed listener, `_release_if_dark`,
+  and `async_prune_stale`. The blueprint resolves `scope_device_id`
+  itself from `room_target` (its own `tracking_scope_device_id`
+  variable) - area named directly wins outright, entities/a device with
+  no area fall back to the first resolved light's own area - so this is
+  invisible to a room automation; it only surfaces when calling the
+  services directly.
 - **Being switched off is an override.** `classify()` does *not*
   short-circuit on `not is_on`; an off light is judged against its
   claims like any other. A turn-off records `{"state": "off"}` as its

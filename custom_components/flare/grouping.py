@@ -109,11 +109,9 @@ class EntityLookup:
         color_temp_tolerance: int = 10,
         rgb_color_tolerance: int = 10,
     ) -> bool:
-        """True if the entity is on and something other than *this*
-        caller's own last apply_lighting write has touched it since - a
-        person, another automation, a device regaining power under a
-        fresh context, or a different apply_lighting caller (identified
-        by owner_id, e.g. another room's automation).
+        """True if the entity is on and something other than the caller's
+        own last write to it has touched it since - a person, another
+        automation, or a device regaining power under a fresh context.
 
         A thin adapter: it gathers this entity's two claims plus its live
         state and hands them to override_protection.classify() /
@@ -124,17 +122,12 @@ class EntityLookup:
         external touch; write_tracking.py's module docstring covers why
         there are two claims rather than one.
 
-        force bypasses the check outright, regardless of owner_id.
-        Deliberately distinct from omitting owner_id, which also
-        bypasses: force still lets the caller claim an identity for the
-        write that follows, so a later non-forced call with that same
-        owner_id recognises it as its own instead of finding an orphaned
-        record. Without that distinction a forced write would leave the
-        entity looking permanently externally-set to its own regular
-        caller from the very next tick.
+        Which claims this entity's accessors read is decided one layer
+        up, by whichever scope the caller resolved and bound into this
+        EntityLookup (see __init__.py's _build_lookup) - this method has
+        no notion of scope itself, just entity_id in, blocked or not out.
 
-        owner_id is the caller's own identity, entirely optional - None
-        (the default) means "I don't care who touched this last"."""
+        force bypasses the check outright."""
         observed_ctx = self.observed_context_id(entity_id)
         observed = (
             {
@@ -156,7 +149,7 @@ class EntityLookup:
             else None
         )
 
-        status, _claim_owner, _matched_via = classify(
+        status, _matched_via = classify(
             self.is_state(entity_id, "on"),
             observed,
             latest,
@@ -288,12 +281,9 @@ def build_groups(
     rgb_color given, and combined_rgb/two_step_rgb are always empty -
     behaviour is otherwise identical to before this parameter existed.
 
-    owner_id/force: this caller's own identity and whether to bypass
-    protection outright, passed straight through to every
-    EntityLookup.externally_set() check - see its docstring for the full
-    semantics, including why force (not just omitting owner_id) is the
-    right way to bypass protection for a caller that still wants its
-    write recognised as its own next time."""
+    force: whether to bypass override protection outright, passed
+    straight through to every EntityLookup.externally_set() check - see
+    its docstring for the full semantics."""
     use_rgb = prefer_rgb_color and rgb_color is not None
     groups = []
     for multiplier, group_entities in _bucket_by_multiplier(entities, brightness_multipliers).items():
