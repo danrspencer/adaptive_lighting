@@ -7,6 +7,25 @@ The version in `custom_components/flare/manifest.json` is what
 HACS shows as installed, so it and the release tag are checked against each other in
 CI — see `.github/workflows/release.yml`.
 
+## [0.8.0] - 2026-08-28
+
+### Changed
+
+- **`scope_device_id` is now required on `check_control`, `record_write`
+  and `clear_claims`.** Each of those exists only to read or write
+  tracking claims, so a call naming nothing has nothing useful to do -
+  the schema now rejects a missing/null scope outright rather than
+  always answering "untracked" or silently recording/clearing nothing.
+  `apply_lighting`/`compute_lighting_groups` are unaffected - both stay
+  optional, since either still does something useful (dispatch/plan
+  lights) with no scope at all.
+- The blueprint's own `record_write`/`clear_claims` calls are now
+  skipped, not sent, when Room Target resolves to no tracking scope -
+  the turn-off/hand-off still happens, it just isn't recorded. Re-import
+  the blueprint alongside this release; without it, a room with no
+  resolvable scope would otherwise send a now-invalid call and fail its
+  tick.
+
 ## [0.7.0] - 2026-08-28
 
 ### Changed
