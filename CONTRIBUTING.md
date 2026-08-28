@@ -67,10 +67,12 @@ blueprints/automation/danspencer/flare.yaml
     and the action sequence (which service to call, with what target).
 
 dashboard/
-    house-settings-card.yaml   the curve card alone, to drop into a view
-    flare-section.yaml         a fuller section: curve card, phase
-                               override, and every schedule/curve
-                               config entity, laid out as tiles
+    house-settings-card.yaml   the curve card alone, to drop into a view.
+                               The fuller section (curve card, phase
+                               override, and every schedule/curve config
+                               entity as tiles) is generated on the docs
+                               site instead - see docs/dashboard.html
+                               below, not committed as a static file here.
 
 tests/
     pytest suite for curve.py, grouping.py, and scenes.py.
@@ -78,6 +80,9 @@ tests/
 docs/
     index.md          the pitch, and what the four phases are for
     installation.md   quickstart: HACS, blueprint, dashboard card
+    dashboard.html     generates the fuller dashboard section (curve +
+                       phase override + every schedule/curve entity) from
+                       a schedule sensor's slug - nested under Quickstart
     playground.html   the interactive curve, running the real card
     blueprint.md      full feature/input reference for the blueprint
     advanced/         power-user reference: services, scene handoff,
