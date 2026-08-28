@@ -7,6 +7,35 @@ The version in `custom_components/flare/manifest.json` is what
 HACS shows as installed, so it and the release tag are checked against each other in
 CI — see `.github/workflows/release.yml`.
 
+## [0.9.0] - 2026-08-28
+
+### Changed
+
+- **`scope_device_id` is renamed to `tracking_device_id`** across all
+  five services. It was reusing "scope" for an unrelated concept already
+  spoken for by `compute_scene_coverage`'s own `scope_entities` field -
+  the exact collision the blueprint's Jinja variable
+  (`tracking_scope_device_id`) was already renamed once to avoid.
+  Re-import the blueprint alongside this release; without it, every
+  automation still sending the old field name stops tracking its lights
+  (they still get driven correctly, just without override protection)
+  until it's updated.
+- **`compute_scene_coverage`'s `scene_entity_id` is now required.** The
+  service answers a question about one specific scene, and with no
+  candidate scene this tick the caller already knows the answer
+  (nothing's covered) without asking - same reasoning as the
+  `check_control`/`record_write`/`clear_claims` change in 0.8.0. The
+  blueprint doesn't call this service today (it keeps its own inline
+  Jinja version), so this has no effect on the shipped automation - it
+  only affects direct callers.
+- Two `services.yaml` selector fixes found in the same review:
+  `compute_scene_coverage`'s `target_entities` now correctly declares
+  `multiple: true` (it was rendering as a single-entity picker in
+  Developer Tools -> Actions despite the backend requiring a list), and
+  `record_write`'s `targets` field no longer declares `object:
+  multiple: true`, aligning it with the structurally identical
+  `brightness_multipliers` field - both are maps, not lists.
+
 ## [0.8.0] - 2026-08-28
 
 ### Changed
