@@ -7,6 +7,23 @@ The version in `custom_components/flare/manifest.json` is what
 HACS shows as installed, so it and the release tag are checked against each other in
 CI — see `.github/workflows/release.yml`.
 
+## [0.9.3] - 2026-08-28
+
+### Fixed
+
+- **Overriding the day phase now shows that phase's own values, not the
+  next phase's.** `_value_at()`'s ramp-easing math computed the
+  interpolation factor from the real clock relative to the requested
+  phase's own natural time span, then clamped it to `[0, 1]` - which
+  stops the ramp extrapolating past the next phase's value, but doesn't
+  stop it sliding all the way *to* that value once the real time is
+  anywhere past the phase's own end. Forcing `select.<slug>_flare_phase`
+  to "Night" during actual evening real time showed Morning's
+  brightness/colour (255/7000K) instead of Night's own (80/2700K); the
+  same happened forcing any other phase. Fixed by holding the phase's
+  own value once real time is strictly past its span's end, rather than
+  falling through to the ramp/clamp computation.
+
 ## [0.9.2] - 2026-08-28
 
 ### Fixed
