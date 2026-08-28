@@ -380,7 +380,7 @@ compute_curve:
         brightness toward the next
         phase's, so it arrives exactly as that phase begins. 0 is a hard
         cut. A value longer than Morning lasts covers the whole phase.
-      default: 30
+      default: 60
       selector:
         number:
           min: 0
@@ -393,7 +393,7 @@ compute_curve:
         colour temperature toward the next
         phase's, so it arrives exactly as that phase begins. 0 is a hard
         cut. A value longer than Morning lasts covers the whole phase.
-      default: 30
+      default: 60
       selector:
         number:
           min: 0
@@ -406,7 +406,7 @@ compute_curve:
         brightness toward the next
         phase's, so it arrives exactly as that phase begins. 0 is a hard
         cut. A value longer than Day lasts covers the whole phase.
-      default: 0
+      default: 65
       selector:
         number:
           min: 0
@@ -458,7 +458,7 @@ compute_curve:
         brightness toward the next
         phase's, so it arrives exactly as that phase begins. 0 is a hard
         cut. A value longer than Night lasts covers the whole phase.
-      default: 15
+      default: 30
       selector:
         number:
           min: 0

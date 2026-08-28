@@ -319,3 +319,28 @@ def test_build_points_produces_a_full_day_of_real_numbers():
         assert case["finite"], f"value set {i} produced NaN - buildPoints is being called wrongly"
         low, high = case["brightnessRange"]
         assert low < high, f"value set {i} never changes brightness across the whole day"
+
+
+DEFAULTS_DRIVER = f"""
+import {{ DEFAULT_CURVE_VALUES }} from {json.dumps(CURVE_JS.as_posix())};
+process.stdout.write(JSON.stringify({{ out: DEFAULT_CURVE_VALUES }}));
+"""
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")
+def test_the_two_default_sets_are_identical():
+    """The grid above always passes explicit values into the JS, so it
+    proves the two implementations agree on the *maths* while never
+    looking at what either one uses when told nothing. That matters:
+    curve.js's defaults are what the playground opens on, so a drift here
+    shows every visitor a curve the integration would never produce."""
+    js = _node_eval(DEFAULTS_DRIVER, {})["out"]
+
+    assert js == DEFAULT_CURVE_VALUES, (
+        "curve.js's DEFAULT_CURVE_VALUES has drifted from curve.py's:\n"
+        + "\n".join(
+            f"  {k}: py={DEFAULT_CURVE_VALUES.get(k, '<missing>')} js={js.get(k, '<missing>')}"
+            for k in sorted(set(DEFAULT_CURVE_VALUES) | set(js))
+            if DEFAULT_CURVE_VALUES.get(k) != js.get(k)
+        )
+    )
