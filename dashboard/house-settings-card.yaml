@@ -27,7 +27,8 @@
 #        sun.sun (optional, same reason as evening's earliest/latest)
 #
 # For the curve graph plus the override and every config entity in one
-# section, see flare-section.yaml instead.
+# section, use the dashboard section generator instead:
+# https://danrspencer.github.io/flare/installation/dashboard/
 
 type: heading
 heading: Adaptive Lighting Curve

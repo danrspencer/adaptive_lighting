@@ -1,0 +1,126 @@
+/* Styles for the dashboard section generator (docs/dashboard.html).
+   Scoped under .dgen- prefixes so nothing here leaks into the rest of
+   the just-the-docs theme. */
+
+.dgen-panel {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 0 1.6rem;
+  border: 1px solid #e6e1e8;
+  border-radius: 8px;
+  padding: 0.9rem 1.1rem 1.1rem;
+  margin: 0 0 1.25rem;
+  background: #fdfdfe;
+}
+
+.dgen-field {
+  padding: 0.3rem 0;
+}
+
+.dgen-field label {
+  display: block;
+  font-size: 0.8rem;
+  font-weight: 500;
+  margin: 0 0 0.3rem;
+}
+
+.dgen-field input[type='text'] {
+  width: 100%;
+  box-sizing: border-box;
+  font: inherit;
+  font-size: 0.9rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid #d5d0da;
+  border-radius: 6px;
+  background: #fff;
+  color: #27262b;
+}
+
+.dgen-field input[type='text']:focus {
+  outline: none;
+  border-color: #7253ed;
+  box-shadow: 0 0 0 2px rgba(114, 83, 237, 0.15);
+}
+
+.dgen-hint {
+  margin: 0.35rem 0 0;
+  font-size: 0.75rem;
+  color: #5c5962;
+}
+
+.dgen-output-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  color: #5c5962;
+  margin: 0 0 0.4rem;
+}
+
+.dgen-output {
+  border: 1px solid #e6e1e8;
+  border-radius: 8px;
+  padding: 0.9rem 1.1rem;
+  background: #fdfdfe;
+  max-height: 480px;
+  overflow: auto;
+  margin: 0 0 0.4rem;
+}
+
+.dgen-output code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+  line-height: 1.5;
+  white-space: pre;
+  color: #27262b;
+  background: none;
+  padding: 0;
+}
+
+.dgen-btn {
+  font: inherit;
+  font-size: 0.8rem;
+  padding: 0.35rem 0.8rem;
+  border: 1px solid #d5d0da;
+  border-radius: 6px;
+  background: #fff;
+  color: #27262b;
+  cursor: pointer;
+}
+
+.dgen-btn:hover {
+  background: #f2eefe;
+  border-color: #b9a6f5;
+}
+
+.dgen-btn--primary {
+  background: #7253ed;
+  border-color: #7253ed;
+  color: #fff;
+}
+
+.dgen-btn--primary:hover {
+  background: #5d3fd6;
+  border-color: #5d3fd6;
+  color: #fff;
+}
+
+.dgen-status {
+  font-size: 0.75rem;
+  color: #5c5962;
+  min-height: 1.2em;
+  margin: 0 0 1.25rem;
+}
+
+.dgen-note {
+  font-size: 0.75rem;
+  line-height: 1.5;
+  color: #5c5962;
+  background: #f7f6f9;
+  border-left: 3px solid #d5d0da;
+  padding: 0.6rem 0.85rem;
+  border-radius: 0 4px 4px 0;
+  margin: 0 0 1.5rem;
+}

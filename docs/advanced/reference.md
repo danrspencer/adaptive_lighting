@@ -382,7 +382,7 @@ There are no separate boundary sensors: a phase-change automation needs only a
 `points` does **not** follow a manual phase override, unlike the other attributes — it's a full-day schedule,
 not a right-now value.
 
-For a dashboard,
-[dashboard/flare-section.yaml](https://github.com/danrspencer/flare/blob/main/dashboard/flare-section.yaml) is a
-copy-paste section with the curve card, the phase override and every schedule and curve entity as tiles. The
-sensor's own device page already groups the same entities for free.
+For a dashboard, the
+[dashboard section generator](../../installation/dashboard/) builds a copy-paste section with the curve card,
+the phase override and every schedule and curve entity as tiles, from the schedule sensor's slug. The sensor's
+own device page already groups the same entities for free.

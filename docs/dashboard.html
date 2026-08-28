@@ -1,0 +1,62 @@
+---
+title: Dashboard section generator
+parent: Quickstart
+nav_order: 1
+permalink: /installation/dashboard/
+---
+
+<h1>Dashboard section generator</h1>
+
+<p>
+  Every schedule sensor (Settings &rarr; Devices &amp; Services &rarr; <strong>FLARE
+  Schedules</strong> &rarr; Add schedule sensor) gets the same shape of dashboard
+  section: the curve, a phase override, the five schedule times, the eight curve
+  values, and the eight transition minutes. Typing the slug once below builds the
+  whole thing instead of hand-editing 25 entity IDs.
+</p>
+
+<div class="dgen-panel">
+  <div class="dgen-field">
+    <label for="dgen-slug">Schedule sensor slug</label>
+    <input type="text" id="dgen-slug" placeholder="downstairs" autocomplete="off" spellcheck="false" />
+    <p class="dgen-hint">
+      The part before <code>_flare</code> in the schedule sensor's entity ID —
+      <code>downstairs</code> for <code>sensor.downstairs_flare</code>.
+    </p>
+  </div>
+  <div class="dgen-field">
+    <label for="dgen-title">Section heading</label>
+    <input type="text" id="dgen-title" placeholder="Downstairs" autocomplete="off" spellcheck="false" />
+    <p class="dgen-hint">
+      What the card shows at the top. Filled in from the slug — edit it if you want
+      something else shown.
+    </p>
+  </div>
+</div>
+
+<div class="dgen-output-header">
+  <span>Paste into a <strong>sections</strong> view's raw YAML editor</span>
+  <button type="button" class="dgen-btn dgen-btn--primary" id="dgen-copy">Copy to clipboard</button>
+</div>
+<pre class="dgen-output"><code id="dgen-yaml"></code></pre>
+<p class="dgen-status" id="dgen-status"></p>
+
+<p class="dgen-note">
+  <code>column_span: 4</code> on the outer grid and <code>grid_options: {columns: full}</code>
+  on the curve card aren't decorative — a card inside a <code>sections</code> view doesn't
+  inherit its section's full width just because the section itself is full-width,
+  so both are needed for the curve to actually span the section instead of rendering
+  at roughly a third of it.
+</p>
+
+<h2 id="repeat-per-schedule">Repeat per schedule</h2>
+
+<p>
+  One section per schedule sensor — drop each one into its own <code>sections</code>
+  view column, or stack several in the same column if you'd rather. Nothing here
+  reads a live sensor's actual values; it only builds entity IDs from the slug you
+  give it, so it works whether or not that schedule exists yet.
+</p>
+
+<link rel="stylesheet" href="{{ '/assets/css/dashboard-generator.css' | relative_url }}" />
+<script type="module" src="{{ '/assets/js/dashboard-generator.js' | relative_url }}"></script>
