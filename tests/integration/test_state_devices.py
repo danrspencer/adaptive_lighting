@@ -22,6 +22,7 @@ from custom_components.flare.const import (
     CONF_ENTRY_TYPE,
     CONF_TARGET,
     DOMAIN,
+    ENTRY_TYPE_SCHEDULES,
     ENTRY_TYPE_TRACKING,
     SUBENTRY_TYPE_STATE,
 )
@@ -316,6 +317,10 @@ def stub_entry_setup(hass: HomeAssistant):
     return hass
 
 
+def _entry_of_type(hass: HomeAssistant, entry_type: str):
+    return next(e for e in hass.config_entries.async_entries(DOMAIN) if e.data.get(CONF_ENTRY_TYPE) == entry_type)
+
+
 async def test_setup_offers_one_state_device_per_area_that_has_lights(stub_entry_setup, hass: HomeAssistant):
     """A room is the unit almost everyone wants to track by, so the list
     arrives pre-selected rather than as a wall of work. Areas with no
@@ -333,8 +338,6 @@ async def test_setup_offers_one_state_device_per_area_that_has_lights(stub_entry
     er.async_get(hass).async_update_entity(door.entity_id, area_id=garage.id)
 
     result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
-    assert result["type"] == "menu"
-    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"next_step_id": "tracking"})
     assert result["type"] == "form"
     suggested = result["data_schema"]({})["areas"]
     assert sorted(suggested) == sorted([hall.id, kitchen.id])
@@ -342,21 +345,82 @@ async def test_setup_offers_one_state_device_per_area_that_has_lights(stub_entry
     result = await hass.config_entries.flow.async_configure(result["flow_id"], {"areas": [kitchen.id]})
 
     assert result["type"] == "create_entry"
-    entry = hass.config_entries.async_entries(DOMAIN)[0]
-    scopes = state_instances(entry)
+    scopes = state_instances(_entry_of_type(hass, ENTRY_TYPE_TRACKING))
     assert [s.title for s in scopes] == ["Kitchen"]
     assert scopes[0].target == {"area_id": [kitchen.id]}
 
 
-async def test_setup_with_no_areas_creates_the_entry_and_no_scopes(stub_entry_setup, hass: HomeAssistant):
-    """Nothing here is required. With no areas there is nothing to
-    offer, so the entry is created straight away and lights simply stay
-    untracked until a state device exists."""
+async def test_adding_the_integration_once_creates_both_entries(stub_entry_setup, hass: HomeAssistant):
+    """Two entries is a grouping decision, not a reason to walk through
+    Add Integration twice. The one the flow finishes on must be
+    Schedules: HA's "integration added" dialog shows an unsuppressable
+    rename + area form for every device on the completing flow's entry,
+    and Tracking is the half that seeds a device per room."""
+    kitchen = ar.async_get(hass).async_get_or_create("Kitchen")
+    _light(hass, "light.k", area_id=kitchen.id)
+
     result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
-    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"next_step_id": "tracking"})
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"areas": [kitchen.id]})
+    await hass.async_block_till_done()
 
     assert result["type"] == "create_entry"
-    assert state_instances(hass.config_entries.async_entries(DOMAIN)[0]) == []
+    assert result["title"] == "FLARE Schedules"
+    assert {e.data[CONF_ENTRY_TYPE] for e in hass.config_entries.async_entries(DOMAIN)} == {
+        ENTRY_TYPE_SCHEDULES,
+        ENTRY_TYPE_TRACKING,
+    }
+    assert [s.title for s in state_instances(_entry_of_type(hass, ENTRY_TYPE_TRACKING))] == ["Kitchen"]
+
+
+async def test_the_missing_half_can_be_added_back_on_its_own(stub_entry_setup, hass: HomeAssistant):
+    """Deleting one entry has to be recoverable. With Schedules already
+    present the flow creates only Tracking - and this time Tracking is
+    what the flow itself returns, since there is no second entry to
+    hand the visible completion to."""
+    kitchen = ar.async_get(hass).async_get_or_create("Kitchen")
+    _light(hass, "light.k", area_id=kitchen.id)
+    MockConfigEntry(
+        domain=DOMAIN,
+        data={CONF_ENTRY_TYPE: ENTRY_TYPE_SCHEDULES},
+        unique_id=f"{DOMAIN}_{ENTRY_TYPE_SCHEDULES}",
+        version=3,
+    ).add_to_hass(hass)
+
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {"areas": [kitchen.id]})
+    await hass.async_block_till_done()
+
+    assert result["type"] == "create_entry"
+    assert result["title"] == "FLARE Tracking"
+    assert len(hass.config_entries.async_entries(DOMAIN)) == 2
+
+
+async def test_adding_it_again_with_both_present_aborts(stub_entry_setup, hass: HomeAssistant):
+    """Nothing left to create, and neither half may be duplicated."""
+    for entry_type in (ENTRY_TYPE_SCHEDULES, ENTRY_TYPE_TRACKING):
+        MockConfigEntry(
+            domain=DOMAIN,
+            data={CONF_ENTRY_TYPE: entry_type},
+            unique_id=f"{DOMAIN}_{entry_type}",
+            version=3,
+        ).add_to_hass(hass)
+
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
+
+    assert result["type"] == "abort"
+    assert result["reason"] == "already_configured"
+    assert len(hass.config_entries.async_entries(DOMAIN)) == 2
+
+
+async def test_setup_with_no_areas_creates_the_entry_and_no_scopes(stub_entry_setup, hass: HomeAssistant):
+    """Nothing here is required. With no areas there is nothing to
+    offer, so both entries are created straight away and lights simply
+    stay untracked until a state device exists."""
+    result = await hass.config_entries.flow.async_init(DOMAIN, context={"source": "user"})
+    await hass.async_block_till_done()
+
+    assert result["type"] == "create_entry"
+    assert state_instances(_entry_of_type(hass, ENTRY_TYPE_TRACKING)) == []
 
 
 # --- upgrading an existing entry -----------------------------------------

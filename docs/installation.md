@@ -39,13 +39,18 @@ with type **Integration**. Then find **FLARE** in the HACS list and download it.
 
 Restart Home Assistant, then **Settings → Devices & Services → Add Integration → FLARE**.
 
-FLARE installs as two entries, and you'll want both:
+Adding it once creates both of FLARE's entries. The only thing it asks for is which
+rooms to track:
 
 - **FLARE Schedules** — the day-phase and colour curve. Add a schedule sensor per part of
   the house that should share a rhythm; one for the whole house is fine to start.
-- **FLARE Tracking** — which lights FLARE is currently driving. It offers a tracking scope
-  per area that contains lights, pre-selected. Trim it if you like; anything you leave out
-  simply isn't tracked.
+- **FLARE Tracking** — which lights FLARE is currently driving. Every area containing
+  lights is offered, pre-selected, and each one you keep becomes a tracking scope. Trim
+  the list if you like; anything you leave out simply isn't tracked.
+
+They stay two entries because schedules and tracking are different kinds of thing, and
+Home Assistant groups an integration's page by entry. You can add, retarget or remove
+scopes at any time from the Tracking entry.
 
 Each schedule sensor gets its own device carrying the five phase boundaries and eight
 brightness/Kelvin values as ordinary entities. Adjust them any time — no reconfigure flow.

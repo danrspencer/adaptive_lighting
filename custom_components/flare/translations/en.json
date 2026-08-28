@@ -3,15 +3,7 @@
     "step": {
       "user": {
         "title": "FLARE",
-        "description": "This installs as two separate entries so the two kinds of thing stay apart. Add whichever you need - most people want both.",
-        "menu_options": {
-          "schedules": "Schedules — day-phase and colour curve sensors",
-          "tracking": "Tracking — which lights adaptive lighting currently controls"
-        }
-      },
-      "tracking": {
-        "title": "FLARE Tracking",
-        "description": "Registers the apply_lighting, compute_lighting_groups, compute_curve, compute_scene_coverage and ownership services, and tracks which lights are currently being driven.\n\nPick the rooms to track separately - each becomes a state device with its own controlled/overridden counts and a Clear button. Lights in an area you don't pick simply aren't tracked, which means they're never left alone when something else takes them. You can add, retarget or remove these at any time.",
+        "description": "Installs both halves. Schedules provides the day-phase and colour curve sensors; Tracking registers the apply_lighting, compute_lighting_groups, compute_curve, compute_scene_coverage and ownership services and keeps track of which lights are currently being driven.\n\nPick the rooms to track - each becomes a state device with its own controlled/overridden counts and a Clear button. Lights in an area you don't pick simply aren't tracked, which means they're never left alone when something else takes them. You can add, retarget or remove these at any time, and add schedule sensors from the Schedules entry once it exists.",
         "data": {
           "areas": "Rooms to track"
         }

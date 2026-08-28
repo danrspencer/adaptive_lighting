@@ -1,3 +1,5 @@
+<img src="https://raw.githubusercontent.com/danrspencer/flare/main/custom_components/flare/brand/icon.png" alt="" width="88">
+
 # FLARE
 
 **F**lexible **L**ighting **A**utomation & **R**econciliation **E**ngine.
