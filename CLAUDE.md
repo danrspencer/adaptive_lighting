@@ -802,9 +802,23 @@ HA derives the id from the name at creation.
   (`custom_components/flare/brand/`, HA 2026.3.0+),
   not the repo root. `home-assistant/brands` no longer accepts custom
   integrations. Root `brand/` is authoring tooling only; the served PNGs
-  need re-rendering by hand after a design change. HACS's own store icon
-  ignores HA's local brands API ([hacs/integration#5171](https://github.com/hacs/integration/issues/5171));
-  HA's native UI is unaffected.
+  need re-rendering by hand after a design change. HA serves them from
+  `/api/brands/integration/flare/icon.png`, gated on `has_branding` -
+  which is just `"brand" in top_level_files` (`loader.py`), so the
+  directory existing in the installed folder is the whole requirement,
+  no manifest key.
+
+  **Every HACS-rendered surface ignores that and is not fixable from
+  here** ([hacs/integration#5171](https://github.com/hacs/integration/issues/5171)).
+  Verified rather than assumed: HACS sets its update entity's
+  `entity_picture` to `https://brands.home-assistant.io/_/flare/icon.png`
+  outright, and that CDN returns **200 for any domain at all** - a
+  generated grey placeholder - so there is no 404 to detect and nothing
+  a repo-side change can influence. That covers both the HACS store card
+  and Settings -> System -> Updates, since the latter renders HACS's
+  entity. HA's own integrations page uses the local path and is
+  unaffected. The one HACS surface we *can* reach is the README, which
+  it renders in the repository panel - hence the icon at the top of it.
 - pyscript is fully gone from both this repo and the live host.
 - **The docs site is how the card gets previewed without HA.**
   `docs/playground.html` loads the real
