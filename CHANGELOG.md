@@ -7,6 +7,19 @@ The version in `custom_components/flare/manifest.json` is what
 HACS shows as installed, so it and the release tag are checked against each other in
 CI — see `.github/workflows/release.yml`.
 
+## [0.4.1] - 2026-08-28
+
+### Fixed
+
+- The dashboard card's default title was still "Adaptive Lighting".
+- The curve playground drew nothing: its `buildPoints` still called
+  `targetsForPhase` with the pre-transitions signature, so every point
+  came out NaN. The parity test drives the two per-phase functions
+  directly and never exercised `buildPoints`, so nothing caught it -
+  that gap is now covered.
+- Transition durations were displayed with the time-of-day formatter,
+  which wraps at 1440, so a whole-phase transition read as "00:00".
+
 ## [0.4.0] - 2026-08-28
 
 Every phase transition is now configurable, and Day is no longer a
