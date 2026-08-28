@@ -7,6 +7,18 @@ The version in `custom_components/flare/manifest.json` is what
 HACS shows as installed, so it and the release tag are checked against each other in
 CI — see `.github/workflows/release.yml`.
 
+## [0.3.1] - 2026-08-28
+
+### Fixed
+
+- Every GitHub and documentation-site URL now points at the renamed
+  `danrspencer/flare` repository, including the HACS custom-repository
+  URL and the blueprint import badge. The site is published at
+  `/flare/`.
+- The README - which HACS renders as the store page - was still
+  describing "Adaptive Lighting" and linking to a documentation page the
+  restructure had removed.
+
 ## [0.3.0] - 2026-08-28
 
 Renamed to **FLARE** (Flexible Lighting Automation & Reconciliation Engine).
