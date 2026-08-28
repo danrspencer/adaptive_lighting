@@ -35,22 +35,30 @@ function titleCase(slug) {
     .join(' ');
 }
 
-// Phase/Sticky and the five schedule times stay tile cards - neither a
-// select nor a time value has a meaningful "how full is this" reading,
-// which is what a gauge is for. Phase gets the select-options feature so
-// it's an inline dropdown rather than tap-to-open; a time entity has no
-// stock inline-editable feature at all, so tile (tap opens the time
-// picker) is already the best available option for it.
+// Phase/Sticky and the five schedule times stay plain tile cards - Phase
+// gets the select-options feature so it's an inline dropdown rather than
+// tap-to-open; a time entity has no stock inline-editable feature at
+// all, so tile (tap opens the time picker) is already the best available
+// option for it.
 //
-// The eight curve values and eight transition minutes are exactly what
-// a gauge is for: each is a single number in a fixed, known range
-// (brightness 0-255, colour temperature 1000-10000 Kelvin, transition
-// 0-1440 minutes - see number.py's _CurveNumber), and seeing where today's
-// value sits in that range at a glance is the actual point of glancing at
-// this section. These entities are also configured mode: "box" rather
-// than a slider (precise Kelvin/minute entry doesn't suit dragging), so a
-// gauge's tap-through-to-more-info editing matches how they're meant to
-// be set anyway - a tile's inline slider feature would fight that.
+// The eight curve values and eight transition minutes are each a tile
+// carrying the numeric-input feature (style: slider) - a first attempt
+// used gauge cards instead, on the theory that seeing where today's
+// value sits in a fixed range (brightness 0-255, colour temperature
+// 1000-10000 Kelvin, transition 0-1440 minutes - see number.py's
+// _CurveNumber) was the point of glancing at this section. Wrong in
+// practice: a gauge is read-only in Home Assistant, tapping it only
+// opens the more-info dialog - and this section is a control panel, not
+// a readout, so losing the drag was a real regression. numeric-input
+// restores it, and reads the entity's own configured min/max/step
+// directly (confirmed against Home Assistant's own docs -
+// https://www.home-assistant.io/dashboards/features/), so unlike the
+// gauge version this generator carries no hardcoded ranges of its own to
+// drift from number.py's if they ever change. style: slider overrides
+// the entity's own mode: "box" more-info preference deliberately - fast
+// drag-to-set on the dashboard and precise typed entry (still mode: box,
+// via the entity's own more-info dialog opened another way) are two
+// different, both still available, ways to set the same value.
 //
 // grid_options.columns is out of the SECTION's own 12-column grid (see
 // CLAUDE.md lesson 15) - 12 is one full-width row per card, which is what
@@ -121,68 +129,68 @@ cards:
   - type: heading
     heading: Curve
     heading_style: subtitle
-  - type: gauge
+  - type: tile
     entity: number.${slug}_morning_brightness
     name: Morning brightness
-    min: 0
-    max: 255
-    needle: true
+    features:
+      - type: numeric-input
+        style: slider
     grid_options:
       columns: 3
-  - type: gauge
+  - type: tile
     entity: number.${slug}_morning_kelvin
     name: Morning colour temp
-    min: 1000
-    max: 10000
-    needle: true
+    features:
+      - type: numeric-input
+        style: slider
     grid_options:
       columns: 3
-  - type: gauge
+  - type: tile
     entity: number.${slug}_day_brightness
     name: Day brightness
-    min: 0
-    max: 255
-    needle: true
+    features:
+      - type: numeric-input
+        style: slider
     grid_options:
       columns: 3
-  - type: gauge
+  - type: tile
     entity: number.${slug}_day_kelvin
     name: Day colour temp
-    min: 1000
-    max: 10000
-    needle: true
+    features:
+      - type: numeric-input
+        style: slider
     grid_options:
       columns: 3
-  - type: gauge
+  - type: tile
     entity: number.${slug}_evening_brightness
     name: Evening brightness
-    min: 0
-    max: 255
-    needle: true
+    features:
+      - type: numeric-input
+        style: slider
     grid_options:
       columns: 3
-  - type: gauge
+  - type: tile
     entity: number.${slug}_evening_kelvin
     name: Evening colour temp
-    min: 1000
-    max: 10000
-    needle: true
+    features:
+      - type: numeric-input
+        style: slider
     grid_options:
       columns: 3
-  - type: gauge
+  - type: tile
     entity: number.${slug}_night_brightness
     name: Night brightness
-    min: 0
-    max: 255
-    needle: true
+    features:
+      - type: numeric-input
+        style: slider
     grid_options:
       columns: 3
-  - type: gauge
+  - type: tile
     entity: number.${slug}_night_kelvin
     name: Night colour temp
-    min: 1000
-    max: 10000
-    needle: true
+    features:
+      - type: numeric-input
+        style: slider
     grid_options:
       columns: 3
   - type: heading
@@ -196,68 +204,68 @@ cards:
       How long before each phase ends to start easing into the next one, in
       minutes. 0 is a hard cut. Values are clamped to the phase, so anything
       longer than the phase itself means "ease across the whole phase".
-  - type: gauge
+  - type: tile
     entity: number.${slug}_morning_brightness_transition
     name: Morning brightness
-    min: 0
-    max: 1440
-    needle: true
+    features:
+      - type: numeric-input
+        style: slider
     grid_options:
       columns: 3
-  - type: gauge
+  - type: tile
     entity: number.${slug}_morning_kelvin_transition
     name: Morning colour
-    min: 0
-    max: 1440
-    needle: true
+    features:
+      - type: numeric-input
+        style: slider
     grid_options:
       columns: 3
-  - type: gauge
+  - type: tile
     entity: number.${slug}_day_brightness_transition
     name: Day brightness
-    min: 0
-    max: 1440
-    needle: true
+    features:
+      - type: numeric-input
+        style: slider
     grid_options:
       columns: 3
-  - type: gauge
+  - type: tile
     entity: number.${slug}_day_kelvin_transition
     name: Day colour
-    min: 0
-    max: 1440
-    needle: true
+    features:
+      - type: numeric-input
+        style: slider
     grid_options:
       columns: 3
-  - type: gauge
+  - type: tile
     entity: number.${slug}_evening_brightness_transition
     name: Evening brightness
-    min: 0
-    max: 1440
-    needle: true
+    features:
+      - type: numeric-input
+        style: slider
     grid_options:
       columns: 3
-  - type: gauge
+  - type: tile
     entity: number.${slug}_evening_kelvin_transition
     name: Evening colour
-    min: 0
-    max: 1440
-    needle: true
+    features:
+      - type: numeric-input
+        style: slider
     grid_options:
       columns: 3
-  - type: gauge
+  - type: tile
     entity: number.${slug}_night_brightness_transition
     name: Night brightness
-    min: 0
-    max: 1440
-    needle: true
+    features:
+      - type: numeric-input
+        style: slider
     grid_options:
       columns: 3
-  - type: gauge
+  - type: tile
     entity: number.${slug}_night_kelvin_transition
     name: Night colour
-    min: 0
-    max: 1440
-    needle: true
+    features:
+      - type: numeric-input
+        style: slider
     grid_options:
       columns: 3
 `;
