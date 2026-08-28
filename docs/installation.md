@@ -32,8 +32,8 @@ https://github.com/danrspencer/flare
 with type **Integration**. Then find **FLARE** in the HACS list and download it.
 
 {: .tip }
-> The dashboard card ships inside the integration and registers itself. There's no separate
-> Lovelace resource to add, and nothing to keep in sync by hand.
+> The dashboard card ships inside the integration and registers itself — no Lovelace
+> resource to add.
 
 ## Step 2 — restart, then add FLARE
 
@@ -48,12 +48,10 @@ rooms to track:
   lights is offered, pre-selected, and each one you keep becomes a tracking scope. Trim
   the list if you like; anything you leave out simply isn't tracked.
 
-They stay two entries because schedules and tracking are different kinds of thing, and
-Home Assistant groups an integration's page by entry. You can add, retarget or remove
-scopes at any time from the Tracking entry.
+Scopes can be added, retargeted or removed at any time from the Tracking entry.
 
-Each schedule sensor gets its own device carrying the five phase boundaries and eight
-brightness/Kelvin values as ordinary entities. Adjust them any time — no reconfigure flow.
+Each schedule sensor gets its own device, with the phase boundaries, curve values and
+transition durations as ordinary entities you can edit from the device page.
 
 ## Step 3 — import the blueprint and create an automation
 

@@ -25,13 +25,12 @@ picks the light up again afterwards.
 
 ## How a handoff works
 
-When the blueprint hands a room to a scene, it does two things: activates the scene, and
-calls `flare.clear_claims` for the lights the scene covers. Clearing matters — without it
-FLARE would keep its old claim, see the scene's values, and read them as an override
-rather than as something it deliberately gave away.
+When the blueprint hands a room to a scene it activates the scene, then calls
+`flare.clear_claims` for the lights that scene covers. The clear matters: without it FLARE
+would keep its old claim, see the scene's values, and classify them as an override.
 
-Lights the scene *doesn't* cover keep getting the adaptive values, which is the point of
-the coverage check below: a scene naming half a room leaves the other half to FLARE.
+Lights the scene doesn't cover keep getting the adaptive values, so a scene naming half a
+room leaves the other half to FLARE.
 
 ## `flare.compute_scene_coverage`
 
@@ -53,8 +52,8 @@ response_variable: coverage
 
 ## When someone takes a light by hand
 
-Nothing special happens, and that's deliberate. The light stops matching FLARE's recorded
-claim, so it classifies as `overridden` and is excluded from the next tick — see
+Nothing special happens. The light stops matching FLARE's recorded claim, so it
+classifies as `overridden` and is excluded from the next tick — see
 [override protection](../reference/#override-protection). It comes back
 under FLARE's control when it is turned off and on again, when the device drops and
 reconnects, or when you press the scope's **Clear** button.

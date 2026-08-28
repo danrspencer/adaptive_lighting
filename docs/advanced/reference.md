@@ -12,7 +12,8 @@ render_with_liquid: false
 # Integration reference
 {: .no_toc }
 
-The services FLARE registers, and the override-protection machinery behind them.
+The services FLARE registers, the override-protection machinery behind them, and the
+schedule sensors.
 
 <details open markdown="block">
   <summary>On this page</summary>
@@ -21,33 +22,19 @@ The services FLARE registers, and the override-protection machinery behind them.
 {:toc}
 </details>
 
-# FLARE — service & sensor reference
-{: .no_toc }
-
-<details open markdown="block">
-  <summary>On this page</summary>
-  {: .text-delta }
-- TOC
-{:toc}
-</details>
-
-
-> Part of [FLARE](../) — see there for why this project is shaped the way it is
-> (in particular, [why the schedule has four named phases](../../#four-phases-not-one-curve)
-> rather than a single continuous curve) and how to install it.
-
-Seven services, each documented in full in `services.yaml` (visible in Home Assistant's Developer Tools → Actions
-once installed) — call them directly from your own automations or scripts, no blueprint required.
+Seven services, callable from your own automations or scripts with no blueprint involved.
+Each field is documented in full in Developer Tools → Actions.
 
 ## `flare.apply_lighting`
 
-The "just make it happen" service: given a target brightness/colour-temperature (and optionally RGB colour) as
-plain values, actually turns entities on/off via `light.turn_on`/`light.turn_off`, handling reachability,
-tolerance, override protection, two-step transitions, and RGB-vs-colour-temp dispatch internally. Neither this
-nor `compute_lighting_groups` reads any sensor entity - if you're feeding these values from a sensor's own
-attributes (the FLARE blueprint in this repo does exactly that, reading its own FLARE
-Sensor input - see [the blueprint reference](../../blueprint/#bring-your-own-sensor) for the attribute contract that
-relies on), that's an ordinary template on the caller's side, not something this service does for you.
+Takes a brightness and colour temperature as plain values and turns entities on or off,
+handling reachability, tolerance, override protection, two-step transitions and
+RGB-vs-colour-temp dispatch.
+
+Neither this nor `compute_lighting_groups` reads a sensor entity. Feeding them from a
+sensor's attributes is an ordinary template on your side — see
+[Bring your own sensor](../../blueprint/#bring-your-own-sensor) for the attribute shape the
+blueprint uses.
 
 ```yaml
 action: flare.apply_lighting
@@ -63,9 +50,8 @@ data:
 
 ### Override protection
 
-Adaptive lighting should stop driving a light once somebody else has taken it — a person at a switch, a scene,
-another automation — and pick it up again when they let go. That needs an answer to "was the last change to
-this light *ours*", which is what the claims below record.
+FLARE stops driving a light once something else has taken it — a switch, a scene, another
+automation — and picks it up again when released.
 
 **Claims belong to a state device, not to a caller.** A state device is a named tracking scope you configure
 (Settings → Devices & Services → **FLARE Tracking** → Add state device), pointed at an area, some
@@ -76,40 +62,33 @@ devices, or specific lights. Every light resolves to exactly one:
 3. …names its **area**
 4. otherwise **not tracked at all**
 
-Most specific wins; ties break on the state device's name, so the answer is stable across restarts. A light
-matching nothing is simply never tracked — it stays permanently manageable. That's deliberate: a catch-all
-bucket would silently absorb a light that's missing an area, where an absent scope is a visible signal.
+Most specific wins; ties break on the state device's name, so the result is stable across restarts. A light
+matching nothing is never tracked and stays permanently manageable — there is no catch-all bucket, so a light
+missing an area shows up as an absent scope rather than being quietly absorbed.
 
-Because the scope is decided by configuration rather than by whoever wrote last, **two automations driving the
-same room share that room's claims and co-operate.** Neither reads the other's write as an intruder. If you
-want them tracked separately, give them separate state devices.
+Because scope comes from configuration rather than from whoever wrote last, **two automations driving the same
+room share that room's claims and co-operate.** Give them separate state devices to track them apart.
 
-`apply_lighting` names no owner at all. `force: true` still writes through regardless of who
-holds a light, and the write is still recorded, so protection works again on the next non-forced call.
+`force: true` writes through regardless of who holds a light. The write is still recorded, so protection works
+again on the next non-forced call.
 
-#### What's recorded, and why there are two claims
+#### The two claims
 
 Each tracked light carries two claims on its state device:
 
-- **`observed`** — a state we've seen and know is safe to write over. Populated four ways, only one of which
-  we authored: a write an earlier call saw the bulb adopt, the pre-write baseline for a first-ever write, and
-  the snapshot taken when a device returns from unavailable. What they share is *confidence*, not authorship.
-- **`latest`** — the most recent write we sent, not yet re-observed.
+- **`observed`** — a state known to be safe to write over: one an earlier call saw the bulb adopt, the
+  pre-write baseline for a first write, or the snapshot taken when a device returns from unavailable.
+- **`latest`** — the most recent write sent, not yet re-observed.
 
-Two rather than one because `apply_lighting` records the context it *issued*; nothing waits to confirm the
-bulb adopted it. With a single record, one dropped write locks a light out permanently — the next tick
-compares the light's real, unchanged context against a value the device never adopted, and nothing afterwards
-can make those equal.
+Two rather than one because a write is recorded when issued, not when confirmed. With a single record, one
+dropped write would lock a light out permanently: the next tick compares the light's unchanged context against
+a value the device never adopted, and nothing afterwards can make those equal.
 
-A context mismatch alone still isn't proof: HA's `Entity._context` expires 5 seconds after the service call,
-so a bulb whose round-trip takes longer reports back under an unrelated context while echoing exactly what
-was asked for. Each claim therefore also records its `target`, and the comparison falls back to values.
+A context mismatch alone isn't proof either. HA's `Entity._context` expires 5 seconds after the service call, so
+a bulb whose round-trip takes longer reports back under an unrelated context while echoing exactly what was
+asked for. Each claim also records its `target`, and the comparison falls back to values.
 
-#### Nothing survives a restart, on purpose
-
-Claims are not persisted. These are lighting overrides — losing them means a bulb someone wanted purple goes
-back to being managed. After a restart nothing is tracked, so every light is manageable, which is exactly the
-state you'd want anyway.
+Claims are **not persisted**. After a restart nothing is tracked, so every light is manageable.
 
 ### The hand-over event
 
@@ -127,17 +106,14 @@ observed: { context_id: ..., target: {...}, recorded_at: ... }
 latest:   { context_id: ..., target: {...}, recorded_at: ... }
 ```
 
-The point is the pairing of `live` against each claim's `target`. That comparison is what tells you whether a
-hand-over was genuine or a false positive, and it's exactly what can't be reconstructed afterwards - by the
-time anyone looks, the curve has moved on and a stale target says nothing about why the light was excluded.
+Compare `live` against each claim's `target` to tell a genuine hand-over from a false positive. That comparison
+can't be reconstructed later — by the time you look, the curve has moved on.
 
-**Edge-triggered**: it marks the light *changing hands*, not the fact that it currently is, so it fires once
-per hand-over rather than repeating while the light stays taken. A restart seeds quietly - lights already
-overridden before it aren't re-announced.
+It is **edge-triggered**: it fires once when a light changes hands, not repeatedly while it stays taken. Lights
+already overridden before a restart aren't re-announced.
 
-Home Assistant's recorder keeps it like any other event, and because it carries an `entity_id` it follows
-whatever recorder filtering that light already has. It also appears in the light's own logbook timeline,
-interleaved with its state changes, which is where you'd be looking anyway:
+The event carries an `entity_id`, so it follows that light's existing recorder filtering and appears in its
+logbook timeline alongside its state changes:
 
 > **kitchen_lights** released this light to something else (last asked for 255/6667, found 12/6500)
 
@@ -160,32 +136,26 @@ Each state device carries four entities, all on its own device so they're rename
 | `sensor.<name>_flare_overridden` | how many are currently held by something else |
 | `button.<name>_flare_clear` | press to discard this scope's tracked state |
 
-The tracking sensor is the storage, not a view of it — what you see in Developer Tools is the same object
-override protection acts on. Its `claims` attribute is excluded from the recorder (it changes on every tick
-and runs to kilobytes), so it has no history; the two counters are plain numbers that graph and produce
-long-term statistics.
+The `claims` attribute is excluded from the recorder, so it has no history; the two counters are plain numbers
+that graph and produce long-term statistics.
 
-**The two counts deliberately don't sum to the tracked total**: a light that's off or unavailable is in
-neither, because override protection doesn't apply to it at all.
+**The two counts don't sum to the tracked total.** A light that's off or unavailable is in neither, because
+override protection doesn't apply to it.
 
-**A light being overridden is a supported outcome, not a fault** — something else deliberately took it and
-adaptive lighting correctly stepped back. These report who holds what; they aren't a health check.
+**Overridden is a normal outcome, not a fault** — something else took the light and FLARE stepped back. These
+entities report who holds what; they aren't a health check.
 
-**The Clear button** discards *every* claim the scope holds, not just the overridden ones — a guaranteed
-reset rather than one that depends on agreeing about which lights are stuck. The cost: the scope's healthy
-lights lose their claims too, so each is unprotected until its next write. For a live room automation that's
-one tick.
+**Clear discards every claim in the scope**, not just the overridden ones. The healthy lights lose their claims
+too and are unprotected until their next write — one tick, for a live room automation.
 
 ### Transitions
 
-Each phase holds its own brightness and colour and then **eases to the next
-phase's over the last N minutes of its own span**. The duration is named for the
-phase it runs in, because it is that phase's exit: `day_kelvin_transition` is how
-long before Day ends to start easing to Evening's colour.
+Each phase holds its own brightness and colour, then **eases to the next phase's over the
+last N minutes of its own span**. The duration is named for the phase it runs in:
+`day_kelvin_transition` is how long before Day ends to start easing to Evening's colour.
 
-The transition finishing *at* the boundary is the point — if Morning starts at
-06:00, the lights are at Morning's values at 06:00, not beginning a ramp toward
-them. Two consequences worth knowing:
+Transitions finish *at* the boundary, so if Morning starts at 06:00 the lights are at
+Morning's values at 06:00, not beginning a ramp toward them. Two consequences:
 
 - **`0` is a hard cut**, and a legitimate choice. Some boundaries should be
   visible: setting `evening_kelvin_transition: 0` makes Night arrive as a step.
@@ -199,50 +169,31 @@ them. Two consequences worth knowing:
 > the *end* of the early-morning stretch — the minutes before Morning, not before
 > midnight.
 
-Brightness and colour have separate durations because they genuinely differ: by
-default Day's colour slides across the whole afternoon while its brightness only eases
-over the last hour or so.
+Brightness and colour have separate durations: by default Day's colour slides across the
+whole afternoon while its brightness eases over the last hour.
 
 ### Inspecting tracked state
 
-Each state device's `sensor.<name>_flare_tracking` makes the mechanism above inspectable directly, rather
-than only indirectly through `compute_lighting_groups`'s `combined`/`needing_off` output (which tells you
-*whether* a light is currently excluded, never *why*). Its `claims` attribute holds, per light, the raw
-`observed`/`latest` records. `check_control` turns those into the computed `status` and `matched_via` -
-`"latest-context"`, `"latest-value"`, `"observed-context"` or `"observed-value"` - saying *how* a match was
-determined, so you needn't guess whether a light is `controlled` because its reported `context.id` matched
-directly, or because it was rescued via the delayed-echo/mired-equivalence value comparison described above.
+`sensor.<name>_flare_tracking`'s `claims` attribute holds the raw `observed`/`latest` records per light.
+`check_control` turns those into a `status` plus a `matched_via` — `"latest-context"`, `"latest-value"`,
+`"observed-context"` or `"observed-value"` — telling you *how* a light was matched, not just that it was.
 
-Records are discarded automatically once they've gone a full day without being written or observed - not just
-for lights that are still around but quiet, which is harmless (no record at all reads the same as
-`untracked`, never blocked, so a pruned-too-early record simply re-establishes itself on its next write), but
-specifically for an entity *deleted from Home Assistant outright* (a Zigbee2MQTT group removed at the source,
-say) - the one case none of the recovery handling above can detect, since there's no state left to observe
-going away. Runs once at startup and hourly while running; nothing to configure.
+| status | meaning |
+|---|---|
+| `controlled` | the live `context.id` matches a claim, or the current value still matches a claim's `target` — a delayed confirmation, or a write that never landed. Not excluded from the next tick |
+| `overridden` | matches neither claim's context, and the value matches neither claim's target. Something else has touched it |
+| `unavailable` | no live state to compare against |
+| `off` | the light is off. Protection doesn't apply; it will be managed freely when next turned on |
 
+The tracking sensor updates on every write and clear, and also polls, since a light's live state can change
+without FLARE doing anything.
 
-- `controlled` — we are in control: the live `context.id` matches a claim, or it matches neither
-  claim's `context.id` but its current value still matches what `latest`'s or `observed`'s own `target`
-  asked for - almost certainly a delayed confirmation landing under an unrelated context (HA's
-  `Entity._context` expires 5s after the service call that set it), or a write that never landed leaving the
-  light on the previous one, not a real external change. Either way, not excluded from the next tick.
-- `overridden` — matches neither claim's `context.id`, and the current value doesn't match either claim's own
-  target either. Something has genuinely touched this light since either recorded write - whether that means
-  "externally set" also depends on `force`, which this sensor can't know about.
-- `unavailable` — the entity currently has no live state to compare against.
-- `off` — the light's live state is `off` (not `unavailable`/`unknown`). Override protection is moot for a
-  light that isn't on (see the `is_state(entity_id, "on")` precondition at the very top of the numbered check
-  above) - it will be freely managed the next time it's turned on, regardless of any `observed`/`latest`
-  claim recorded while it was last on.
+Each claim carries `recorded_at` (ISO 8601, or `null` for the first-write baseline). With the claim's
+`context_id` that's enough to trace it through HA's logbook (`logbook/get_events`, filtered by `context_id`).
 
-Each state device's tracking sensor updates immediately on every write or clear-on-unavailable event, and
-also polls - a light's live state can change independently of anything this integration does (a restart, an
-entity reconnecting, a light dimmed by hand), and only polling keeps its view correct in that case too.
-
-Each claim also carries `recorded_at` (ISO 8601, or `null` for the synthetic first-write baseline), i.e. when
-the claim was stamped. Combined with the claim's `context_id`, that is enough to trace a claim back to what
-actually happened via HA's own logbook (`logbook/get_events`, filtered by `context_id`) over a narrow window
-around `recorded_at`.
+Records are pruned after a full day with no write or observation. This matters mainly for an entity deleted
+from Home Assistant outright — a Zigbee2MQTT group removed at source — which nothing else can detect, since
+there is no state left to observe. Runs at startup and hourly; nothing to configure.
 
 ## `flare.compute_lighting_groups`
 
@@ -319,85 +270,79 @@ treatment from a Home Assistant **label**:
 | Goes on | the light **entity** or its **device** — either works, device is more durable |
 | Overridable per call | `two_step_label` on `apply_lighting` / `compute_lighting_groups` |
 
-The match is on the label's *id*, not its display name. That makes it easy to get silently wrong: a label whose
-id doesn't line up produces no error and no log line — the bulb just goes back to combined transitions, and the
-only symptom is a fade that looks slightly off.
+The match is on the label's *id*, not its display name. A label whose id doesn't line up produces no error and
+no log line — the bulb silently goes back to combined transitions.
 
 ### Keeping the list current
 
-Because that failure is invisible, the integration checks for it. Any light whose device matches a known
-two-step model but has no label raises a **repair** with a Fix button; pressing it applies the label to those
-devices, creating the label itself (with the correct id) if it doesn't already exist. The check re-runs whenever
-the entity or device registry changes, so pairing a new bulb surfaces it without a restart, and the repair
-clears itself once the labels are in place.
+Any light whose device matches a known two-step model but has no label raises a **repair** with a Fix button,
+which applies the label and creates it with the correct id if needed. The check re-runs on registry changes, so
+a newly paired bulb surfaces without a restart, and the repair clears once the labels are in place.
 
-The model list lives in the integration's options (Settings → Devices & Services → FLARE →
-**Configure**), one glob per line. The box comes **pre-filled with the shipped defaults**, so what you see there
-is the complete list the check uses — you can add to it or delete from it, and a pattern you remove is genuinely
-gone rather than being re-added from a hidden layer underneath.
+The model list is in the integration's options (Settings → Devices & Services → FLARE → **Configure**), one
+case-insensitive glob per line, matched against `"<manufacturer> <model>"` — both `*TRADFRI bulb*` and `IKEA*`
+work. The box is pre-filled with the shipped defaults, so what you see is the complete list in use; a pattern
+you delete is genuinely gone. Clearing the box entirely falls back to the defaults rather than disabling
+detection — to stop being told about unlabelled bulbs, [ignore the repair](#dismissing-the-repair).
 
-Patterns are case-insensitive globs matched against `"<manufacturer> <model>"`, so both `*TRADFRI bulb*` and
-`IKEA*` work. Clearing the box entirely falls back to the shipped defaults rather than disabling detection — to
-stop being told about unlabelled bulbs, [ignore the repair](#dismissing-the-repair) instead.
+{: .note }
+> Once you save your own list it's yours: later releases adding models won't change it. Adding a bulb to
+> `DEFAULT_TWO_STEP_MODEL_PATTERNS` in `two_step.py` is a one-line PR and reaches every install that hasn't
+> customised the field.
 
-The shipped defaults live in `custom_components/flare/two_step.py` as
-`DEFAULT_TWO_STEP_MODEL_PATTERNS` (currently just `*TRADFRI bulb*`). Adding a newly discovered bulb there is a
-one-line PR — that's the intended way to contribute one, and it reaches every install that hasn't customised
-the field. **Once you save your own list, it's yours**: later releases adding models won't change it, which is
-the trade-off for the box showing exactly what runs.
-
-Keep patterns narrow. One that's too broad is worse than a missing one — it produces a repair recommending a
-label that would make those bulbs transition *worse*, two calls where one was fine.
+Keep patterns narrow. Too broad is worse than missing — it recommends a label that makes those bulbs transition
+*worse*, two calls where one was fine.
 
 ### Dismissing the repair
 
-The repair uses Home Assistant's own issue mechanism, so it gets the standard **Ignore** action from the
-three-dot menu on the repair card — nothing specific to this integration. Ignoring is remembered permanently
-(it records the HA version at the time and stays ignored across upgrades).
+Use the standard **Ignore** action on the repair card. It stays ignored across upgrades. To bring it back, open
+**Settings → Repairs** and enable **Show ignored issues** from the overflow menu.
 
-To bring it back, open **Settings → Repairs**, use the overflow menu at the top right and enable **Show ignored
-issues** — the repair reappears in the list and can be un-ignored from there. Ignoring only silences the
-notification; it doesn't change any lighting behaviour, and the check keeps running, so if you later label the
-bulbs the issue clears itself as normal.
+Ignoring only silences the notification — the check keeps running, so labelling the bulbs later clears the issue
+as normal.
 
 ## Optional: day-phase/curve sensors
 
-If you'd rather have this running continuously as sensors than call `compute_curve` yourself, add a sensor from
-the integration's own page (Settings → Devices & Services → FLARE → Add Sensor) — just a
-name. Adding the integration itself needs no configuration and sets up nothing beyond the services above; a
-schedule only exists once you add a sensor.
+To have the curve running continuously rather than calling `compute_curve` yourself, add a sensor from the
+Schedules entry (Settings → Devices & Services → FLARE Schedules → Add Sensor). It asks only for a name.
 
-You can add any number of sensors this way, each independent, each grouped under its own device — naming one
-"Living Room" gets you a device called "Living Room". Rename the device later (Settings → Devices → the sensor's
-device → rename) and every entity under it updates its displayed name at once — that's the only place the
-sensor's *displayed* name lives; its entity_ids stay as originally created from whatever you typed here, so it's
-worth getting the name right the first time rather than relying on a later rename to fix it.
+Add as many as you like; each is independent and gets its own device. Renaming the device later updates every
+entity's displayed name, but **entity_ids keep the name you first typed**, so it's worth getting right up front.
 
 Each sensor's device contains, computed the same way `compute_curve` computes them and refreshed every 60 seconds:
 
 | Entity | What it is |
 |---|---|
-| `sensor.<name>_flare` | Combined "right now" reading — state is the phase (Morning/Day/Evening/Night), `attributes.brightness` (0-255), `attributes.color_temp` (Kelvin), and `attributes.rgb_color` (`[r, g, b]`) are exactly the attribute names the blueprint's `adaptive_sensor` input already reads to feed `apply_lighting`'s own `brightness`/`color_temp_kelvin`/`rgb_color` fields (see [the blueprint reference](../../blueprint/#bring-your-own-sensor)), so this can be pointed at directly. Also carries today's four phase-boundary timestamps as `attributes.morning_start`/`day_start`/`evening_start`/`night_start`, plus `attributes.evening_earliest`/`evening_latest` (the two configured bounds Evening was actually clamped between) — no separate boundary sensors, since a phase-change automation only needs a `platform: state, attribute: phase` trigger on this same entity, and anything that specifically wants a boundary time (the dashboard card, in particular) can read it straight off these attributes. `attributes.points` carries the full day as 289 `{t, brightness, kelvin}` samples — what the [dashboard card](https://github.com/danrspencer/flare/blob/main/CONTRIBUTING.md#previewing-the-dashboard-card) reads for its chart, deliberately **not** following a manual phase override (see below) the way the rest of this entity's attributes do, since it's a full-day schedule, not a "right now" value |
-| `select.<name>_flare_phase` | Manual override — `Auto` (default) or a specific phase. Pinning a phase holds it until the *schedule itself* next moves on (e.g. override to `Day` during `Evening` and it still becomes `Night` once Evening would naturally have ended, rather than staying on `Day` forever) — see the sticky-override switch below to disable that and keep an override until you clear it yourself instead |
+| `sensor.<name>_flare` | The "right now" reading — see the attribute table below. Point the blueprint's FLARE Sensor input at this |
+| `select.<name>_flare_phase` | Manual phase override — `Auto` (default) or a specific phase. An override holds until the schedule itself next moves on: pin `Day` during Evening and it still becomes `Night` when Evening would have ended. The sticky switch below changes that |
 | `time.<name>_morning_time` / `day_time` / `evening_earliest_time` / `evening_latest_time` / `night_time` | The five schedule boundaries — start times for Morning, Day, and Night, and Evening's earliest/latest bound. Each starts at a representative default (06:00/08:00/17:00/20:00/22:00) and is adjustable at any time; the change applies within seconds, not on the next 60s poll |
 | `number.<name>_<phase>_brightness` / `_kelvin` | The eight curve values — brightness (0-255) and colour temperature (1000-10000K), one pair per phase. Each starts at the value shown in `compute_curve`'s field list above, and is adjustable at any time |
 | `number.<name>_<phase>_brightness_transition` / `_kelvin_transition` | The eight transition durations, in minutes — see below |
 | `switch.<name>_sticky_phase_override` | Off by default (an override self-clears at the next phase boundary). Turn on to keep a manual phase override pinned until you clear it back to `Auto` yourself instead |
 
-`time.*`/`number.*`/`switch.*` are all tagged as configuration entities, so Home Assistant groups them under the
-device's collapsed "Configuration" section rather than mixing them into the main entity list — present, and
-usable from dashboards/automations, without being sixteen always-visible entities cluttering the device page.
-They are ordinary entities, so they're editable straight from the device page and usable from automations and
-dashboards like anything else — there is no separate configuration form to go through.
+The `time.*`/`number.*`/`switch.*` entities are tagged `entity_category: config`, so Home Assistant collapses
+them under the device's Configuration section. Edit them from the device page, a dashboard, or an automation —
+there is no configuration form. Removing a schedule means removing its device from the integration's page.
 
-Point the blueprint's FLARE Sensor input (or your own template reading the same attributes into
-`apply_lighting`'s `brightness`/`color_temp_kelvin`/`rgb_color` fields) at whichever sensor's
-`sensor.<name>_flare` you want. A sensor's whole device is removable later from the
-integration's page; there's no reconfigure form since there's nothing left to reconfigure that way - edit the
-`time.*`/`number.*`/`switch.*` entities directly, or rename the device, instead.
+### `sensor.<name>_flare` attributes
 
-For a dashboard, [dashboard/flare-section.yaml](https://github.com/danrspencer/flare/blob/main/dashboard/flare-section.yaml) is a
-copy-paste section with the curve graph, the phase override and sticky-override switch, and all thirteen
-schedule/curve entities laid out as tiles - or skip the dashboard entirely and use the sensor's own device page
-(Settings → Devices → the sensor's device), which already shows the same entities grouped for free, since
-they're tagged `entity_category: config`.
+| Attribute | |
+|---|---|
+| state | the phase — `Morning`/`Day`/`Evening`/`Night` |
+| `brightness` | 0-255 |
+| `color_temp` | Kelvin |
+| `rgb_color` | `[r, g, b]` |
+| `morning_start` / `day_start` / `evening_start` / `night_start` | today's phase-boundary timestamps |
+| `evening_earliest` / `evening_latest` | the bounds Evening was clamped between |
+| `points` | the full day as 289 `{t, brightness, kelvin}` samples, for the chart |
+
+There are no separate boundary sensors: a phase-change automation needs only a
+`state` trigger with `attribute: phase` on this entity.
+
+`points` does **not** follow a manual phase override, unlike the other attributes — it's a full-day schedule,
+not a right-now value.
+
+For a dashboard,
+[dashboard/flare-section.yaml](https://github.com/danrspencer/flare/blob/main/dashboard/flare-section.yaml) is a
+copy-paste section with the curve card, the phase override and every schedule and curve entity as tiles. The
+sensor's own device page already groups the same entities for free.
