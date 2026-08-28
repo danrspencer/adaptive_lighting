@@ -17,10 +17,10 @@ blueprint:
     min_version: 2026.4.0
   input:
     adaptive_sensor:
-      name: Adaptive Lighting Sensor
+      name: FLARE Sensor
       description: >
         Sensor providing brightness and colour temperature to apply -
-        filtered to Adaptive Lighting Helpers' own sensors.
+        filtered to FLARE's own schedule sensors.
       selector:
         entity:
           filter:
@@ -184,8 +184,8 @@ blueprint:
           name: Update Jitter (Optional)
           description: >
             Spreads scheduled updates over a random delay, in seconds,
-            so multiple rooms using the same Adaptive Lighting Sensor
-            don't all send commands at the same instant. Set to 0 to
+            so multiple rooms using the same FLARE Sensor don't all
+            send commands at the same instant. Set to 0 to
             disable.
           default: 15
           selector:
@@ -309,7 +309,7 @@ trigger:
 
         The reason this needs its own dedicated trigger at all, rather
         than "just let the next tick handle it": write_tracking.py
-        (Adaptive Lighting Helpers) clears an entity's override-
+        (FLARE) clears an entity's override-
         protection record the moment it's observed going unavailable -
         so by the time it reconnects there's no stale record for its
         fresh post-reconnect context.id to conflict with - but nothing
@@ -837,7 +837,7 @@ action:
               entities: "{{ handed_off_entities }}"
       # Reachability, multiplier bucketing, tolerance checks, override
       # protection, two-step/combined routing and RGB-vs-colour-temp
-      # dispatch all live in the Adaptive Lighting Helpers integration
+      # dispatch all live in the FLARE integration
       # (standalone HACS add-on, not specific to this blueprint).
       #
       # Guarded because brightness/color_temp_kelvin are plain state_attr()
@@ -854,7 +854,7 @@ action:
           - condition: template
             value_template: "{{ brightness is not none and color_temp_kelvin is not none }}"
         then:
-        - alias: "Apply adaptive lighting (Adaptive Lighting Helpers)"
+        - alias: "Apply adaptive lighting (FLARE)"
           action: flare.apply_lighting
           data:
             entities: "{{ adaptive_target_entities }}"
