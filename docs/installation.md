@@ -1,7 +1,6 @@
 ---
 title: Quickstart
 nav_order: 2
-has_children: true
 permalink: /installation/
 ---
 
@@ -88,9 +87,8 @@ card draws the day's brightness and colour curve with a marker at the current ti
 
 {: .tip }
 > Want the curve alongside a phase override and every schedule/curve entity as tiles,
-> not just the chart? The
-> [dashboard section generator]({{ site.baseurl }}/installation/dashboard/) builds the
-> whole section from the schedule sensor's slug.
+> not just the chart? The [Dashboard Generator]({{ site.baseurl }}/dashboard/) builds
+> the whole section from the schedule sensor's slug.
 
 ---
 

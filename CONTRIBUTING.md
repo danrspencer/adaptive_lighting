@@ -80,9 +80,9 @@ tests/
 docs/
     index.md          the pitch, and what the four phases are for
     installation.md   quickstart: HACS, blueprint, dashboard card
-    dashboard.html     generates the fuller dashboard section (curve +
-                       phase override + every schedule/curve entity) from
-                       a schedule sensor's slug - nested under Quickstart
+    dashboard.html     "Dashboard Generator" - generates the fuller
+                       dashboard section (curve + phase override + every
+                       schedule/curve entity) from a schedule sensor's slug
     playground.html   the interactive curve, running the real card
     blueprint.md      full feature/input reference for the blueprint
     advanced/         power-user reference: services, scene handoff,

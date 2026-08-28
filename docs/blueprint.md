@@ -1,6 +1,6 @@
 ---
 title: Blueprint reference
-nav_order: 4
+nav_order: 5
 permalink: /blueprint/
 render_with_liquid: false
 # Liquid is off for this page: it contains Home Assistant Jinja,
