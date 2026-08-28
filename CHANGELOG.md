@@ -7,6 +7,19 @@ The version in `custom_components/flare/manifest.json` is what
 HACS shows as installed, so it and the release tag are checked against each other in
 CI — see `.github/workflows/release.yml`.
 
+## [0.9.2] - 2026-08-28
+
+### Fixed
+
+- **The per-scope Clear button now clears every light in one press.**
+  `async_clear` built its "did anything change" check as
+  `any(store.claims.pop(...) is not None for ...)` - `any()` short-circuits
+  on the first `True`, and `.pop()` is what actually clears each claim, so
+  the moment the first entity's claim came back non-`None`, every entity
+  after it in the list was silently left untouched. A room with several
+  tracked lights needed one press per light instead of clearing the whole
+  scope at once.
+
 ## [0.9.1] - 2026-08-28
 
 ### Fixed
