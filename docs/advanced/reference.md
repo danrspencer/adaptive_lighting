@@ -66,6 +66,13 @@ Most specific wins; ties break on the state device's name, so the result is stab
 matching nothing is never tracked and stays permanently manageable — there is no catch-all bucket, so a light
 missing an area shows up as an absent scope rather than being quietly absorbed.
 
+{: .warning }
+> The target picker also offers **floors and labels**, and a state device pointed at one matches nothing —
+> resolution only looks at entity, device and area. Use an area, or name the lights directly.
+
+An already-tracked light keeps the scope it is already in, even if you retarget the state devices underneath
+it. Press **Clear** on the old scope to move it.
+
 Because scope comes from configuration rather than from whoever wrote last, **two automations driving the same
 room share that room's claims and co-operate.** Give them separate state devices to track them apart.
 
