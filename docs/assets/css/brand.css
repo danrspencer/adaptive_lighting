@@ -1,0 +1,10 @@
+/* The icon beside the sidebar wordmark - see _includes/title.html for
+   why the title isn't simply replaced by it. Sized in rem so it tracks
+   the title's own type scale rather than pinning to the 26px the img
+   tag reserves before CSS lands. */
+.site-title-icon {
+  flex: none;
+  width: 1.625rem;
+  height: 1.625rem;
+  margin-right: 0.5rem;
+}

@@ -477,6 +477,16 @@ The services live with **tracking**, not schedules: every one of them is
 about which lights are being driven and by whom, and they need the claim
 registry that entry owns.
 
+**One "Add Integration" creates both.** Two entries is a grouping
+decision, never an argument for two trips through the flow -
+`async_step_user` asks the single question there is to ask (which rooms
+to track) and raises the other entry itself via `SOURCE_IMPORT`. Each
+half is still creatable alone, so deleting one and adding it back
+works. The entry the flow *visibly* completes on is always **Schedules**,
+because Schedules creates no devices and Tracking seeds one per room -
+see the device-dialog constraint below, which is what makes this
+ordering load-bearing rather than arbitrary.
+
 ### Multi-sensor schedule architecture
 
 The schedules entry registers no services and carries no schedule of its

@@ -5,6 +5,11 @@ baseurl: /flare
 
 theme: just-the-docs
 
+# _includes/title.html overrides the theme's use of this - it puts the
+# icon *beside* the wordmark rather than replacing it. Kept set because
+# jekyll-seo-tag reads it for the site's structured data.
+logo: /assets/img/flare-icon.svg
+
 exclude:
   - Gemfile
   - Gemfile.lock
@@ -15,6 +20,9 @@ defaults:
       path: ''
     values:
       layout: default
+      # jekyll-seo-tag's og:image comes from the page, not the site,
+      # so every page needs one for a link preview to show anything.
+      image: /assets/img/flare-icon.png
 
 aux_links:
   'GitHub': https://github.com/danrspencer/flare

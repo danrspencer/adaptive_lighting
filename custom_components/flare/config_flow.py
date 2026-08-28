@@ -1,12 +1,13 @@
 """Config flow for FLARE.
 
-The main entry needs no configuration at all - adding it just registers
-the compute_lighting_groups/compute_curve/compute_scene_coverage/
-apply_lighting services (see __init__.py). No sensor is auto-created;
-every day-phase/curve sensor + phase-override select is a "sensor"
-subentry (SensorSubentryFlow below), added explicitly from this
-integration's own page (Add Sensor) - one mechanism for every sensor,
-you name it yourself from the start.
+Adding the integration once creates both entries - Schedules and
+Tracking (async_step_user explains why it is still two entries, and
+why only one of them is created visibly). Neither asks for anything
+beyond which rooms to track. No sensor is auto-created; every
+day-phase/curve sensor + phase-override select is a "sensor" subentry
+(SensorSubentryFlow below), added explicitly from the Schedules entry's
+own page (Add Sensor) - one mechanism for every sensor, you name it
+yourself from the start.
 
 Deliberately does NOT auto-seed a first sensor the way earlier versions
 did (used to be hardcoded to the name "Default", regardless of what a
@@ -42,7 +43,12 @@ from typing import Any
 
 import voluptuous as vol
 from homeassistant import config_entries
-from homeassistant.config_entries import ConfigEntry, ConfigSubentryFlow, SubentryFlowResult
+from homeassistant.config_entries import (
+    SOURCE_IMPORT,
+    ConfigEntry,
+    ConfigSubentryFlow,
+    SubentryFlowResult,
+)
 from homeassistant.core import callback
 from homeassistant.data_entry_flow import FlowResult
 from homeassistant.helpers import selector
@@ -67,63 +73,96 @@ class AdaptiveLightingHelpersConfigFlow(config_entries.ConfigFlow, domain=DOMAIN
     VERSION = 3
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> FlowResult:
-        """Two entries, not one: schedules and tracking are different
-        kinds of thing, and an entry is the only level at which that
-        distinction can be shown. HA's integration page renders one
-        section per subentry with no way to group them by type, so
-        keeping both under a single entry flattens them into one long
-        list of siblings."""
-        return self.async_show_menu(step_id="user", menu_options=[ENTRY_TYPE_SCHEDULES, ENTRY_TYPE_TRACKING])
+        """One "Add FLARE" creates both entries.
 
-    async def async_step_schedules(self, user_input: dict[str, Any] | None = None) -> FlowResult:
-        """Nothing to ask for. Add the day-phase/curve sensors
-        themselves afterwards from this entry's own page."""
+        They stay two entries, not one: schedules and tracking are
+        different kinds of thing, and an entry is the only level at
+        which that distinction can be drawn - HA's integration page
+        renders one section per subentry with no way to group them by
+        type, so a single entry flattens schedule sensors and state
+        devices into one long list of siblings. Nothing in that
+        argument asked anyone to walk through Add Integration twice to
+        get there, though, so this step asks the one thing there is to
+        ask - which rooms to track - and creates both.
+
+        Each half is still creatable on its own, so deleting one and
+        adding it back works rather than aborting on the other's
+        account.
+
+        The entry this flow creates *visibly* is always Schedules,
+        because Schedules creates no devices. HA's "integration added"
+        dialog (step-flow-create-entry.ts) shows a device-rename + area
+        picker for every device belonging to the completing flow's
+        entry, and an integration has no way to suppress it - while
+        Tracking seeds a state device per room, which is exactly the
+        pile of rename prompts for things nobody named that the dialog
+        would turn into. Raised through SOURCE_IMPORT instead, it has
+        no visible flow for one to attach to.
+        """
+        configured = {entry.data.get(CONF_ENTRY_TYPE) for entry in self._async_current_entries()}
+        needs_schedules = ENTRY_TYPE_SCHEDULES not in configured
+        needs_tracking = ENTRY_TYPE_TRACKING not in configured
+
+        # Offers a state device per area that currently holds a light,
+        # pre-selected rather than empty because a room is the unit
+        # almost everyone wants to track by, and an unticked list is a
+        # wall of work before anything does anything. Trimmable, and
+        # skippable entirely - nothing here is required, and more can
+        # be added later from the entry's own page. Areas with no
+        # lights are left out: a state device that can never resolve
+        # anything is just an empty device to wonder about.
+        areas = _areas_with_lights(self.hass) if needs_tracking else []
+        if areas and user_input is None:
+            return self.async_show_form(
+                step_id="user",
+                data_schema=vol.Schema(
+                    {
+                        vol.Optional("areas", default=[area_id for area_id, _ in areas]): selector.AreaSelector(
+                            selector.AreaSelectorConfig(multiple=True)
+                        )
+                    }
+                ),
+            )
+
+        # With nothing left to create both branches below fall through to
+        # _create_schedules_entry, whose unique_id guard aborts with
+        # already_configured - the same guard that stops either half being
+        # duplicated. An explicit abort here would be a second way to reach
+        # an outcome that one already covers.
+        chosen = [(a, n) for a, n in areas if a in (user_input or {}).get("areas", [])]
+        if needs_tracking and not needs_schedules:
+            return await self._create_tracking_entry(chosen)
+        if needs_tracking:
+            await self.hass.config_entries.flow.async_init(
+                DOMAIN,
+                context={"source": SOURCE_IMPORT},
+                data={"areas": [area_id for area_id, _ in chosen]},
+            )
+        return await self._create_schedules_entry()
+
+    async def async_step_import(self, import_data: dict[str, Any]) -> FlowResult:
+        """Creates the tracking entry where there is nobody to show a
+        form to: from async_step_user (see the dialog note there), and
+        from the v2 -> v3 split in __init__.py's async_migrate_entry,
+        which passes no "areas" key at all and so seeds every room that
+        has a light."""
+        areas = _areas_with_lights(self.hass)
+        if (chosen := import_data.get("areas")) is not None:
+            areas = [(a, n) for a, n in areas if a in chosen]
+        return await self._create_tracking_entry(areas)
+
+    async def _create_schedules_entry(self) -> FlowResult:
+        """Nothing to ask for. The day-phase/curve sensors themselves
+        are added afterwards from this entry's own page."""
         await self.async_set_unique_id(f"{DOMAIN}_{ENTRY_TYPE_SCHEDULES}")
         self._abort_if_unique_id_configured()
         return self.async_create_entry(
             title="FLARE Schedules", data={CONF_ENTRY_TYPE: ENTRY_TYPE_SCHEDULES}
         )
 
-    async def async_step_tracking(self, user_input: dict[str, Any] | None = None) -> FlowResult:
-        """Offers a state device per area that currently contains a
-        light, pre-selected, and creates them with the entry.
-
-        Pre-selected rather than empty because a room is the unit almost
-        everyone wants to track by, and an unticked list is a wall of
-        work before anything does anything. Trimmable, and skippable
-        entirely - nothing here is required, and more can be added later
-        from this entry's own page.
-
-        Areas with no lights are left out: a state device that can never
-        resolve anything is just an empty device to wonder about."""
+    async def _create_tracking_entry(self, areas: list[tuple[str, str]]) -> FlowResult:
         await self.async_set_unique_id(f"{DOMAIN}_{ENTRY_TYPE_TRACKING}")
         self._abort_if_unique_id_configured()
-
-        areas = _areas_with_lights(self.hass)
-        if user_input is not None or not areas:
-            chosen = (user_input or {}).get("areas", [])
-            return self._create_tracking_entry([(a, n) for a, n in areas if a in chosen])
-
-        return self.async_show_form(
-            step_id="tracking",
-            data_schema=vol.Schema(
-                {
-                    vol.Optional("areas", default=[area_id for area_id, _ in areas]): selector.AreaSelector(
-                        selector.AreaSelectorConfig(multiple=True)
-                    )
-                }
-            ),
-        )
-
-    async def async_step_import(self, import_data: dict[str, Any]) -> FlowResult:
-        """Creates the tracking entry during the v2 -> v3 split, where
-        there is nobody to show a form to - see __init__.py's
-        async_migrate_entry."""
-        await self.async_set_unique_id(f"{DOMAIN}_{ENTRY_TYPE_TRACKING}")
-        self._abort_if_unique_id_configured()
-        return self._create_tracking_entry(_areas_with_lights(self.hass))
-
-    def _create_tracking_entry(self, areas: list[tuple[str, str]]) -> FlowResult:
         return self.async_create_entry(
             title="FLARE Tracking",
             data={CONF_ENTRY_TYPE: ENTRY_TYPE_TRACKING},

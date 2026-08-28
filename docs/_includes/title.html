@@ -1,0 +1,20 @@
+{%- comment -%}
+  Overrides the theme's own title.html.
+
+  Just the Docs' built-in `logo:` support *replaces* the site title with
+  the image (see the theme's title.html), which would drop the wordmark
+  - FLARE is an acronym and the letters are the point of it. So the icon
+  goes beside the name rather than instead of it. `logo:` stays set in
+  _config.yml anyway, for jekyll-seo-tag's structured data.
+
+  .site-title is already `display: flex; align-items: center`, so the
+  image and the text lay themselves out; assets/css/brand.css only sizes
+  and spaces the icon.
+{%- endcomment -%}
+<img
+  src="{{ '/assets/img/flare-icon.svg' | relative_url }}"
+  alt=""
+  width="26"
+  height="26"
+  class="site-title-icon"
+>{{ site.title }}
