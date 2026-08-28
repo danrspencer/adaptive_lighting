@@ -75,8 +75,8 @@ override-protection machinery is available standalone, whether or not you use th
 FLARE expects to share a room. A scene can take some lights, someone can grab a switch, and
 another automation can write the same bulb — none of that is treated as a fault:
 
-- **Override protection** notices when a light no longer matches what FLARE last asked for,
-  and stops driving it until it's released.
+- **Override protection** notices when a light no longer matches what FLARE last asked for —
+  including being switched off — and stops driving it until the whole room goes dark.
 - **Scene handoff** lets a scene own part of a room while FLARE keeps the rest on the curve.
 - **Tracking scopes** are named, configurable devices — one per room, typically — so you can
   see at a glance which lights FLARE is currently driving and which have been taken.

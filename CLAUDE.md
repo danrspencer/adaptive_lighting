@@ -452,14 +452,35 @@ rather than assumed:
 - `force` is the only bypass. There is no caller-supplied owner: a
   light's claims belong to the state device its target covers, so any
   caller writing that light writes through the same scope.
+- **Being switched off is an override.** `classify()` does *not*
+  short-circuit on `not is_on`; an off light is judged against its
+  claims like any other. A turn-off records `{"state": "off"}` as its
+  target, which is what tells our own off from anyone else's once the
+  context expires - without it a room turned off at bedtime classifies
+  as `overridden` and can never be turned on again. That trap is the
+  whole reason the recording exists, so don't drop it as redundant.
+- **The blueprint's own turn-offs are bare `light.turn_off` calls**,
+  not `apply_lighting`, so they record nothing on their own - each is
+  followed by an explicit `flare.record_write` step with the same
+  `{"state": "off"}` target. Without it every light in the room reads
+  as externally switched off every time the room empties, which also
+  fires `flare_light_overridden` for each of them.
+- **A scope releases every claim once none of its lights report `on`**
+  (`ClaimRegistry._release_if_dark`). Anything not `on` counts as dark,
+  unavailable included - requiring an explicit `off` would let one
+  permanently unavailable entity veto the release forever, the same
+  trap the blueprint's `recovered` trigger avoids. Note "the room" is
+  the *scope*: an untracked light being on holds nothing open.
 
-**Known limitation, not solved.** Once `classify()` returns `overridden`,
-`build_groups()` excludes the entity from every group, so nothing ever
-records a fresher `pending` for it - and on a ramping curve its recorded
-target only gets staler, so the value-rescue can't recover it either.
-`clear_claims` (and the card's Clear button) is the escape hatch.
-Revisit properly if it keeps recurring; the underlying rot is that an
-excluded entity never gets a refreshed claim.
+**Known limitation, partly mitigated.** Once `classify()` returns
+`overridden`, `build_groups()` excludes the entity from every group, so
+nothing ever records a fresher `latest` for it - and on a ramping curve
+its recorded target only gets staler, so the value-rescue can't recover
+it either. The scope-goes-dark release now clears this automatically
+whenever the room empties, which covers the ordinary case; `clear_claims`
+(and the Clear button) remains the escape hatch for a room that never
+fully goes dark. The underlying rot is unchanged: an excluded entity
+never gets a refreshed claim.
 
 ### Two config entries
 

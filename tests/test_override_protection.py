@@ -15,19 +15,53 @@ that's a deliberate exception to "no HA dependency", not an oversight).
 from override_protection import _color_temp_matches, _context_matches, classify, is_blocked, target_matches_values
 
 
-def test_off_light_is_never_protected_regardless_of_claims():
-    # A light that isn't on is free to manage no matter what observed/
-    # latest say - this is the exact precondition sensor.py's status
-    # classification used to fail to mirror (a real, live-found bug: a
-    # light turned off by a code path outside apply_lighting fell
-    # through to "overridden" despite this precondition).
+ON_TARGET = {"brightness": 200, "color_temp_kelvin": 3000}
+OFF_TARGET = {"state": "off"}
+
+
+def test_being_switched_off_by_hand_is_an_override():
+    """Turning a light off is a choice worth respecting, the same as
+    dimming it. The claim asked for brightness; the light is off under
+    a context that isn't ours, so somebody else turned it off."""
+    claim = {"context_id": "ctx-ours", "owner_id": "automation.a", "target": ON_TARGET}
+    status, _owner, _via = classify(
+        is_on=False, observed=claim, latest=claim, current_context="ctx-someone-else"
+    )
+    assert status == "overridden"
+    assert is_blocked(status)
+
+
+def test_our_own_turn_off_stays_ours_after_its_context_expires():
+    """The counterpart, and the reason a turn-off records a target of
+    its own: without one there is nothing to distinguish our off from
+    anyone else's once HA's 5s context window closes, and a room turned
+    off at bedtime could never be turned on again."""
+    claim = {"context_id": "ctx-our-off", "owner_id": "automation.a", "target": OFF_TARGET}
     status, owner, matched_via = classify(
-        is_on=False,
-        observed={"context_id": "ctx-observed", "owner_id": "automation.a"},
-        latest={"context_id": "ctx-latest", "owner_id": "automation.a"},
-        current_context="ctx-something-else-entirely",
+        is_on=False, observed=claim, latest=claim, current_context="ctx-unrelated-later"
+    )
+    assert (status, owner, matched_via) == ("controlled", "automation.a", "latest-value")
+    assert not is_blocked(status)
+
+
+def test_an_off_light_we_never_wrote_is_free():
+    """No claim at all means no opinion to respect."""
+    status, owner, matched_via = classify(
+        is_on=False, observed=None, latest=None, current_context="ctx-anything"
     )
     assert (status, owner, matched_via) == ("off", None, None)
+    assert not is_blocked("off")
+
+
+def test_an_off_light_with_only_an_unverified_write_is_free():
+    """One unconfirmed write isn't evidence anyone else did anything -
+    the same reasoning as the on-light case below."""
+    latest = {"context_id": "ctx-ours", "owner_id": "automation.a", "target": ON_TARGET}
+    status, _owner, _via = classify(
+        is_on=False, observed=None, latest=latest, current_context="ctx-someone-else"
+    )
+    assert status == "untracked"
+    assert not is_blocked(status)
 
 
 def test_no_claim_at_all_is_untracked():

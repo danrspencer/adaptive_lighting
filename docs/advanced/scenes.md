@@ -54,6 +54,9 @@ response_variable: coverage
 
 Nothing special happens. The light stops matching FLARE's recorded claim, so it
 classifies as `overridden` and is excluded from the next tick — see
-[override protection](../reference/#override-protection). It comes back
-under FLARE's control when it is turned off and on again, when the device drops and
-reconnects, or when you press the scope's **Clear** button.
+[override protection](../reference/#override-protection).
+
+Switching it **off** by hand counts too: that's a choice like any other, so FLARE leaves it
+off rather than relighting it on the next tick. It comes back under FLARE's control once
+every light in its scope is off, when the device drops and reconnects, or when you press
+the scope's **Clear** button.

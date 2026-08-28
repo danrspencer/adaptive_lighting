@@ -110,6 +110,15 @@ def clear_claims_calls(hass: HomeAssistant):
 
 
 @pytest.fixture(autouse=True)
+def record_write_calls(hass: HomeAssistant):
+    """Autouse for the same reason, and for a sharper one: it follows
+    every light.turn_off the blueprint issues, so leaving it unmocked
+    aborts the run *after* the turn-off has already happened - which
+    every assertion about turn-offs would still pass straight through."""
+    return async_mock_service(hass, "flare", "record_write")
+
+
+@pytest.fixture(autouse=True)
 def _sensor(hass: HomeAssistant):
     """The adaptive sensor every test automation points at - a plain
     state, no real flare entity needed since the
@@ -629,6 +638,31 @@ class TestOccupancyDrivenOnOff:
 
         calls = apply_lighting_calls
         assert calls and calls[-1].data["entities"] == ["light.a"]
+
+    async def test_the_turn_off_is_recorded_as_ours(self, hass, light_turn_off_calls, record_write_calls):
+        """The blueprint turns lights off with a bare light.turn_off, so
+        nothing records it. Without this the integration sees the light
+        go off under a context it holds no claim for and classifies it
+        as somebody else switching it off - every light in the room,
+        every time the room empties."""
+        _occupancy(hass, "binary_sensor.occ", "on")
+        _light(hass, "light.a", "on")
+        await hass.async_block_till_done()
+        await _setup_room_automation(
+            hass, room_target={"entity_id": ["light.a", "binary_sensor.occ"]}, no_motion_wait=0
+        )
+
+        _occupancy(hass, "binary_sensor.occ", "off")
+        await hass.async_block_till_done()
+        async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=1))
+        await hass.async_block_till_done()
+
+        assert light_turn_off_calls, "precondition: the room should have been turned off"
+        assert record_write_calls, "the turn-off must be recorded, or it reads as external"
+        data = record_write_calls[-1].data
+        assert data["entities"] == light_turn_off_calls[-1].data["entity_id"]
+        assert all(t == {"state": "off"} for t in data["targets"].values()), data["targets"]
+        assert set(data["targets"]) == set(data["entities"])
 
     async def test_occupancy_cleared_turns_lights_off_after_the_wait(self, hass, light_turn_off_calls):
         _occupancy(hass, "binary_sensor.occ", "on")

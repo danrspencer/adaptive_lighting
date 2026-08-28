@@ -228,6 +228,95 @@ async def test_a_light_going_unavailable_is_cleared_from_its_scope(hass: HomeAss
     unsub()
 
 
+async def test_a_scope_holds_its_claims_while_any_of_its_lights_is_still_on(hass: HomeAssistant):
+    """Turning one light off in a room somebody is still using is an
+    override, and must stay one - releasing on the first light off
+    would hand it straight back and relight it on the next tick."""
+    area = ar.async_get(hass).async_get_or_create("Kitchen")
+    _entry, registry, _ = await _setup(hass, _scope("Kitchen", {"area_id": [area.id]}))
+    _light(hass, "light.a", area_id=area.id)
+    _light(hass, "light.b", area_id=area.id)
+    for e in ("light.a", "light.b"):
+        await _record(registry, e, "ctx-ours", {"brightness": 200, "color_temp_kelvin": 3000})
+    unsub = registry.async_start_listening(hass)
+
+    hass.states.async_set("light.a", "off", {})
+    await hass.async_block_till_done()
+
+    assert set(registry.all_records()) == {"light.a", "light.b"}
+    unsub()
+
+
+async def test_a_scope_releases_once_none_of_its_lights_are_on(hass: HomeAssistant):
+    """The whole room going dark is what ends an override: nobody is
+    using the room, so handing it back overrides nobody's choice."""
+    area = ar.async_get(hass).async_get_or_create("Kitchen")
+    _entry, registry, _ = await _setup(hass, _scope("Kitchen", {"area_id": [area.id]}))
+    _light(hass, "light.a", area_id=area.id)
+    _light(hass, "light.b", area_id=area.id)
+    for e in ("light.a", "light.b"):
+        await _record(registry, e, "ctx-ours", {"brightness": 200, "color_temp_kelvin": 3000})
+    unsub = registry.async_start_listening(hass)
+
+    hass.states.async_set("light.a", "off", {})
+    hass.states.async_set("light.b", "off", {})
+    await hass.async_block_till_done()
+
+    assert registry.all_records() == {}
+    unsub()
+
+
+async def test_an_unavailable_light_holding_a_claim_does_not_hold_a_scope_open(hass: HomeAssistant):
+    """Anything not reporting `on` counts as dark. Requiring every
+    tracked light to report `off` would let one permanently unavailable
+    entity - an orphaned Zigbee group - veto the release forever, the
+    same trap the blueprint's `recovered` trigger avoids by asking
+    whether anything is reachable rather than whether nothing is
+    unavailable.
+
+    The orphan goes unavailable *before* the listener starts, so its
+    claim is never popped by the drop branch and is still there to be
+    iterated - which is exactly the situation after a restart, and the
+    only one in which this rule is reachable at all."""
+    area = ar.async_get(hass).async_get_or_create("Kitchen")
+    _entry, registry, _ = await _setup(hass, _scope("Kitchen", {"area_id": [area.id]}))
+    _light(hass, "light.a", area_id=area.id)
+    _light(hass, "light.dead", area_id=area.id)
+    for e in ("light.a", "light.dead"):
+        await _record(registry, e, "ctx-ours", {"brightness": 200, "color_temp_kelvin": 3000})
+
+    hass.states.async_set("light.dead", "unavailable", {})
+    await hass.async_block_till_done()
+    assert set(registry.all_records()) == {"light.a", "light.dead"}, "precondition: the claim survives"
+
+    unsub = registry.async_start_listening(hass)
+    hass.states.async_set("light.a", "off", {})
+    await hass.async_block_till_done()
+
+    assert registry.all_records() == {}
+    unsub()
+
+
+async def test_scopes_release_independently(hass: HomeAssistant):
+    """One room going dark says nothing about another."""
+    kitchen = ar.async_get(hass).async_get_or_create("Kitchen")
+    hall = ar.async_get(hass).async_get_or_create("Hall")
+    _entry, registry, _ = await _setup(
+        hass, _scope("Kitchen", {"area_id": [kitchen.id]}), _scope("Hall", {"area_id": [hall.id]})
+    )
+    _light(hass, "light.k", area_id=kitchen.id)
+    _light(hass, "light.h", area_id=hall.id)
+    for e in ("light.k", "light.h"):
+        await _record(registry, e, "ctx-ours", {"brightness": 200, "color_temp_kelvin": 3000})
+    unsub = registry.async_start_listening(hass)
+
+    hass.states.async_set("light.k", "off", {})
+    await hass.async_block_till_done()
+
+    assert set(registry.all_records()) == {"light.h"}
+    unsub()
+
+
 async def test_the_clear_button_clears_only_its_own_scope(hass: HomeAssistant):
     kitchen = ar.async_get(hass).async_get_or_create("Kitchen")
     hall = ar.async_get(hass).async_get_or_create("Hall")
@@ -532,8 +621,13 @@ async def test_counters_refresh_when_a_lights_live_state_changes(hass: HomeAssis
     depends on each light's *live* state, which changes with nothing
     here being touched. Without the tracking sensor's poll broadcasting,
     they only refresh when a claim mutates and sit stale in between -
-    caught live still calling a light overridden minutes after it had
-    been turned off."""
+    caught live still calling a light overridden minutes after its own
+    state had moved on.
+
+    Uses unavailable rather than off: an off light with someone else's
+    claim on it is *still* overridden now (see
+    test_being_switched_off_by_hand_is_an_override), so off no longer
+    changes this count on its own."""
     area = ar.async_get(hass).async_get_or_create("Kitchen")
     _entry, registry, added = await _setup(hass, _scope("Kitchen", {"area_id": [area.id]}))
     tracker = next(e for e in added if hasattr(e, "claims"))
@@ -551,8 +645,8 @@ async def test_counters_refresh_when_a_lights_live_state_changes(hass: HomeAssis
 
     async_dispatcher_connect(hass, SIGNAL_WRITE_TRACKING_UPDATED, lambda: refreshed.append(True))
 
-    # The light is turned off with no claim changing at all.
-    hass.states.async_set("light.a", "off", {})
+    # The light drops off the network with no claim changing at all.
+    hass.states.async_set("light.a", "unavailable", {})
     await tracker.async_update()
     await hass.async_block_till_done()
 
