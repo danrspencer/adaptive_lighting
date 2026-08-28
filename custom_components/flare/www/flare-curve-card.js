@@ -374,6 +374,10 @@ class FlareCurveCard extends HTMLElement {
       brightnessNowValue,
       kelvinNowValue,
       nowBucket,
+      // The swatch border depends on it (see _render()'s own swatch
+      // builder) - without this, toggling the theme mid-session doesn't
+      // repaint until some unrelated value happens to change too.
+      !!(hass.themes && hass.themes.darkMode),
     ]);
 
     if (cacheKey === this._cacheKey) {
@@ -620,17 +624,14 @@ class FlareCurveCard extends HTMLElement {
     const nowInWindow = now >= dayStart && now <= dayEnd;
     const haveNow = nowInWindow && Number.isFinite(this._brightnessNow) && Number.isFinite(this._kelvinNow);
     const nowX = xOf(now).toFixed(1);
-    let nowMarker = '';
-    if (haveNow) {
-      const nowHex = rgbToHex(kelvinToRgb(this._kelvinNow));
-      const nowY = BASELINE_Y - hOf(this._brightnessNow);
-      nowMarker = `
-        <line x1="${nowX}" y1="${PAD_TOP - 4}" x2="${nowX}" y2="${BASELINE_Y}" class="now-line" />
-        <circle cx="${nowX}" cy="${nowY.toFixed(1)}" r="4" fill="${nowHex}" class="now-dot" />
-      `;
-    } else if (nowInWindow) {
-      nowMarker = `<line x1="${nowX}" y1="${PAD_TOP - 4}" x2="${nowX}" y2="${BASELINE_Y}" class="now-line" />`;
-    }
+    // Used to be a filled circle on the chart itself, at whatever height
+    // the current brightness put it - dropped because a pale, cold
+    // colour rendered as a near-invisible dot against the chart's own
+    // background. The swatch on the label below replaces it; the
+    // vertical line stays as the chart's own "you are here" marker.
+    const nowMarker = nowInWindow
+      ? `<line x1="${nowX}" y1="${PAD_TOP - 4}" x2="${nowX}" y2="${BASELINE_Y}" class="now-line" />`
+      : '';
 
     const svg = `
       <div class="chart-wrap">
@@ -647,8 +648,18 @@ class FlareCurveCard extends HTMLElement {
       </div>
     `;
 
+    // A theme's own dark mode (hass.themes.darkMode) rather than a
+    // prefers-color-scheme media query - HA's dark mode is a user/theme
+    // setting independent of the OS, and this card only ever has the
+    // real hass object (or the docs playground's synthetic one, which
+    // has no themes key at all and so falls through to the light-mode
+    // border, matching that page's own light background).
+    const darkMode = !!(this._hass && this._hass.themes && this._hass.themes.darkMode);
+    const swatchBorder = darkMode ? 'none' : '1px solid #000';
+    const swatch = (hex) => `<span class="swatch" style="background:${hex};border:${swatchBorder};"></span>`;
+
     const nowLabel = haveNow
-      ? `Now ${fmtTime(now)} · ${this._brightnessNow} bri · ${this._kelvinNow}K${this._phaseState ? ` · ${this._phaseState}` : ''}`
+      ? `Now ${fmtTime(now)} · ${this._brightnessNow} bri · ${this._kelvinNow}K${this._phaseState ? ` · ${this._phaseState}` : ''} ${swatch(rgbToHex(kelvinToRgb(this._kelvinNow)))}`
       : this._phaseState || '';
 
     const footnote = haveSamples
@@ -696,7 +707,14 @@ class FlareCurveCard extends HTMLElement {
           cursor: default;
         }
         .now-line { stroke: var(--primary-text-color); stroke-width: 1.5; }
-        .now-dot { stroke: var(--card-background-color); stroke-width: 1.5; }
+        .swatch {
+          display: inline-block;
+          width: 10px;
+          height: 10px;
+          border-radius: 2px;
+          vertical-align: middle;
+          box-sizing: border-box;
+        }
         .sun-line { stroke: #f5a623; stroke-width: 1.5; opacity: 0.85; }
         .sun-dot { fill: #f5a623; }
         .sun-label { font-size: 0.78em; color: var(--secondary-text-color); margin-bottom: 2px; }
@@ -759,7 +777,6 @@ class FlareCurveCard extends HTMLElement {
       }
       const s = samples[idx];
       const hex = rgbToHex(kelvinToRgb(s.kelvin));
-      const swatch = `<span style="display:inline-block;width:10px;height:10px;border-radius:2px;background:${hex};vertical-align:middle;"></span>`;
       const phase = phaseAt(s.t, b.morning, b.day, b.evening, b.night);
       // sunriseTs/sunsetTs are closed over from _render()'s own scope -
       // already shifted into this same display window (see
@@ -768,7 +785,7 @@ class FlareCurveCard extends HTMLElement {
       this._tooltipEl.style.display = 'block';
       this._tooltipEl.style.left = `${clamp((clientX - rect.left), 0, rect.width - 170)}px`;
       this._tooltipEl.style.top = '4px';
-      this._tooltipEl.innerHTML = `<b>${phase} · ${fmtTime(s.t)}${sunState ? ` · ${sunState}` : ''}</b><br>${s.brightness} bri &nbsp; ${s.kelvin}K ${swatch}`;
+      this._tooltipEl.innerHTML = `<b>${phase} · ${fmtTime(s.t)}${sunState ? ` · ${sunState}` : ''}</b><br>${s.brightness} bri &nbsp; ${s.kelvin}K ${swatch(hex)}`;
     };
     const onLeave = () => {
       this._tooltipEl.style.display = 'none';
