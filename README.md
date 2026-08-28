@@ -18,27 +18,26 @@ real dashboard card, and you can drag the schedule and curve settings around and
 - **[Quickstart](https://danrspencer.github.io/flare/installation/)** — HACS, the blueprint, and the dashboard card
 - **[Power users](https://danrspencer.github.io/flare/advanced/)** — every service and entity, scene handoff, and building without the blueprint
 - **[Blueprint reference](https://danrspencer.github.io/flare/blueprint/)** — every input, feature by feature
-- **[Contributing](https://danrspencer.github.io/flare/contributing/)** — repository layout and the test suite
+- **[Contributing](CONTRIBUTING.md)** — repository layout and the test suite
 
 ## Why four phases, not a continuous curve
 
-Most adaptive-lighting tools compute one continuous curve straight from the sun's position — brightness and
-colour temperature interpolated smoothly between sunrise and sunset, nothing else to it. That's a reasonable
-default, but it treats every part of your day the same way: just "more or less light," rather than light with a
-*purpose*. FLARE instead uses four named phases, each justified on its own terms:
+Adaptive lighting usually computes one continuous curve from the sun's position — brightness and colour
+temperature interpolated smoothly between sunrise and sunset. That follows the daylight closely, but the
+daylight isn't your schedule, and the two drift furthest apart in the months you spend most of the day indoors.
+FLARE works from your schedule instead, using four named phases, each with a job of its own:
 
-- **Morning** exists to help you wake up, not to track sunrise. It starts at a fixed time before you'd normally
-  be up, independent of the season — a sun-tracking curve would have it arrive at 5am in June and 8am in
-  December, which isn't what a wake-up light is for. Bright, cool-white light in the morning has been linked to
-  better alertness later in the day: [one study](https://pubmed.ncbi.nlm.nih.gov/36058557/) found office workers
-  given 1.5 hours of bright morning light for a week had higher sleep efficiency and less morning sleepiness than
-  under regular office lighting.
+- **Morning** is there to help you wake up, so it starts at a fixed time before you'd normally be up rather than
+  moving with sunrise — the same wake-up light in December as in June. Bright, cool-white light in the morning
+  has been linked to better alertness later in the day: [one study](https://pubmed.ncbi.nlm.nih.gov/36058557/)
+  found office workers given 1.5 hours of bright morning light for a week had higher sleep efficiency and less
+  morning sleepiness than under regular office lighting.
 - **Day** is the long middle stretch, gradually warming as it runs toward evening so the eventual transition
   doesn't feel abrupt.
 - **Evening** is when relaxed, warm lighting takes over — the one phase that *does* track the sun (sunset), so
   your indoor lighting shifts in step with what's actually happening outside. It's clamped between an earliest
-  and latest bound, though, so a 4pm winter sunset doesn't dump you into "relaxed evening" mode the moment you
-  walk in from work, and a 10pm midsummer sunset doesn't mean evening never really arrives.
+  and latest bound, though, so a 4pm winter sunset doesn't start the evening while you're still at work, and a
+  10pm midsummer sunset doesn't mean evening never really arrives.
 - **Night** isn't tied to any solar event at all — it's just what the house should look like once everyone's
   asleep: dim and warm, the lighting you want on at 3am without waking yourself up further.
 

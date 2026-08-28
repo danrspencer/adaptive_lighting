@@ -1,27 +1,6 @@
----
-title: Contributing
-nav_order: 6
-permalink: /contributing/
-render_with_liquid: false
-# Liquid is off for this page: it contains Home Assistant Jinja,
-# which shares Liquid's {{ }} delimiters. With Liquid on, those
-# examples render as empty strings and nothing errors. That also
-# means no relative_url filter here - links are plain relative
-# paths, which need no baseurl to be right.
----
-
 # Contributing
-{: .no_toc }
 
-<details open markdown="block">
-  <summary>On this page</summary>
-  {: .text-delta }
-- TOC
-{:toc}
-</details>
-
-
-Not needed just to install and use this — see [README.md](../) for that. This is for working on the
+Not needed just to install and use this — see [README.md](README.md) for that. This is for working on the
 code itself.
 
 ## Repository layout
@@ -86,25 +65,23 @@ brand/
 blueprints/automation/danspencer/flare.yaml
     The automation blueprint: triggers, conditions, target resolution,
     and the action sequence (which service to call, with what target).
-    Deliberately named differently from any prior "FLARE
-    Unified" blueprint so the two can run side by side while rooms are
-    migrated over individually, rather than one replacing the other
-    in place.
 
 dashboard/
-    house-settings-card.yaml   curve card config to add to a view
-    adaptive-lighting-section.yaml
-                                 fuller section: curve card, phase
-                                 override, and every schedule/curve
-                                 config entity, laid out as tiles
+    house-settings-card.yaml   the curve card alone, to drop into a view
+    flare-section.yaml         a fuller section: curve card, phase
+                               override, and every schedule/curve
+                               config entity, laid out as tiles
 
 tests/
     pytest suite for curve.py, grouping.py, and scenes.py.
 
 docs/
-    advanced/       power-user reference: services, scene handoff,
-                   building without the blueprint
-    BLUEPRINT.md   full feature/input reference for the blueprint
+    index.md          the pitch, and what the four phases are for
+    installation.md   quickstart: HACS, blueprint, dashboard card
+    playground.html   the interactive curve, running the real card
+    blueprint.md      full feature/input reference for the blueprint
+    advanced/         power-user reference: services, scene handoff,
+                      building without the blueprint
 ```
 
 Triggers, conditions, and target resolution stay in the blueprint; Home Assistant `condition:` blocks can't call
@@ -115,13 +92,10 @@ at all.
 
 ## Previewing the dashboard card
 
-The [curve playground](../playground.html) on this site renders the real card against synthetic data, with no
+The [curve playground](https://danrspencer.github.io/flare/playground.html) on this site renders the real card against synthetic data, with no
 Home Assistant instance involved — the page loads
 `custom_components/flare/www/flare-curve-card.js` itself and feeds it the state
 shape a live Home Assistant would. Build the site locally (below) to exercise a change to the card.
-
-This replaced a standalone `dashboard/preview.html` harness and its synthetic-data generator, which did the same
-job less well.
 
 ## The documentation site
 
@@ -134,13 +108,13 @@ deploys.
 cd docs && bundle install && bundle exec jekyll build
 ```
 
-To preview locally, note the site has a `baseurl` of `/adaptive_lighting`, so `_site` has to be served one
+To preview locally, note the site has a `baseurl` of `/flare`, so `_site` has to be served one
 directory *below* the web root or every asset 404s. `.claude/launch.json`'s `docs-site` entry handles that via
-`docs/_preview/`, which symlinks `adaptive_lighting` → `_site`:
+`docs/_preview/`, which symlinks `flare` → `_site`:
 
 ```bash
 python3 -m http.server 8935 --directory docs/_preview
-# open http://localhost:8935/adaptive_lighting/
+# open http://localhost:8935/flare/
 ```
 
 Two things about it are less obvious than they look:

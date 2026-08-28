@@ -19,12 +19,12 @@ built in.
 
 ## Four phases, not one curve
 
-Most adaptive-lighting tools map brightness and colour straight onto sun elevation. That
-sounds right and behaves oddly: the sun is the same height at 8am and 5pm, so your kitchen
-gets identical light for breakfast and for cooking dinner. In midwinter it never gets high
-enough for bright light at all.
+Adaptive lighting usually maps brightness and colour onto the sun's position. That tracks
+the daylight closely, but the daylight isn't your schedule — and the two drift furthest
+apart in the months you spend most of the day indoors.
 
-FLARE divides the day into four named phases instead, each with its own targets:
+FLARE works from your schedule instead, dividing the day into four named phases, each with
+its own targets:
 
 | Phase | What it's for |
 |---|---|

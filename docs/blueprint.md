@@ -22,7 +22,7 @@ render_with_liquid: false
 
 
 > Part of [FLARE](../) — see there for why this project is shaped the way it is
-> (in particular, [why the schedule has four named phases](../#why-four-phases-not-a-continuous-curve)
+> (in particular, [why the schedule has four named phases](../#four-phases-not-one-curve)
 > rather than a single continuous curve) and how to install it.
 
 Built on the [FLARE's services](../advanced/reference/) services, but the two are only loosely coupled — the
@@ -31,7 +31,7 @@ anything about how that service is implemented.
 
 ## Brightness & colour temperature schedule
 
-Tracks a target brightness and Kelvin value that follows the [Morning/Day/Evening/Night schedule](../#why-four-phases-not-a-continuous-curve),
+Tracks a target brightness and Kelvin value that follows the [Morning/Day/Evening/Night schedule](../#four-phases-not-one-curve),
 applied once a minute to whichever of the room's lights are already on, so they drift with the schedule
 instead of jumping - regardless of whether the room currently reads as occupied (see
 [Occupancy-driven on/off](#occupancy-driven-onoff) - occupancy decides whether to turn lights on or off, never
@@ -87,7 +87,7 @@ wall-clock second — most noticeable right at a phase boundary, when every such
 literally the same instant. Motion, manual runs, and Additional Triggers are never delayed - self-healing is,
 since it shares the same tick.
 
-The [dashboard curve card](../contributing/#previewing-the-dashboard-cards) also plots today's actual sunrise/sunset
+The [dashboard curve card](https://github.com/danrspencer/flare/blob/main/CONTRIBUTING.md#previewing-the-dashboard-card) also plots today's actual sunrise/sunset
 (from `sun.sun`) against the schedule, so it's easy to see at a glance how far the configured boundaries and
 Evening's earliest/latest clamp are actually tracking the sun.
 
@@ -301,7 +301,7 @@ drifting smoothly the rest of the time:
 
 | Duration | Used for |
 |---|---|
-| Background Transition | The periodic Update tick, Additional Triggers, and a light recovering from a dropped connection (see [Override detection](#override-detection)) - none of these are a person waiting on a response in real time, so there's no reason to snap. Covers both the scene-activation step and the main adaptive-lighting dispatch |
+| Background Transition | The periodic Update tick, Additional Triggers, and a light recovering from a dropped connection (see [Override detection](#override-detection)) - none of these are a person waiting on a response in real time, so there's no reason to snap. Covers both the scene-activation step and the main FLARE dispatch |
 | Motion On Transition | Motion being detected, and running the automation manually - "something happened, respond promptly" triggers |
 | Motion Off Transition | Turning lights off - both the motion-cleared turn-off and the [self-healing](#self-healing) retry |
 
@@ -317,9 +317,7 @@ On every Update tick (the same periodic tick that drives ordinary brightness/col
 [Brightness & colour temperature schedule](#brightness--colour-temperature-schedule) — there's no separate
 interval for this), if the room's occupancy sensors have been continuously clear for the full Wait time but a
 light is still on, the off command is retried instead of the normal reapply. This recovers from dropped commands
-(a missed Zigbee message, for example) without manual intervention. There used to be a second, independent
-interval just for this check — merged away once it became clear there was no real reason for two separate
-periodic ticks per room.
+(a missed Zigbee message, for example) without manual intervention.
 
 The Wait time check here is debounced against a momentary sensor blip, not just an instantaneous "is it clear
 right now" read — a noisy occupancy sensor that briefly reports clear before going occupied again won't trip an
@@ -352,13 +350,3 @@ Add an automation using the "FLARE" blueprint per room, and set:
 | Update Interval | no | How often to reapply the schedule on a fixed interval - also the self-healing check interval, there's no separate one (default every minute, see [Brightness & colour temperature schedule](#brightness--colour-temperature-schedule)) |
 | Update Jitter | no | Max random delay (seconds) on a phase change or the periodic tick, so many rooms don't fire in the same instant (default 15s, 0 disables) |
 | Motion On / Motion Off / Background Transition | no | Transition durations for each trigger type (see [Transition durations](#transition-durations)) |
-
-Note: if migrating from an older, pre-rewrite version of this blueprint, the inputs have changed
-(`scene_sensor`/`scene_name_prefix` → `scene_template`/`extra_triggers`) — every room automation using the old
-inputs will show as misconfigured until updated. Worth doing deliberately, room by room, rather than all at once.
-
-Note: `prefer_rgb_color_template` (a template) was replaced by **Prefer RGB During** (a multi-select of phases) -
-same breaking-rename situation as `scene_sensor`/`scene_name_prefix` above, every room automation still using the
-old `prefer_rgb_color_template` input will show as misconfigured until updated. There's no template fallback for
-this one any more - select all four phases if you want RGB unconditionally, the same as the old template set to
-`{{ true }}`.

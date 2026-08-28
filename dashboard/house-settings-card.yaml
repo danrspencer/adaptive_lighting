@@ -2,7 +2,7 @@
 # dashboards aren't files, so this is just the card config to paste in).
 #
 # Requires:
-#   1. Adaptive Lighting Helpers installed and set up - the card ships
+#   1. FLARE installed and set up - the card ships
 #      inside the integration and self-registers with the frontend on
 #      startup (see __init__.py's async_setup), no manual Lovelace
 #      resource registration needed.
@@ -10,8 +10,8 @@
 #      Lighting Helpers -> Add Sensor - just a name) with these
 #      entity_ids and attribute shapes (produced by the
 #      flare integration's day-phase/curve sensors
-#      - see docs/HELPERS.md's "Optional: day-phase/curve sensors"
-#      section). Substitute your sensor's own slugified name for
+#      - see the integration reference at
+#      https://danrspencer.github.io/flare/advanced/reference/). Substitute your sensor's own slugified name for
 #      "living_room" below (or point individual entity_ids at a
 #      hand-written sensor instead via the `entities` map).
 #        sensor.living_room_flare - state: Morning/Day/Evening/Night
@@ -27,7 +27,7 @@
 #        sun.sun (optional, same reason as evening's earliest/latest)
 #
 # For the curve graph plus the override and every config entity in one
-# section, see adaptive-lighting-section.yaml instead.
+# section, see flare-section.yaml instead.
 
 type: heading
 heading: Adaptive Lighting Curve

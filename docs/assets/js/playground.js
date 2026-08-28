@@ -418,7 +418,7 @@ async function main() {
   }
 
   card = document.createElement('flare-curve-card');
-  card.setConfig({ title: 'Adaptive Lighting' });
+  card.setConfig({ title: 'Lighting graph' });
   host.appendChild(card);
   refresh();
 }

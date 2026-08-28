@@ -33,7 +33,7 @@ The services FLARE registers, and the override-protection machinery behind them.
 
 
 > Part of [FLARE](../) — see there for why this project is shaped the way it is
-> (in particular, [why the schedule has four named phases](../#why-four-phases-not-a-continuous-curve)
+> (in particular, [why the schedule has four named phases](../../#four-phases-not-one-curve)
 > rather than a single continuous curve) and how to install it.
 
 Seven services, each documented in full in `services.yaml` (visible in Home Assistant's Developer Tools → Actions
@@ -45,8 +45,8 @@ The "just make it happen" service: given a target brightness/colour-temperature 
 plain values, actually turns entities on/off via `light.turn_on`/`light.turn_off`, handling reachability,
 tolerance, override protection, two-step transitions, and RGB-vs-colour-temp dispatch internally. Neither this
 nor `compute_lighting_groups` reads any sensor entity - if you're feeding these values from a sensor's own
-attributes (the adaptive_lighting blueprint in this repo does exactly that, reading its own FLARE
-Sensor input - see [the blueprint reference](../blueprint/#bring-your-own-sensor) for the attribute contract that
+attributes (the FLARE blueprint in this repo does exactly that, reading its own FLARE
+Sensor input - see [the blueprint reference](../../blueprint/#bring-your-own-sensor) for the attribute contract that
 relies on), that's an ordinary template on the caller's side, not something this service does for you.
 
 ```yaml
@@ -270,7 +270,7 @@ Both services above accept `prefer_rgb_color` (off by default) and an explicit `
 `prefer_rgb_color` is on, entities whose `supported_color_modes` indicates RGB support (auto-detected — nothing
 to configure per light) are routed to `rgb_color` instead of `color_temp_kelvin`; entities without RGB support
 are unaffected. Neither service invents an RGB target on its own, or reads one off a sensor — see `compute_curve`
-below (or `sensor.adaptive_lighting`'s own `rgb_color` attribute) for where that value comes from, or supply your
+below (or `sensor.<name>_flare`'s own `rgb_color` attribute) for where that value comes from, or supply your
 own. `rgb_color` can be left unset, or passed explicitly as `null` (useful if you're templating it from a source
 that doesn't always have one) — either way it's simply ignored unless `prefer_rgb_color` is also on.
 
@@ -377,26 +377,26 @@ Each sensor's device contains, computed the same way `compute_curve` computes th
 
 | Entity | What it is |
 |---|---|
-| `sensor.<name_>adaptive_lighting` | Combined "right now" reading — state is the phase (Morning/Day/Evening/Night), `attributes.brightness` (0-255), `attributes.color_temp` (Kelvin), and `attributes.rgb_color` (`[r, g, b]`) are exactly the attribute names the blueprint's `adaptive_sensor` input already reads to feed `apply_lighting`'s own `brightness`/`color_temp_kelvin`/`rgb_color` fields (see [the blueprint reference](../blueprint/#bring-your-own-sensor)), so this can be pointed at directly. Also carries today's four phase-boundary timestamps as `attributes.morning_start`/`day_start`/`evening_start`/`night_start`, plus `attributes.evening_earliest`/`evening_latest` (the two configured bounds Evening was actually clamped between) — no separate boundary sensors, since a phase-change automation only needs a `platform: state, attribute: phase` trigger on this same entity, and anything that specifically wants a boundary time (the dashboard card, in particular) can read it straight off these attributes. `attributes.points` carries the full day as 289 `{t, brightness, kelvin}` samples — what the [dashboard card](../contributing/#previewing-the-dashboard-card) reads for its chart, deliberately **not** following a manual phase override (see below) the way the rest of this entity's attributes do, since it's a full-day schedule, not a "right now" value |
-| `select.<name_>adaptive_lighting_phase` | Manual override — `Auto` (default) or a specific phase. Pinning a phase holds it until the *schedule itself* next moves on (e.g. override to `Day` during `Evening` and it still becomes `Night` once Evening would naturally have ended, rather than staying on `Day` forever) — see the sticky-override switch below to disable that and keep an override until you clear it yourself instead |
-| `time.<name_>morning_time` / `day_time` / `evening_earliest_time` / `evening_latest_time` / `night_time` | The five schedule boundaries — start times for Morning, Day, and Night, and Evening's earliest/latest bound. Each starts at a representative default (06:00/08:00/17:00/20:00/22:00) and is adjustable at any time; the change applies within seconds, not on the next 60s poll |
+| `sensor.<name>_flare` | Combined "right now" reading — state is the phase (Morning/Day/Evening/Night), `attributes.brightness` (0-255), `attributes.color_temp` (Kelvin), and `attributes.rgb_color` (`[r, g, b]`) are exactly the attribute names the blueprint's `adaptive_sensor` input already reads to feed `apply_lighting`'s own `brightness`/`color_temp_kelvin`/`rgb_color` fields (see [the blueprint reference](../../blueprint/#bring-your-own-sensor)), so this can be pointed at directly. Also carries today's four phase-boundary timestamps as `attributes.morning_start`/`day_start`/`evening_start`/`night_start`, plus `attributes.evening_earliest`/`evening_latest` (the two configured bounds Evening was actually clamped between) — no separate boundary sensors, since a phase-change automation only needs a `platform: state, attribute: phase` trigger on this same entity, and anything that specifically wants a boundary time (the dashboard card, in particular) can read it straight off these attributes. `attributes.points` carries the full day as 289 `{t, brightness, kelvin}` samples — what the [dashboard card](https://github.com/danrspencer/flare/blob/main/CONTRIBUTING.md#previewing-the-dashboard-card) reads for its chart, deliberately **not** following a manual phase override (see below) the way the rest of this entity's attributes do, since it's a full-day schedule, not a "right now" value |
+| `select.<name>_flare_phase` | Manual override — `Auto` (default) or a specific phase. Pinning a phase holds it until the *schedule itself* next moves on (e.g. override to `Day` during `Evening` and it still becomes `Night` once Evening would naturally have ended, rather than staying on `Day` forever) — see the sticky-override switch below to disable that and keep an override until you clear it yourself instead |
+| `time.<name>_morning_time` / `day_time` / `evening_earliest_time` / `evening_latest_time` / `night_time` | The five schedule boundaries — start times for Morning, Day, and Night, and Evening's earliest/latest bound. Each starts at a representative default (06:00/08:00/17:00/20:00/22:00) and is adjustable at any time; the change applies within seconds, not on the next 60s poll |
 | `number.<name>_<phase>_brightness` / `_kelvin` | The eight curve values — brightness (0-255) and colour temperature (1000-10000K), one pair per phase. Each starts at the value shown in `compute_curve`'s field list above, and is adjustable at any time |
 | `number.<name>_<phase>_brightness_transition` / `_kelvin_transition` | The eight transition durations, in minutes — see below |
-| `switch.<name_>sticky_phase_override` | Off by default (an override self-clears at the next phase boundary). Turn on to keep a manual phase override pinned until you clear it back to `Auto` yourself instead |
+| `switch.<name>_sticky_phase_override` | Off by default (an override self-clears at the next phase boundary). Turn on to keep a manual phase override pinned until you clear it back to `Auto` yourself instead |
 
 `time.*`/`number.*`/`switch.*` are all tagged as configuration entities, so Home Assistant groups them under the
 device's collapsed "Configuration" section rather than mixing them into the main entity list — present, and
 usable from dashboards/automations, without being sixteen always-visible entities cluttering the device page.
-This replaces what used to be a config-flow form only reachable via Configure - the schedule/curve values are now
-just entities like anything else, immediately visible and editable from the device page, no separate step needed.
+They are ordinary entities, so they're editable straight from the device page and usable from automations and
+dashboards like anything else — there is no separate configuration form to go through.
 
 Point the blueprint's FLARE Sensor input (or your own template reading the same attributes into
 `apply_lighting`'s `brightness`/`color_temp_kelvin`/`rgb_color` fields) at whichever sensor's
-`sensor.<name_>adaptive_lighting` you want. A sensor's whole device is removable later from the
+`sensor.<name>_flare` you want. A sensor's whole device is removable later from the
 integration's page; there's no reconfigure form since there's nothing left to reconfigure that way - edit the
 `time.*`/`number.*`/`switch.*` entities directly, or rename the device, instead.
 
-For a dashboard, [dashboard/adaptive-lighting-section.yaml](https://github.com/danrspencer/flare/blob/main/dashboard/adaptive-lighting-section.yaml) is a
+For a dashboard, [dashboard/flare-section.yaml](https://github.com/danrspencer/flare/blob/main/dashboard/flare-section.yaml) is a
 copy-paste section with the curve graph, the phase override and sticky-override switch, and all thirteen
 schedule/curve entities laid out as tiles - or skip the dashboard entirely and use the sensor's own device page
 (Settings → Devices → the sensor's device), which already shows the same entities grouped for free, since
