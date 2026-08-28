@@ -9,12 +9,12 @@
 #   2. A sensor added (Settings -> Devices & Services -> Adaptive
 #      Lighting Helpers -> Add Sensor - just a name) with these
 #      entity_ids and attribute shapes (produced by the
-#      adaptive_lighting_helpers integration's day-phase/curve sensors
+#      flare integration's day-phase/curve sensors
 #      - see docs/HELPERS.md's "Optional: day-phase/curve sensors"
 #      section). Substitute your sensor's own slugified name for
 #      "living_room" below (or point individual entity_ids at a
 #      hand-written sensor instead via the `entities` map).
-#        sensor.living_room_adaptive_lighting - state: Morning/Day/Evening/Night
+#        sensor.living_room_flare - state: Morning/Day/Evening/Night
 #                                           attributes.brightness (0-255),
 #                                           attributes.color_temp (Kelvin),
 #                                           attributes.morning_start/day_start/
@@ -34,7 +34,7 @@ heading: Adaptive Lighting Curve
 heading_style: title
 icon: mdi:chart-bell-curve
 ---
-type: custom:adaptive-lighting-curve-card
+type: custom:flare-curve-card
 sensor: living_room
 # Without this, the card renders at whatever its own natural width is
 # (a fraction of the section) rather than the section's full width,

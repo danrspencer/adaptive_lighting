@@ -17,7 +17,7 @@ from pathlib import Path
 import yaml
 
 SERVICES = yaml.safe_load(
-    (Path(__file__).resolve().parents[1] / "custom_components/adaptive_lighting_helpers/services.yaml").read_text()
+    (Path(__file__).resolve().parents[1] / "custom_components/flare/services.yaml").read_text()
 )
 
 # compute_lighting_groups only *reports* what it would do; apply_lighting

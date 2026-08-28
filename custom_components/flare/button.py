@@ -65,7 +65,7 @@ class _ScopeClearButton(ButtonEntity):
         self._registry = registry
         self._instance = instance
         self._attr_unique_id = f"{instance.subentry_id}_clear"
-        self.entity_id = f"button.{instance.prefix}adaptive_clear"
+        self.entity_id = f"button.{instance.prefix}flare_clear"
         self._attr_device_info = instance.device_info
 
     async def async_added_to_hass(self) -> None:

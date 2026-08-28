@@ -62,9 +62,9 @@ something you add explicitly:
 
 Each schedule you add creates its own device with:
 
-- `sensor.<name>_adaptive_lighting` — the current phase, brightness, colour temperature, today's boundary
+- `sensor.<name>_flare` — the current phase, brightness, colour temperature, today's boundary
   timestamps, and the full 289-point day curve.
-- `select.<name>_adaptive_lighting_phase` — manual phase override, self-clearing at the next natural
+- `select.<name>_flare_phase` — manual phase override, self-clearing at the next natural
   boundary unless you turn on `switch.<name>_sticky_phase_override`.
 - Five `time.*` boundaries and eight `number.*` curve values, all live config entities.
 
@@ -81,7 +81,7 @@ importing it early works, but the automation won't run correctly until the integ
 1. Go to **Settings → Automations & Scenes → Blueprints** → **Import Blueprint**.
 2. Paste this URL, click **Preview**, then **Import Blueprint**:
    ```
-   https://github.com/danrspencer/adaptive_lighting/blob/main/blueprints/automation/danspencer/adaptive_lighting.yaml
+   https://github.com/danrspencer/adaptive_lighting/blob/main/blueprints/automation/danspencer/flare.yaml
    ```
 3. Go to **Settings → Automations & Scenes → Create Automation → Use existing blueprint** and choose
    **Adaptive Lighting**.
@@ -110,7 +110,7 @@ no separate HACS entry and nothing to add under **Settings → Dashboards → Re
 2. Paste this, changing `ground_floor` to match your schedule's name (lowercased, spaces become
    underscores — "Ground Floor" becomes `ground_floor`):
    ```yaml
-   type: custom:adaptive-lighting-curve-card
+   type: custom:flare-curve-card
    sensor: ground_floor
    ```
 3. Click **Save**.

@@ -1,4 +1,4 @@
-"""Config flow for Adaptive Lighting Helpers.
+"""Config flow for FLARE.
 
 The main entry needs no configuration at all - adding it just registers
 the compute_lighting_groups/compute_curve/compute_scene_coverage/
@@ -25,7 +25,7 @@ first place.
 
 A subentry only ever asks for one thing: a name. It becomes both the
 sensor's device name (Settings -> Devices, renamable later) and its
-entity_id prefix (sensor.living_room_adaptive_lighting etc) - see
+entity_id prefix (sensor.living_room_flare etc) - see
 coordinator.py's ScheduleInstance/schedule_instances(). Everything else
 - the five schedule times and the eight brightness/Kelvin curve values
 - is a real HA entity on that device instead of a config-flow field
@@ -81,7 +81,7 @@ class AdaptiveLightingHelpersConfigFlow(config_entries.ConfigFlow, domain=DOMAIN
         await self.async_set_unique_id(f"{DOMAIN}_{ENTRY_TYPE_SCHEDULES}")
         self._abort_if_unique_id_configured()
         return self.async_create_entry(
-            title="Adaptive Lighting Schedules", data={CONF_ENTRY_TYPE: ENTRY_TYPE_SCHEDULES}
+            title="FLARE Schedules", data={CONF_ENTRY_TYPE: ENTRY_TYPE_SCHEDULES}
         )
 
     async def async_step_tracking(self, user_input: dict[str, Any] | None = None) -> FlowResult:
@@ -125,7 +125,7 @@ class AdaptiveLightingHelpersConfigFlow(config_entries.ConfigFlow, domain=DOMAIN
 
     def _create_tracking_entry(self, areas: list[tuple[str, str]]) -> FlowResult:
         return self.async_create_entry(
-            title="Adaptive Lighting Tracking",
+            title="FLARE Tracking",
             data={CONF_ENTRY_TYPE: ENTRY_TYPE_TRACKING},
             subentries=[
                 {
@@ -195,8 +195,8 @@ class AdaptiveLightingHelpersOptionsFlow(config_entries.OptionsFlow):
 
 class SensorSubentryFlow(ConfigSubentryFlow):
     """Adds one adaptive lighting sensor. Produces a device named after
-    it, containing sensor.<slug>_adaptive_lighting +
-    sensor.<slug>_adaptive_lighting_curve + select.<slug>_adaptive_lighting_phase
+    it, containing sensor.<slug>_flare +
+    sensor.<slug>_flare_curve + select.<slug>_flare_phase
     + the schedule/curve config entities (time.py/number.py/switch.py),
     namespaced by the slugified name so multiple sensors can coexist -
     see coordinator.py's schedule_instances(). No reconfigure flow -

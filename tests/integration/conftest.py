@@ -33,7 +33,7 @@ def hass_config_dir(tmp_path) -> str:
     hass_config_dir fixture, which otherwise points hass.config.config_dir
     at the package's own bundled testing_config/ - a directory with no
     knowledge of this repo's integration at all, so
-    async_setup_component(hass, "adaptive_lighting_helpers", {}) fails
+    async_setup_component(hass, "flare", {}) fails
     with "Integration not found" (confirmed live, not guessed - this is
     exactly the error before this fixture existed). Symlinks (not
     copies) custom_components/ into a throwaway tmp_path so HA reads the
@@ -43,7 +43,7 @@ def hass_config_dir(tmp_path) -> str:
     "not found" problem applies to blueprint files: an automation's
     use_blueprint.path is resolved via hass.config.path("blueprints",
     "automation", ...), so tests/integration/test_blueprint.py's
-    automations can only find the real adaptive_lighting.yaml if this
+    automations can only find the real flare.yaml if this
     tmp dir has it too."""
     (tmp_path / "custom_components").symlink_to(REPO_ROOT / "custom_components")
     (tmp_path / "blueprints").symlink_to(REPO_ROOT / "blueprints")

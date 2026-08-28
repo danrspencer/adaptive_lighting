@@ -1,5 +1,5 @@
 """
-Integration tests for the adaptive_lighting_helpers services
+Integration tests for the flare services
 (__init__.py), through a real Home Assistant instance - this is the
 HA-glue layer that tests/test_grouping.py and tests/test_curve.py
 can't reach at all (they exercise grouping.py/curve.py directly via
@@ -32,18 +32,18 @@ from homeassistant.core import Context, HomeAssistant
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 
-from custom_components.adaptive_lighting_helpers import _build_lookup, async_setup_entry
-from custom_components.adaptive_lighting_helpers.grouping import build_groups
-from custom_components.adaptive_lighting_helpers.const import (
+from custom_components.flare import _build_lookup, async_setup_entry
+from custom_components.flare.grouping import build_groups
+from custom_components.flare.const import (
     CONF_ENTRY_TYPE,
     CONF_TARGET,
     ENTRY_TYPE_TRACKING,
     SUBENTRY_TYPE_STATE,
 )
-from custom_components.adaptive_lighting_helpers.coordinator import state_instances
-from custom_components.adaptive_lighting_helpers.write_tracking import STALE_RECORD_MAX_AGE_DAYS, ClaimRegistry
+from custom_components.flare.coordinator import state_instances
+from custom_components.flare.write_tracking import STALE_RECORD_MAX_AGE_DAYS, ClaimRegistry
 
-DOMAIN = "adaptive_lighting_helpers"
+DOMAIN = "flare"
 
 
 async def _setup_entry(hass: HomeAssistant) -> MockConfigEntry:
@@ -94,7 +94,7 @@ async def _attach_tracking_sensors(hass: HomeAssistant, entry: MockConfigEntry) 
     _StateTrackingSensor and the real registry routing; only HA's state
     publication is stubbed out, which test_state_devices.py covers
     against a properly added entity."""
-    from custom_components.adaptive_lighting_helpers.sensor import async_setup_entry as sensor_setup
+    from custom_components.flare.sensor import async_setup_entry as sensor_setup
 
     added: list = []
     await sensor_setup(hass, entry, lambda entities, **kw: added.extend(entities))

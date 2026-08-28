@@ -5,7 +5,7 @@ the minimal set of light.turn_on/turn_off calls actually needed.
 Pure logic - HA access (current state, attributes, device/label
 lookups) is injected via an EntityLookup so this is testable with
 plain pytest and fakes, and so the integration's __init__.py
-(custom_components/adaptive_lighting_helpers/__init__.py) stays a thin
+(custom_components/flare/__init__.py) stays a thin
 adapter registering this as a standalone HA service. Transitively
 imports homeassistant.util.color (via override_protection.py's own
 _color_temp_matches, used below in _already_set) - see that module's
@@ -24,7 +24,7 @@ from typing import Callable, Optional
 
 try:
     # Real package context (production HA, tests/integration/) - grouping.py
-    # is imported as custom_components.adaptive_lighting_helpers.grouping.
+    # is imported as custom_components.flare.grouping.
     from .override_protection import (  # noqa: F401 (classify/target_matches_values re-exported for sensor.py)
         _color_temp_matches,
         classify,

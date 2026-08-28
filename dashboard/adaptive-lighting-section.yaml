@@ -51,11 +51,11 @@ cards:
     icon: mdi:chart-bell-curve
     badges:
       - type: entity
-        entity: select.living_room_adaptive_lighting_phase
+        entity: select.living_room_flare_phase
         show_state: true
         show_icon: true
 
-  - type: custom:adaptive-lighting-curve-card
+  - type: custom:flare-curve-card
     sensor: living_room
     # The heading card above already names the sensor - card's own
     # title would just repeat it, so it's suppressed here.
@@ -74,7 +74,7 @@ cards:
       columns: full
     cards:
       - type: tile
-        entity: select.living_room_adaptive_lighting_phase
+        entity: select.living_room_flare_phase
         name: Phase
       - type: tile
         entity: switch.living_room_sticky_phase_override

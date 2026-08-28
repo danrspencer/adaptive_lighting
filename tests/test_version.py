@@ -10,7 +10,7 @@ import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-MANIFEST = REPO_ROOT / "custom_components" / "adaptive_lighting_helpers" / "manifest.json"
+MANIFEST = REPO_ROOT / "custom_components" / "flare" / "manifest.json"
 CHANGELOG = REPO_ROOT / "CHANGELOG.md"
 
 

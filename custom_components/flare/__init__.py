@@ -1,5 +1,5 @@
 """
-Adaptive Lighting Helpers.
+FLARE.
 
 Standalone Home Assistant services for adaptive-lighting computation:
 brightness/colour-temperature curve math (curve.py), per-light
@@ -19,10 +19,10 @@ Optionally also sets up day-phase/curve
 sensors (sensor.py), a phase-override select (select.py), and the
 schedule/curve config as live entities (time.py, number.py, switch.py)
 per named sensor added afterwards (Settings -> Devices & Services ->
-Adaptive Lighting Helpers -> Add Sensor) - a native replacement for a
+FLARE Schedules -> Add schedule sensor) - a native replacement for a
 Jinja packages/*.yaml setup - see config_flow.py.
 
-Designed to work with the adaptive_lighting blueprint in this repo,
+Designed to work with the FLARE blueprint in this repo,
 but not coupled to it: call any of the services directly from your own
 automations/scripts if that's more useful to you. See README.md and
 services.yaml (visible in Developer Tools -> Actions) for the full
@@ -42,7 +42,7 @@ import asyncio
 # module, forwarded via SCHEDULE_PLATFORMS below). Importing a submodule
 # unconditionally rebinds it as an attribute of the parent package, which
 # is this module's own global namespace - a bare `import time` here gets
-# silently clobbered the moment anything imports adaptive_lighting_helpers.time
+# silently clobbered the moment anything imports flare.time
 # (any entry with an "at"-less compute_curve call, e.g. every real
 # install with at least one schedule instance, plus now every entry
 # regardless of instances - see async_forward_entry_setups below), and
@@ -303,12 +303,12 @@ async def _two_step_turn_on(
     return brightness_context.id, color_context.id
 
 
-CARD_URL_BASE = "/adaptive_lighting_helpers_static"
-CARD_JS_PATH = "adaptive-lighting-curve-card.js"
+CARD_URL_BASE = "/flare_static"
+CARD_JS_PATH = "flare-curve-card.js"
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
-    """Serve www/adaptive-lighting-curve-card.js and auto-load it on
+    """Serve www/flare-curve-card.js and auto-load it on
     every frontend page - runs once for the whole domain, regardless of
     how many config entries/subentries exist, so the cards ship and
     update with the integration itself (via HACS) rather than needing
@@ -369,7 +369,7 @@ async def async_migrate_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     hass.config_entries.async_update_entry(
         entry,
         version=3,
-        title="Adaptive Lighting Schedules",
+        title="FLARE Schedules",
         unique_id=f"{DOMAIN}_{ENTRY_TYPE_SCHEDULES}",
         data={**entry.data, CONF_ENTRY_TYPE: ENTRY_TYPE_SCHEDULES},
     )
@@ -421,7 +421,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         entry.async_on_unload(async_start_watching(hass, entry))
 
     async def compute_lighting_groups(call: ServiceCall) -> ServiceResponse:
-        """adaptive_lighting_helpers.compute_lighting_groups
+        """flare.compute_lighting_groups
 
         Returns: {"groups": [{"multiplier", "brightness", "needing_off",
         "combined", "two_step", "combined_rgb", "two_step_rgb"}, ...]} -
@@ -445,7 +445,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         return _groups_response(groups)
 
     async def compute_curve(call: ServiceCall) -> ServiceResponse:
-        """adaptive_lighting_helpers.compute_curve
+        """flare.compute_curve
 
         Returns: {"phase", "brightness", "kelvin", "rgb_color"} for the
         given instant (or now) - see services.yaml for field docs.
@@ -468,7 +468,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         }
 
     async def apply_lighting(call: ServiceCall) -> ServiceResponse:
-        """adaptive_lighting_helpers.apply_lighting
+        """flare.apply_lighting
 
         Takes brightness/color_temp_kelvin/rgb_color as plain values -
         the same three fields compute_lighting_groups already takes,
@@ -658,7 +658,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         return _groups_response(groups)
 
     async def check_control(call: ServiceCall) -> ServiceResponse:
-        """adaptive_lighting_helpers.check_control
+        """flare.check_control
 
         For each of `entities`, decides whether a write should currently
         be blocked - the exact same override-protection mechanism
@@ -734,7 +734,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         return {"results": results}
 
     async def record_write(call: ServiceCall) -> ServiceResponse:
-        """adaptive_lighting_helpers.record_write
+        """flare.record_write
 
         Records that this call's own context just wrote `entities`,
         optionally with what each write actually asked for (`targets`) -
@@ -763,7 +763,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         return {"recorded": [e for e in entities if e in tracked]}
 
     async def clear_claims(call: ServiceCall) -> ServiceResponse:
-        """adaptive_lighting_helpers.clear_claims
+        """flare.clear_claims
 
         Discards `entities`' tracked observed/latest claims entirely -
         the manual escape hatch for a light stuck "overridden" with no
@@ -780,7 +780,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         return {"cleared": entities}
 
     async def compute_scene_coverage_service(call: ServiceCall) -> ServiceResponse:
-        """adaptive_lighting_helpers.compute_scene_coverage
+        """flare.compute_scene_coverage
 
         Returns: {"scene_active", "scene_valid", "covered_entities",
         "uncovered_entities"} - see services.yaml for field docs.

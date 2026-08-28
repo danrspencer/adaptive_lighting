@@ -2,7 +2,7 @@
  * Drives the docs site's interactive curve playground.
  *
  * The chart on this page is not a mock-up: it is the real
- * adaptive-lighting-curve-card.js that ships inside the integration,
+ * flare-curve-card.js that ships inside the integration,
  * given exactly the shape of state a live Home Assistant would give it
  * (a sensor whose state is the phase name and whose attributes carry
  * brightness/color_temp/the four boundaries/a 289-point `points` array).
@@ -24,7 +24,7 @@ import {
 // Resolved relative to THIS module (both files sit in assets/js/), not
 // to the page - which is what a dynamic import() does, and what keeps
 // this working whatever path the site is served under.
-const CARD_URL = './adaptive-lighting-curve-card.js';
+const CARD_URL = './flare-curve-card.js';
 
 // Every control on the page. `key` doubles as the URL-hash key and the
 // state key; `entity` is the Home Assistant entity the control stands in
@@ -150,7 +150,7 @@ function buildHass() {
       },
       // Matches sensor.py's _AdaptiveLightingSensor exactly: state is the
       // phase name, everything else is an attribute.
-      'sensor.default_adaptive_lighting': {
+      'sensor.default_flare': {
         state: phase,
         attributes: {
           phase,
@@ -341,7 +341,7 @@ async function main() {
   } catch (err) {
     host.innerHTML = `<div class="alp-error"><strong>The chart couldn't load.</strong>
       This page renders the integration's real dashboard card, which is copied
-      in from <code>custom_components/adaptive_lighting_helpers/www/</code> when
+      in from <code>custom_components/flare/www/</code> when
       the site is built. If you're building the site locally, run that copy step
       first — see CONTRIBUTING.md.</div>`;
     return;
@@ -377,7 +377,7 @@ async function main() {
     );
   }
 
-  card = document.createElement('adaptive-lighting-curve-card');
+  card = document.createElement('flare-curve-card');
   card.setConfig({ title: 'Adaptive Lighting' });
   host.appendChild(card);
   refresh();

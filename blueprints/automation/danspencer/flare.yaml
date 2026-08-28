@@ -1,10 +1,11 @@
 blueprint:
-  name: Adaptive Lighting
+  name: FLARE
   description: >
-    Adaptive lighting: sets brightness/colour temperature from a sensor,
+    FLARE: phase-based circadian lighting - sets brightness/colour
+    temperature from a FLARE schedule sensor,
     keeping lights updated as it changes, and turns them off a while
     after occupancy clears. Full details on every input:
-    [docs/BLUEPRINT.md](https://github.com/danrspencer/adaptive_lighting/blob/main/docs/BLUEPRINT.md).
+    [the blueprint reference](https://danrspencer.github.io/adaptive_lighting/blueprint.html).
   domain: automation
   source_url: https://github.com/danrspencer/adaptive_lighting/blob/main/blueprints/automation/danspencer/adaptive_lighting.yaml
   author: Dan Spencer
@@ -23,14 +24,14 @@ blueprint:
       selector:
         entity:
           filter:
-            - integration: adaptive_lighting_helpers
+            - integration: flare
               domain: sensor
     room_target:
       name: Lights & Occupancy
       description: >
         Entity, device, area, floor, or label - lights within it are
         controlled, occupancy-class sensors within it decide when.
-        [Details](https://github.com/danrspencer/adaptive_lighting/blob/main/docs/BLUEPRINT.md#one-target-two-jobs).
+        [Details](https://github.com/danrspencer/adaptive_lighting/blob/main/docs/blueprint.md#one-target-two-jobs).
       default: {}
       selector:
         target:
@@ -44,7 +45,7 @@ blueprint:
         Entities that trigger an immediate re-evaluation, e.g. a
         dependency of Scene Template or Brightness Multiplier Template.
         Only updates lights that are already on - never switches one on.
-        [Details](https://github.com/danrspencer/adaptive_lighting/blob/main/docs/BLUEPRINT.md#additional-triggers).
+        [Details](https://github.com/danrspencer/adaptive_lighting/blob/main/docs/blueprint.md#additional-triggers).
       default: []
       selector:
         entity:
@@ -63,7 +64,7 @@ blueprint:
             blue-tinted rather than a clean white, so those phases are
             off by default - Evening/Night's warmer values don't have
             that problem.
-            [Details](https://github.com/danrspencer/adaptive_lighting/blob/main/docs/BLUEPRINT.md#rgb-colour).
+            [Details](https://github.com/danrspencer/adaptive_lighting/blob/main/docs/blueprint.md#rgb-colour).
           default: [Evening, Night]
           selector:
             select:
@@ -82,7 +83,7 @@ blueprint:
             precedence over the per-phase scenes below whenever it
             returns one - they're the fallback for phases it doesn't
             cover.
-            [Details](https://github.com/danrspencer/adaptive_lighting/blob/main/docs/BLUEPRINT.md#scene-handoff).
+            [Details](https://github.com/danrspencer/adaptive_lighting/blob/main/docs/blueprint.md#scene-handoff).
           default: ""
           selector:
             template: {}
@@ -122,7 +123,7 @@ blueprint:
             off, null = skip entirely). Its own per-entity values always
             win over the per-phase exclusions below - those only fill in
             entities it doesn't already mention.
-            [Details](https://github.com/danrspencer/adaptive_lighting/blob/main/docs/BLUEPRINT.md#per-light-brightness-scaling).
+            [Details](https://github.com/danrspencer/adaptive_lighting/blob/main/docs/blueprint.md#per-light-brightness-scaling).
           default: "{{ {} }}"
           selector:
             template: {}
@@ -489,7 +490,7 @@ variables:
   color_temp_kelvin: "{{ state_attr(adaptive_sensor, 'color_temp') }}"
   # None whenever adaptive_sensor doesn't populate this attribute (a
   # hand-rolled "bring your own sensor" entity not using prefer_rgb_color
-  # is free to omit it - see docs/BLUEPRINT.md) - apply_lighting's own
+  # is free to omit it - see docs/blueprint.md) - apply_lighting's own
   # rgb_color field explicitly tolerates an explicit null, not just an
   # omitted key, for exactly this reason.
   rgb_color: "{{ state_attr(adaptive_sensor, 'rgb_color') }}"
@@ -799,7 +800,7 @@ action:
           - condition: template
             value_template: "{{ handed_off_entities | length > 0 }}"
         then:
-          - action: adaptive_lighting_helpers.clear_claims
+          - action: flare.clear_claims
             data:
               entities: "{{ handed_off_entities }}"
       # Reachability, multiplier bucketing, tolerance checks, override
@@ -822,7 +823,7 @@ action:
             value_template: "{{ brightness is not none and color_temp_kelvin is not none }}"
         then:
         - alias: "Apply adaptive lighting (Adaptive Lighting Helpers)"
-          action: adaptive_lighting_helpers.apply_lighting
+          action: flare.apply_lighting
           data:
             entities: "{{ adaptive_target_entities }}"
             brightness_multipliers: "{{ brightness_multipliers }}"
@@ -832,7 +833,7 @@ action:
             transition: "{{ script_transition }}"
             prefer_rgb_color: "{{ prefer_rgb_color }}"
             # Identifies this room's automation as the owner of its own
-            # writes (see docs/HELPERS.md's apply_lighting reference) -
+            # writes (see docs/helpers.md's apply_lighting reference) -
             # A manual run (someone hit "Run" on this automation, or
             # called automation.trigger directly) forces the whole tick
             # through regardless of override protection. Which state

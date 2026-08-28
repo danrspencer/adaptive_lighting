@@ -20,7 +20,7 @@ state fresh, don't read a frozen snapshot" pattern _phase_override()
 below already used for the phase-override select - now applied
 uniformly to the rest of the schedule/curve config too.
 
-Override: each instance's own select.<prefix>adaptive_lighting_phase
+Override: each instance's own select.<prefix>flare_phase
 can pin the phase used for "right now" - _phase_override() reads its
 *current* live state on every update, the same "check fresh, don't
 remember" style grouping.py's externally_set() uses, so there's nothing
@@ -43,7 +43,7 @@ auto-created. Every schedule is a "sensor" subentry, added via the
 "Add Sensor" flow (config_flow.py's SensorSubentryFlow) - so there's
 exactly one mechanism for adding a schedule, and exactly one way to
 name it: what you type there. Every instance gets both a prefixed
-entity_id (sensor.living_room_adaptive_lighting) and its own device
+entity_id (sensor.living_room_flare) and its own device
 (Settings -> Devices, renamable there - see
 ScheduleInstance.device_info). schedule_instances() is the one place
 that enumerates all of them -
@@ -116,7 +116,7 @@ class ScheduleInstance:
     # config_flow form (name is required there) - kept so an existing
     # subentry saved before that requirement (if any) still gets a
     # valid, if unprefixed, entity_id instead of a broken "sensor._foo".
-    override_entity_id: str  # select.<prefix>adaptive_lighting_phase
+    override_entity_id: str  # select.<prefix>flare_phase
     sticky_entity_id: str  # switch.<prefix>sticky_phase_override
     title: str  # the subentry's name (required - see SensorSubentryFlow)
 
@@ -162,7 +162,7 @@ def schedule_instances(entry: ConfigEntry) -> list[ScheduleInstance]:
             ScheduleInstance(
                 subentry_id=subentry_id,
                 prefix=prefix,
-                override_entity_id=f"select.{prefix}adaptive_lighting_phase",
+                override_entity_id=f"select.{prefix}flare_phase",
                 sticky_entity_id=f"switch.{prefix}sticky_phase_override",
                 title=subentry.title,
             )

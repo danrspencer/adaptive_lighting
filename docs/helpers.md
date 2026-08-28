@@ -28,7 +28,7 @@ render_with_liquid: false
 Seven services, each documented in full in `services.yaml` (visible in Home Assistant's Developer Tools → Actions
 once installed) — call them directly from your own automations or scripts, no blueprint required.
 
-## `adaptive_lighting_helpers.apply_lighting`
+## `flare.apply_lighting`
 
 The "just make it happen" service: given a target brightness/colour-temperature (and optionally RGB colour) as
 plain values, actually turns entities on/off via `light.turn_on`/`light.turn_off`, handling reachability,
@@ -39,7 +39,7 @@ Sensor input - see [the blueprint reference](../blueprint/#bring-your-own-sensor
 relies on), that's an ordinary template on the caller's side, not something this service does for you.
 
 ```yaml
-action: adaptive_lighting_helpers.apply_lighting
+action: flare.apply_lighting
 data:
   entities: [light.kitchen_1, light.kitchen_2]
   brightness: 200
@@ -108,7 +108,7 @@ Everything above is also its own pair of services - `check_control` (read-only) 
 use them directly on its own entities:
 
 ```yaml
-action: adaptive_lighting_helpers.check_control
+action: flare.check_control
 data:
   entities: [light.kitchen_1]
 response_variable: control
@@ -121,7 +121,7 @@ response_variable: control
 
 ```yaml
 # After actually issuing your own light.turn_on, so a later check_control call recognises it as yours:
-action: adaptive_lighting_helpers.record_write
+action: flare.record_write
 data:
   entities: [light.kitchen_1]
   targets:
@@ -140,7 +140,7 @@ internally for anything already excluded, so an overridden light's own `latest` 
 where the curve has since moved on to):
 
 ```yaml
-action: adaptive_lighting_helpers.clear_claims
+action: flare.clear_claims
 data:
   entities: [light.kitchen_1]
 ```
@@ -154,7 +154,7 @@ next writes to that entity.
 ### The hand-over event
 
 Every time a tracked light passes into someone else's hands, this fires
-`adaptive_lighting_helpers_light_overridden` carrying a full snapshot of that moment:
+`flare_light_overridden` carrying a full snapshot of that moment:
 
 ```yaml
 entity_id: light.kitchen_1
@@ -186,7 +186,7 @@ Trigger on it like any event:
 ```yaml
 trigger:
   - platform: event
-    event_type: adaptive_lighting_helpers_light_overridden
+    event_type: flare_light_overridden
 ```
 
 ### The state device's entities
@@ -195,10 +195,10 @@ Each state device carries four entities, all on its own device so they're rename
 
 | entity | |
 |---|---|
-| `sensor.<name>_adaptive_tracking` | **the claims themselves.** State is the number of lights tracked; the `claims` attribute holds the per-light `observed`/`latest` records |
-| `sensor.<name>_adaptive_controlled` | how many of its lights it is currently driving |
-| `sensor.<name>_adaptive_overridden` | how many are currently held by something else |
-| `button.<name>_adaptive_clear` | press to discard this scope's tracked state |
+| `sensor.<name>_flare_tracking` | **the claims themselves.** State is the number of lights tracked; the `claims` attribute holds the per-light `observed`/`latest` records |
+| `sensor.<name>_flare_controlled` | how many of its lights it is currently driving |
+| `sensor.<name>_flare_overridden` | how many are currently held by something else |
+| `button.<name>_flare_clear` | press to discard this scope's tracked state |
 
 The tracking sensor is the storage, not a view of it — what you see in Developer Tools is the same object
 override protection acts on. Its `claims` attribute is excluded from the recorder (it changes on every tick
@@ -219,7 +219,7 @@ one tick.
 
 ### Inspecting tracked state
 
-Each state device's `sensor.<name>_adaptive_tracking` makes the mechanism above inspectable directly, rather
+Each state device's `sensor.<name>_flare_tracking` makes the mechanism above inspectable directly, rather
 than only indirectly through `compute_lighting_groups`'s `combined`/`needing_off` output (which tells you
 *whether* a light is currently excluded, never *why*). Its `claims` attribute holds, per light, the raw
 `observed`/`latest` records. `check_control` turns those into the computed `status` and `matched_via` -
@@ -259,7 +259,7 @@ actually happened via HA's own logbook (`logbook/get_events`, filtered by `conte
 around `recorded_at`.
 
 
-## `adaptive_lighting_helpers.compute_lighting_groups`
+## `flare.compute_lighting_groups`
 
 The pure-planner version of `apply_lighting`: given a set of light entities, a target brightness/colour-temperature,
 and optional per-light brightness multipliers, returns the minimal set of groups actually needing a
@@ -269,7 +269,7 @@ two-step transitions — without touching any light itself. Use this instead of 
 dispatch the calls yourself (custom transition curves, logging, etc.).
 
 ```yaml
-action: adaptive_lighting_helpers.compute_lighting_groups
+action: flare.compute_lighting_groups
 data:
   entities: [light.kitchen_1, light.kitchen_2]
   brightness: 200
@@ -289,14 +289,14 @@ below (or `sensor.adaptive_lighting`'s own `rgb_color` attribute) for where that
 own. `rgb_color` can be left unset, or passed explicitly as `null` (useful if you're templating it from a source
 that doesn't always have one) — either way it's simply ignored unless `prefer_rgb_color` is also on.
 
-## `adaptive_lighting_helpers.compute_curve`
+## `flare.compute_curve`
 
 Given today's morning/day/evening/night phase-boundary timestamps, returns the target brightness, colour
 temperature, RGB colour, and phase name for a given instant (or now). Useful for building your own day-phase
 sensor without any of the rest of this project.
 
 ```yaml
-action: adaptive_lighting_helpers.compute_curve
+action: flare.compute_curve
 data:
   morning: "{{ today_at('06:00:00') | as_timestamp }}"
   day: "{{ today_at('08:00:00') | as_timestamp }}"
@@ -319,7 +319,7 @@ response_variable: now
 `apply_lighting`/`compute_lighting_groups`'s `prefer_rgb_color` path even when you're not using RGB bulbs any
 differently from colour-temperature ones.
 
-## `adaptive_lighting_helpers.compute_scene_coverage`
+## `flare.compute_scene_coverage`
 
 Given a candidate scene and the entities you want a default behaviour applied to, works out which of those
 entities the scene actually covers — hand covered ones to the scene, apply your default (adaptive lighting or
@@ -328,7 +328,7 @@ anything else) to whatever's left. A scene only counts if it exists and everythi
 at all. Nothing here is specific to adaptive lighting, or even to lighting.
 
 ```yaml
-action: adaptive_lighting_helpers.compute_scene_coverage
+action: flare.compute_scene_coverage
 data:
   scene_entity_id: scene.kitchen_night
   scope_entities: [light.kitchen_1, light.kitchen_2, light.kitchen_strip_effect]
@@ -370,7 +370,7 @@ Patterns are case-insensitive globs matched against `"<manufacturer> <model>"`, 
 `IKEA*` work. Clearing the box entirely falls back to the shipped defaults rather than disabling detection — to
 stop being told about unlabelled bulbs, [ignore the repair](#dismissing-the-repair) instead.
 
-The shipped defaults live in `custom_components/adaptive_lighting_helpers/two_step.py` as
+The shipped defaults live in `custom_components/flare/two_step.py` as
 `DEFAULT_TWO_STEP_MODEL_PATTERNS` (currently just `*TRADFRI bulb*`). Adding a newly discovered bulb there is a
 one-line PR — that's the intended way to contribute one, and it reaches every install that hasn't customised
 the field. **Once you save your own list, it's yours**: later releases adding models won't change it, which is

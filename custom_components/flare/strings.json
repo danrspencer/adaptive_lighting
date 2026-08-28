@@ -2,7 +2,7 @@
   "config": {
     "step": {
       "user": {
-        "title": "Adaptive Lighting",
+        "title": "FLARE",
         "description": "This installs as two separate entries so the two kinds of thing stay apart. Add whichever you need - most people want both.",
         "menu_options": {
           "schedules": "Schedules — day-phase and colour curve sensors",
@@ -10,7 +10,7 @@
         }
       },
       "tracking": {
-        "title": "Adaptive Lighting Tracking",
+        "title": "FLARE Tracking",
         "description": "Registers the apply_lighting, compute_lighting_groups, compute_curve, compute_scene_coverage and ownership services, and tracks which lights are currently being driven.\n\nPick the rooms to track separately - each becomes a state device with its own controlled/overridden counts and a Clear button. Lights in an area you don't pick simply aren't tracked, which means they're never left alone when something else takes them. You can add, retarget or remove these at any time.",
         "data": {
           "areas": "Rooms to track"
@@ -29,8 +29,8 @@
       },
       "step": {
         "user": {
-          "title": "Add an Adaptive Lighting sensor",
-          "description": "Adds a day-phase/curve sensor and phase-override select, grouped under a device with this name. Entities are prefixed with it too (e.g. \"Living Room\" -> sensor.living_room_adaptive_lighting). The schedule times and brightness/colour curve aren't set here - they're separate entities on the device once it's created, each starting at a sensible default and adjustable any time.",
+          "title": "Add a FLARE schedule sensor",
+          "description": "Adds a day-phase/curve sensor and phase-override select, grouped under a device with this name. Entities are prefixed with it too (e.g. \"Living Room\" -> sensor.living_room_flare). The schedule times and brightness/colour curve aren't set here - they're separate entities on the device once it's created, each starting at a sensible default and adjustable any time.",
           "data": {
             "name": "Name"
           }
@@ -76,11 +76,11 @@
         "step": {
           "confirm": {
             "title": "Apply the two-step transition label",
-            "description": "{count} light(s) look like bulbs that can't transition brightness and colour temperature in one command, but aren't labelled, so Adaptive Lighting Helpers is sending them a single combined command - which those bulbs handle badly.\n\n{lights}\n\nSubmitting applies the \"{label}\" label to them (on the device, so it survives entity renames), creating the label if it doesn't exist yet. Nothing else changes. If you'd rather leave them as they are, ignore this repair instead."
+            "description": "{count} light(s) look like bulbs that can't transition brightness and colour temperature in one command, but aren't labelled, so FLARE is sending them a single combined command - which those bulbs handle badly.\n\n{lights}\n\nSubmitting applies the \"{label}\" label to them (on the device, so it survives entity renames), creating the label if it doesn't exist yet. Nothing else changes. If you'd rather leave them as they are, ignore this repair instead."
           }
         },
         "abort": {
-          "entry_gone": "Adaptive Lighting Helpers was removed, so there's nothing to label."
+          "entry_gone": "FLARE was removed, so there's nothing to label."
         }
       }
     }
@@ -88,7 +88,7 @@
   "options": {
     "step": {
       "init": {
-        "title": "Adaptive Lighting Helpers options",
+        "title": "FLARE options",
         "description": "Bulb models that need two-step transitions, one pattern per line. This is the complete list the check uses — the box starts pre-filled with the models shipped with the integration, and you can add to it or remove from it freely.\n\nPatterns are matched case-insensitively against “manufacturer model”, and * is a wildcard, e.g. *TRADFRI bulb* or IKEA*. Clearing the box entirely falls back to the shipped defaults; to stop being told about unlabelled bulbs, ignore the repair instead.\n\nOnce you save your own list it stays as you left it — a later release adding a newly discovered bulb won't change it.",
         "data": {
           "two_step_models": "Two-step bulb models"

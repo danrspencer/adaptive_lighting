@@ -6,7 +6,7 @@ schedule instance (see coordinator.py's ScheduleInstance/
 schedule_instances) - one per named "sensor" subentry.
 
 Entity IDs are prefixed with the sensor's slugified name (e.g.
-sensor.living_room_adaptive_lighting) - see coordinator.py's
+sensor.living_room_flare) - see coordinator.py's
 schedule_instances(). Every sensor also gets its own device (see
 ScheduleInstance.device_info). has_entity_name=True plus name=None (the
 idiomatic HA pattern for "the entity that represents the device") lets
@@ -17,19 +17,19 @@ via string concatenation.
 
 Day-phase, the brightness/colour-temperature "right now" values,
 today's four phase-boundary timestamps, and the full-day brightness/
-colour curve are all combined into a single sensor.adaptive_lighting
+colour curve are all combined into a single sensor.<name>_flare
 (state = phase, attributes = phase/brightness/color_temp/morning_start/
 day_start/evening_start/night_start/evening_earliest/evening_latest/
 points) rather than separate sensors per value - `brightness`/
 `color_temp` are exactly the attribute names the blueprint's
 `adaptive_sensor` input already reads via state_attr(), matching the
-shape the old packages/adaptive_lighting.yaml `sensor.solar_adaptive_lighting`
+shape the old packages/adaptive_lighting.yaml `sensor.solar_flare`
 sensor used, so this is a drop-in for that role. The four boundary
 timestamps used to be their own sensor.morning_start/day_start/
 evening_start/night_start entities - folded into attributes here
 instead (four extra always-on entities per sensor that exist just to be
 read as one-off attribute lookups was judged not worth it; a
-phase-change automation reads sensor.adaptive_lighting's phase attribute
+phase-change automation reads sensor.<name>_flare's phase attribute
 directly, and anything that specifically wants a boundary time - the
 dashboard card, in particular - reads it off this same entity's
 attributes). A standalone day-phase entity was considered and dropped
@@ -172,7 +172,7 @@ class _StateTrackingSensor(SensorEntity):
         self.claims: dict[str, dict] = {}
         self._last_statuses: dict[str, str] | None = None
         self._attr_unique_id = f"{instance.subentry_id}_tracking"
-        self.entity_id = f"sensor.{instance.prefix}adaptive_tracking"
+        self.entity_id = f"sensor.{instance.prefix}flare_tracking"
         self._attr_device_info = instance.device_info
 
     async def async_added_to_hass(self) -> None:
@@ -303,7 +303,7 @@ class _ScopeCountSensor(SensorEntity):
         self._status = status
         self._attr_icon = "mdi:lightbulb-group" if status == "controlled" else "mdi:lightbulb-alert-outline"
         self._attr_unique_id = f"{instance.subentry_id}_{status}"
-        self.entity_id = f"sensor.{instance.prefix}adaptive_{status}"
+        self.entity_id = f"sensor.{instance.prefix}flare_{status}"
         self._attr_name = status.title()
         self._attr_device_info = instance.device_info
 
@@ -357,7 +357,7 @@ class _AdaptiveLightingSensor(_ScheduleSensorBase):
     _unrecorded_attributes = frozenset({"points"})
 
     def __init__(self, coordinator: ScheduleCoordinator, instance: ScheduleInstance) -> None:
-        super().__init__(coordinator, instance, "adaptive_lighting", "adaptive_lighting")
+        super().__init__(coordinator, instance, "flare", "flare")
 
     @property
     def native_value(self):
@@ -379,7 +379,7 @@ class _AdaptiveLightingSensor(_ScheduleSensorBase):
             # Today's four phase-boundary timestamps, plus the two
             # configured bounds evening_start was actually clamped
             # between - the dashboard card reads all six of these
-            # directly off this entity (see www/adaptive-lighting-curve-card.js).
+            # directly off this entity (see www/flare-curve-card.js).
             "morning_start": data.get("morning_ts"),
             "day_start": data.get("day_ts"),
             "evening_start": data.get("evening_ts"),
