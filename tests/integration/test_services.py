@@ -632,6 +632,36 @@ async def test_clear_claims_frees_a_light_stuck_overridden(setup_integration: Ho
     assert results["light.a"] == {"blocked": False, "status": "untracked", "matched_via": None, "scope": "Test Scope"}
 
 
+async def test_clear_claims_frees_every_entity_in_one_call(setup_integration: HomeAssistant):
+    """Regression test: async_clear used to build its "did anything
+    change" check with any(store.claims.pop(...) ... for entity_id in
+    entity_ids) - any() short-circuits on the first True, and pop() is
+    what actually clears each claim, so a generator there stopped
+    popping the moment the first entity's claim came back non-None,
+    silently leaving every entity after it in the list untouched. Caught
+    live: the Clear button needed one press per light on a device instead
+    of clearing the whole scope in one press. A single-entity test can't
+    catch this at all - it needs at least two already-tracked entities in
+    one call."""
+    hass = setup_integration
+    _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=100, color_temp_kelvin=3000)
+    _set_light(hass, "light.b", "on", supported_color_modes=["color_temp"], brightness=100, color_temp_kelvin=3000)
+    await _record_write(hass, ["light.a", "light.b"])
+    assert "light.a" in _registry(hass).all_records()
+    assert "light.b" in _registry(hass).all_records()
+
+    await hass.services.async_call(
+        DOMAIN,
+        "clear_claims",
+        {"entities": ["light.a", "light.b"], "tracking_device_id": _tracking_device_id(hass)},
+        blocking=True,
+    )
+
+    records = _registry(hass).all_records()
+    assert "light.a" not in records
+    assert "light.b" not in records
+
+
 async def test_clear_claims_requires_a_scope(setup_integration: HomeAssistant):
     """This service exists only to discard tracking claims - with
     nowhere to clear from, there's nothing for it to do, so the schema
