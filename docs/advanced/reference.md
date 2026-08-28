@@ -176,6 +176,32 @@ reset rather than one that depends on agreeing about which lights are stuck. The
 lights lose their claims too, so each is unprotected until its next write. For a live room automation that's
 one tick.
 
+### Transitions
+
+Each phase holds its own brightness and colour and then **eases to the next
+phase's over the last N minutes of its own span**. The duration is named for the
+phase it runs in, because it is that phase's exit: `day_kelvin_transition` is how
+long before Day ends to start easing to Evening's colour.
+
+The transition finishing *at* the boundary is the point — if Morning starts at
+06:00, the lights are at Morning's values at 06:00, not beginning a ramp toward
+them. Two consequences worth knowing:
+
+- **`0` is a hard cut**, and a legitimate choice. Some boundaries should be
+  visible: setting `evening_kelvin_transition: 0` makes Night arrive as a step.
+- **A duration longer than its phase covers the whole phase.** It clamps rather
+  than bleeding backwards, so `day_kelvin_transition: 1440` reads as "always be
+  transitioning" — which is exactly how the default Day slides from Morning's
+  colour to Evening's across the whole afternoon.
+
+{: .note }
+> Night is the only phase whose span crosses midnight, so its transition runs at
+> the *end* of the early-morning stretch — the minutes before Morning, not before
+> midnight.
+
+Brightness and colour have separate durations because they genuinely differ: by
+default Evening dims over its last hour while Day's colour slides all afternoon.
+
 ### Inspecting tracked state
 
 Each state device's `sensor.<name>_flare_tracking` makes the mechanism above inspectable directly, rather
@@ -264,11 +290,14 @@ data:
   morning_brightness: 255
   morning_kelvin: 6667
   day_brightness: 255
-  day_end_kelvin: 4000
+  day_kelvin: 6667
   evening_brightness: 180
   evening_kelvin: 3200
   night_brightness: 80
   night_kelvin: 2700
+  # ...and one transition per phase per channel, in minutes
+  day_kelvin_transition: 1440
+  evening_brightness_transition: 60
 response_variable: now
 # now.phase / now.brightness / now.kelvin / now.rgb_color
 ```
@@ -350,7 +379,8 @@ Each sensor's device contains, computed the same way `compute_curve` computes th
 | `sensor.<name_>adaptive_lighting` | Combined "right now" reading — state is the phase (Morning/Day/Evening/Night), `attributes.brightness` (0-255), `attributes.color_temp` (Kelvin), and `attributes.rgb_color` (`[r, g, b]`) are exactly the attribute names the blueprint's `adaptive_sensor` input already reads to feed `apply_lighting`'s own `brightness`/`color_temp_kelvin`/`rgb_color` fields (see [the blueprint reference](../blueprint/#bring-your-own-sensor)), so this can be pointed at directly. Also carries today's four phase-boundary timestamps as `attributes.morning_start`/`day_start`/`evening_start`/`night_start`, plus `attributes.evening_earliest`/`evening_latest` (the two configured bounds Evening was actually clamped between) — no separate boundary sensors, since a phase-change automation only needs a `platform: state, attribute: phase` trigger on this same entity, and anything that specifically wants a boundary time (the dashboard card, in particular) can read it straight off these attributes. `attributes.points` carries the full day as 289 `{t, brightness, kelvin}` samples — what the [dashboard card](../contributing/#previewing-the-dashboard-card) reads for its chart, deliberately **not** following a manual phase override (see below) the way the rest of this entity's attributes do, since it's a full-day schedule, not a "right now" value |
 | `select.<name_>adaptive_lighting_phase` | Manual override — `Auto` (default) or a specific phase. Pinning a phase holds it until the *schedule itself* next moves on (e.g. override to `Day` during `Evening` and it still becomes `Night` once Evening would naturally have ended, rather than staying on `Day` forever) — see the sticky-override switch below to disable that and keep an override until you clear it yourself instead |
 | `time.<name_>morning_time` / `day_time` / `evening_earliest_time` / `evening_latest_time` / `night_time` | The five schedule boundaries — start times for Morning, Day, and Night, and Evening's earliest/latest bound. Each starts at a representative default (06:00/08:00/17:00/20:00/22:00) and is adjustable at any time; the change applies within seconds, not on the next 60s poll |
-| `number.<name_>morning_brightness` / `morning_kelvin` / `day_brightness` / `day_end_kelvin` / `evening_brightness` / `evening_kelvin` / `night_brightness` / `night_kelvin` | The eight brightness (0-255)/colour-temperature (1000-10000K) curve values, one pair per phase (`day_end_kelvin` is what Day ramps down to by the time Evening starts). Each starts at the value shown in `compute_curve`'s own field list above, and is adjustable at any time |
+| `number.<name>_<phase>_brightness` / `_kelvin` | The eight curve values — brightness (0-255) and colour temperature (1000-10000K), one pair per phase. Each starts at the value shown in `compute_curve`'s field list above, and is adjustable at any time |
+| `number.<name>_<phase>_brightness_transition` / `_kelvin_transition` | The eight transition durations, in minutes — see below |
 | `switch.<name_>sticky_phase_override` | Off by default (an override self-clears at the next phase boundary). Turn on to keep a manual phase override pinned until you clear it back to `Auto` yourself instead |
 
 `time.*`/`number.*`/`switch.*` are all tagged as configuration entities, so Home Assistant groups them under the

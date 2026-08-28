@@ -327,12 +327,13 @@ compute_curve:
         number:
           min: 0
           max: 255
-    day_end_kelvin:
-      name: Day end colour temperature
+    day_kelvin:
+      name: Day colour temperature
       description: >-
-        Colour temperature (Kelvin) Day ramps down to by the time Evening
-        starts - also where Evening's own opening ramp starts from.
-      default: 4000
+        Colour temperature (Kelvin) for Day. Defaults to Morning's, since
+        Day's default transition covers the whole phase - so Day starts at
+        Morning's colour and eases to Evening's across the afternoon.
+      default: 6667
       selector:
         number:
           min: 1000
@@ -340,7 +341,7 @@ compute_curve:
           unit_of_measurement: K
     evening_brightness:
       name: Evening brightness
-      description: Brightness (0-255) Evening holds at before its final-hour fade.
+      description: Brightness (0-255) Evening holds at before its fade into Night.
       default: 180
       selector:
         number:
@@ -372,6 +373,110 @@ compute_curve:
           min: 1000
           max: 10000
           unit_of_measurement: K
+    morning_brightness_transition:
+      name: Morning brightness transition
+      description: >-
+        Minutes before Morning ends to begin easing
+        brightness toward the next
+        phase's, so it arrives exactly as that phase begins. 0 is a hard
+        cut. A value longer than Morning lasts covers the whole phase.
+      default: 30
+      selector:
+        number:
+          min: 0
+          max: 1440
+          unit_of_measurement: min
+    morning_kelvin_transition:
+      name: Morning colour transition
+      description: >-
+        Minutes before Morning ends to begin easing
+        colour temperature toward the next
+        phase's, so it arrives exactly as that phase begins. 0 is a hard
+        cut. A value longer than Morning lasts covers the whole phase.
+      default: 30
+      selector:
+        number:
+          min: 0
+          max: 1440
+          unit_of_measurement: min
+    day_brightness_transition:
+      name: Day brightness transition
+      description: >-
+        Minutes before Day ends to begin easing
+        brightness toward the next
+        phase's, so it arrives exactly as that phase begins. 0 is a hard
+        cut. A value longer than Day lasts covers the whole phase.
+      default: 0
+      selector:
+        number:
+          min: 0
+          max: 1440
+          unit_of_measurement: min
+    day_kelvin_transition:
+      name: Day colour transition
+      description: >-
+        Minutes before Day ends to begin easing
+        colour temperature toward the next
+        phase's, so it arrives exactly as that phase begins. 0 is a hard
+        cut. A value longer than Day lasts covers the whole phase.
+      default: 1440
+      selector:
+        number:
+          min: 0
+          max: 1440
+          unit_of_measurement: min
+    evening_brightness_transition:
+      name: Evening brightness transition
+      description: >-
+        Minutes before Evening ends to begin easing
+        brightness toward the next
+        phase's, so it arrives exactly as that phase begins. 0 is a hard
+        cut. A value longer than Evening lasts covers the whole phase.
+      default: 60
+      selector:
+        number:
+          min: 0
+          max: 1440
+          unit_of_measurement: min
+    evening_kelvin_transition:
+      name: Evening colour transition
+      description: >-
+        Minutes before Evening ends to begin easing
+        colour temperature toward the next
+        phase's, so it arrives exactly as that phase begins. 0 is a hard
+        cut. A value longer than Evening lasts covers the whole phase.
+      default: 60
+      selector:
+        number:
+          min: 0
+          max: 1440
+          unit_of_measurement: min
+    night_brightness_transition:
+      name: Night brightness transition
+      description: >-
+        Minutes before Night ends to begin easing
+        brightness toward the next
+        phase's, so it arrives exactly as that phase begins. 0 is a hard
+        cut. A value longer than Night lasts covers the whole phase.
+      default: 15
+      selector:
+        number:
+          min: 0
+          max: 1440
+          unit_of_measurement: min
+    night_kelvin_transition:
+      name: Night colour transition
+      description: >-
+        Minutes before Night ends to begin easing
+        colour temperature toward the next
+        phase's, so it arrives exactly as that phase begins. 0 is a hard
+        cut. A value longer than Night lasts covers the whole phase.
+      default: 30
+      selector:
+        number:
+          min: 0
+          max: 1440
+          unit_of_measurement: min
 
 compute_scene_coverage:
   name: Compute scene coverage

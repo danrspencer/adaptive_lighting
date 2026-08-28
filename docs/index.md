@@ -29,17 +29,21 @@ FLARE divides the day into four named phases instead, each with its own targets:
 | Phase | What it's for |
 |---|---|
 | **Morning** | Bright and cold, deliberately. [Research](https://pubmed.ncbi.nlm.nih.gov/36058557/) found 1.5h of bright morning light for a week improved office workers' sleep efficiency and reduced morning sleepiness. |
-| **Day** | Bright, cooling gradually towards the afternoon. |
+| **Day** | Bright, easing steadily from Morning's colour toward Evening's across the whole afternoon. |
 | **Evening** | Dimming and warming, anchored to your actual sunset. |
 | **Night** | Warm and low, flat until morning. |
+
+Every boundary has its own transition: how long beforehand to start easing into the
+next phase, so the new values arrive exactly as it begins. Set one to zero and the
+change is a deliberate, visible step instead.
 
 Only the Evening boundary tracks the sun — clamped between an earliest and a latest time,
 so it moves with the season without drifting into the small hours. Morning, Day and Night
 are wall-clock times, because that's what your routine actually is.
 
 {: .tip }
-> [Play with the curve]({{ site.baseurl }}/playground/) — every boundary and value is a slider,
-> and the chart is the same code the dashboard card runs.
+> [Play with the curve]({{ site.baseurl }}/playground/) — every boundary, value and
+> transition is a slider, and the chart is the same code the dashboard card runs.
 
 ---
 
