@@ -450,30 +450,76 @@ async def test_check_control_does_not_take_force(setup_integration: HomeAssistan
         )
 
 
-async def test_check_control_off_light_is_never_blocked(setup_integration: HomeAssistant):
+async def _check(hass: HomeAssistant, entities: list[str]) -> dict:
+    result = await hass.services.async_call(
+        DOMAIN, "check_control", {"entities": entities}, blocking=True, return_response=True
+    )
+    return result["results"]
+
+
+async def test_the_last_light_going_off_releases_the_whole_scope(setup_integration: HomeAssistant):
+    """A room with nothing on is a room nobody is using, so its claims
+    go and every light in it is free again."""
     hass = setup_integration
     our_context = Context()
     _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=100, color_temp_kelvin=3000, context=our_context)
     await hass.services.async_call(
+        DOMAIN, "record_write", {"entities": ["light.a"]}, blocking=True, context=our_context
+    )
+    _set_light(hass, "light.a", "off", context=Context(id="ctx-motion-off"))
+    await hass.async_block_till_done()
+
+    assert await _check(hass, ["light.a"]) == {
+        "light.a": {"blocked": False, "status": "off", "matched_via": None, "scope": "Test Scope"}
+    }
+
+
+async def test_a_light_switched_off_by_hand_in_a_lit_room_is_left_off(setup_integration: HomeAssistant):
+    """The counterpart, and the point of the change: switching one light
+    off while the room is still in use is a choice, not a gap to fill.
+    light.sibling stays on, so the scope is not released and light.a
+    keeps the claim it no longer matches.
+
+    Note "the room" means the scope, not the physical room - an
+    untracked light being on holds nothing open."""
+    hass = setup_integration
+    ours = Context()
+    for e in ("light.a", "light.sibling"):
+        _set_light(hass, e, "on", supported_color_modes=["color_temp"], brightness=100, color_temp_kelvin=3000, context=ours)
+    await hass.services.async_call(
         DOMAIN,
         "record_write",
-        {"entities": ["light.a"]},
+        {
+            "entities": ["light.a", "light.sibling"],
+            "targets": {"light.a": {"brightness": 100, "color_temp_kelvin": 3000}},
+        },
         blocking=True,
-        context=our_context,
+        context=ours,
     )
-    # Off under a completely different, unrecorded context - exactly the
-    # off-light misclassification found live and fixed structurally via
-    # override_protection.classify()'s own "off" precondition.
-    _set_light(hass, "light.a", "off", context=Context(id="ctx-motion-off"))
+    _set_light(hass, "light.a", "off", context=Context(id="ctx-wall-switch"))
+    await hass.async_block_till_done()
 
-    result = await hass.services.async_call(
-        DOMAIN,
-        "check_control",
-        {"entities": ["light.a"]},
-        blocking=True,
-        return_response=True,
-    )
-    assert result["results"]["light.a"] == {"blocked": False, "status": "off", "matched_via": None, "scope": "Test Scope"}
+    results = await _check(hass, ["light.a"])
+    assert results["light.a"]["status"] == "overridden"
+    assert results["light.a"]["blocked"] is True
+
+
+async def test_apply_lighting_records_what_a_turn_off_asked_for(setup_integration: HomeAssistant):
+    """A turn-off is a write, and records a target of its own. Without
+    one there is nothing to tell our own off from anyone else's once the
+    write's context expires, and a room turned off at bedtime could
+    never be turned on again."""
+    hass = setup_integration
+    turn_offs = async_mock_service(hass, "light", "turn_off")
+    async_mock_service(hass, "light", "turn_on")  # light.b is still driven normally
+    _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=100, color_temp_kelvin=3000)
+    _set_light(hass, "light.b", "on", supported_color_modes=["color_temp"], brightness=100, color_temp_kelvin=3000)
+
+    await _apply(hass, ["light.a", "light.b"], brightness_multipliers={"light.a": 0})
+
+    assert turn_offs and turn_offs[-1].data["entity_id"] == ["light.a"]
+    registry = next(iter(hass.data[DOMAIN].values()))
+    assert registry.all_records()["light.a"]["latest"]["target"] == {"state": "off"}
 
 
 async def test_clear_claims_frees_a_light_stuck_overridden(setup_integration: HomeAssistant):

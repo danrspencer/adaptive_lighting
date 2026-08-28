@@ -90,6 +90,26 @@ asked for. Each claim also records its `target`, and the comparison falls back t
 
 Claims are **not persisted**. After a restart nothing is tracked, so every light is manageable.
 
+#### Turning a light off is an override
+
+Switching a light off is a decision worth respecting, the same as dimming it, so FLARE leaves it off rather than
+relighting it on the next tick.
+
+A turn-off records a target of its own (`{"state": "off"}`), which is what separates *FLARE turned this off*
+from *somebody else did*. Without it there would be nothing to compare once the write's context expires after
+five seconds, and a room turned off at bedtime could never be turned on again.
+
+**A scope releases every claim it holds once none of its lights are on.** Nobody is using the room, so handing
+it back overrides nobody's choice — and it is what ends a hand turn-off. Two things to know:
+
+- **"The room" is the scope, not the physical room.** A light that no state device tracks is not consulted, so
+  it holds nothing open.
+- **Anything not reporting `on` counts as dark**, including unavailable. Requiring every tracked light to report
+  `off` would let one permanently unavailable entity — an orphaned Zigbee group, say — veto the release forever.
+
+This is also the automatic way out of `overridden`, which previously needed the Clear button or the light going
+off and on again.
+
 ### The hand-over event
 
 Every time a tracked light passes into someone else's hands, this fires
@@ -139,8 +159,8 @@ Each state device carries four entities, all on its own device so they're rename
 The `claims` attribute is excluded from the recorder, so it has no history; the two counters are plain numbers
 that graph and produce long-term statistics.
 
-**The two counts don't sum to the tracked total.** A light that's off or unavailable is in neither, because
-override protection doesn't apply to it.
+**The two counts don't sum to the tracked total.** An unavailable light is in neither, and nor is one holding
+no claim.
 
 **Overridden is a normal outcome, not a fault** — something else took the light and FLARE stepped back. These
 entities report who holds what; they aren't a health check.
@@ -183,7 +203,7 @@ whole afternoon while its brightness eases over the last hour.
 | `controlled` | the live `context.id` matches a claim, or the current value still matches a claim's `target` — a delayed confirmation, or a write that never landed. Not excluded from the next tick |
 | `overridden` | matches neither claim's context, and the value matches neither claim's target. Something else has touched it |
 | `unavailable` | no live state to compare against |
-| `off` | the light is off. Protection doesn't apply; it will be managed freely when next turned on |
+| `off` | the light is off and holds no claim at all. A light FLARE turned off is `controlled`; one somebody else turned off is `overridden` |
 
 The tracking sensor updates on every write and clear, and also polls, since a light's live state can change
 without FLARE doing anything.

@@ -467,6 +467,33 @@ class ClaimRegistry:
         if stores:
             self._notify(stores)
 
+    @callback
+    def _release_if_dark(self, store: ClaimStore) -> None:
+        """Discards a scope's claims once none of the lights it tracks
+        are on.
+
+        Turning a light off is an override like any other (see
+        override_protection.classify), so a light switched off by hand
+        stays off rather than being relit on the next tick. Something
+        has to end that, and the whole room going dark is the signal:
+        nobody is using the room, so nobody's choice is being
+        overridden by handing it back.
+
+        Anything not reporting `on` counts as dark, including
+        unavailable and unknown. Requiring every tracked light to
+        report `off` would let one permanently unavailable entity - an
+        orphaned Zigbee group, say - veto the release forever, which is
+        the same trap the blueprint's `recovered` trigger avoids by
+        asking whether anything is reachable rather than whether
+        nothing is unavailable."""
+        if not store.claims:
+            return
+        for entity_id in store.claims:
+            state = self._hass.states.get(entity_id)
+            if state is not None and state.state == "on":
+                return
+        store.claims.clear()
+
     def async_start_listening(self, hass: HomeAssistant) -> CALLBACK_TYPE:
         """Watches both directions of the unavailable/unknown boundary for
         every tracked entity, via one hass-wide "state_changed" listener -
@@ -516,12 +543,20 @@ class ClaimRegistry:
             # entity, functionally identical to recovering from a drop).
             new_explicitly_unavailable = new_state is not None and new_state.state in ("unavailable", "unknown")
 
+            went_off = new_state is not None and new_state.state == "off"
+
             if old_available and new_explicitly_unavailable:
                 store.claims.pop(entity_id, None)
             elif not old_available and new_available:
                 self._snapshot_observed(entity_id, new_state.context.id)
-            else:
+            elif not went_off:
                 return
+
+            # Any transition that can darken a scope re-checks it: a
+            # light going off, and a light dropping (whose claim has
+            # just been popped, possibly leaving the rest all dark).
+            if went_off or new_explicitly_unavailable:
+                self._release_if_dark(store)
 
             self._notify([store])
 

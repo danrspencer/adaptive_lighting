@@ -533,8 +533,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         # way as written_entities - passed to write_tracker.async_record
         # below so a later context.id mismatch can be checked against
         # what we intended rather than assumed external. An off-command
-        # has no brightness/colour target, so needing_off entities are
-        # simply left out (write_targets.get() defaults to None).
+        # records {"state": "off"}: turning a light off is a write like
+        # any other, and without a target of its own there would be
+        # nothing to tell "we turned this off" apart from "someone else
+        # did" once the write's context expires.
         write_targets: dict = {}
         # Two-step entities get their own pair of contexts (see
         # _two_step_turn_on), not call.context - populated below once
@@ -556,6 +558,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         for g in groups:
             if g.needing_off:
                 written_entities.extend(g.needing_off)
+                for e in g.needing_off:
+                    write_targets[e] = {"state": "off"}
                 tasks.append(
                     hass.services.async_call(
                         "light",

@@ -720,6 +720,22 @@ action:
               entity_id: "{{ reachable_entities }}"
             data:
               transition: !input motion_off_transition
+          - alias: "Record the turn-off as ours"
+            # Without this the integration sees a light go off under a
+            # context it has no claim for and reads it as someone else
+            # switching it off - which is exactly what it should read a
+            # *hand* turn-off as. dict(a, **b) rather than
+            # dict.fromkeys: the same construct used for the brightness
+            # multipliers below, and known to work in HA's Jinja.
+            action: flare.record_write
+            data:
+              entities: "{{ reachable_entities }}"
+              targets: >-
+                {% set ns = namespace(t={}) %}
+                {% for e in reachable_entities %}
+                  {% set ns.t = dict(ns.t, **{e: {'state': 'off'}}) %}
+                {% endfor %}
+                {{ ns.t }}
       # Self-healing: on an adaptive_tick, if the room is unoccupied but
       # something is still on (an earlier turn-off didn't land), retry
       # just that. These conditions - not trigger.id alone - decide
@@ -777,6 +793,22 @@ action:
               entity_id: "{{ entities_still_on }}"
             data:
               transition: !input motion_off_transition
+          - alias: "Record the turn-off as ours"
+            # Without this the integration sees a light go off under a
+            # context it has no claim for and reads it as someone else
+            # switching it off - which is exactly what it should read a
+            # *hand* turn-off as. dict(a, **b) rather than
+            # dict.fromkeys: the same construct used for the brightness
+            # multipliers below, and known to work in HA's Jinja.
+            action: flare.record_write
+            data:
+              entities: "{{ entities_still_on }}"
+              targets: >-
+                {% set ns = namespace(t={}) %}
+                {% for e in entities_still_on %}
+                  {% set ns.t = dict(ns.t, **{e: {'state': 'off'}}) %}
+                {% endfor %}
+                {{ ns.t }}
     default:
       - if:
           - condition: template

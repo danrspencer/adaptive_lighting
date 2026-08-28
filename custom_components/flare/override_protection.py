@@ -176,6 +176,17 @@ def target_matches_values(
     return _color_temp_matches(_as_int(current_color_temp_kelvin, -999), target_color_temp, color_temp_tolerance)
 
 
+def _asked_for_off(claim: Optional[dict]) -> bool:
+    """True if this claim's write was a turn-off. Recorded by
+    apply_lighting as {"state": "off"}, which target_matches_values
+    deliberately never matches - it compares brightness and colour, and
+    an off light has neither."""
+    if not claim:
+        return False
+    target = claim.get("target") or {}
+    return target.get("state") == "off"
+
+
 def classify(
     is_on: bool,
     observed: Optional[dict],
@@ -242,14 +253,24 @@ def classify(
     used to be split across two statuses now lives: `latest-*` means the
     most recent write is what the bulb is showing, `observed-*` means it
     isn't, and an older write is."""
-    if not is_on:
-        return "off", None, None
     if observed is None and latest is None:
-        return "untracked", None, None
+        return ("untracked" if is_on else "off"), None, None
     if _context_matches(latest, current_context):
         return "controlled", latest.get("owner_id"), "latest-context"
     if _context_matches(observed, current_context):
         return "controlled", observed.get("owner_id"), "observed-context"
+    if not is_on:
+        # Off is a state a claim can ask for, so it is compared like any
+        # other: an off light matches only a claim that asked for off.
+        # A claim asking for brightness means somebody else turned this
+        # light off, which is an override.
+        if _asked_for_off(latest):
+            return "controlled", latest.get("owner_id"), "latest-value"
+        if _asked_for_off(observed):
+            return "controlled", observed.get("owner_id"), "observed-value"
+        if observed is None:
+            return "untracked", None, None
+        return "overridden", None, None
     if observed is None:
         return "untracked", None, None
     if latest is not None and target_matches_values(

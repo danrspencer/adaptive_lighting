@@ -126,6 +126,10 @@ lamp that's off while the others are lit.
 A light changed by anything other than this integration's own last write — a wall switch, an app, a voice
 assistant, or another automation entirely (including one with no identifiable "user" of its own, such as one
 triggered directly by a physical button) — is left alone rather than being overwritten on the next adaptive tick.
+Switching a light **off** by hand counts as an override too, not just dimming or recolouring it — FLARE leaves
+it off rather than relighting it on the next tick. Its scope releases every claim once none of its lights are
+on, which is what ends that.
+
 A light with no recorded write yet — brand new, or just after a restart — counts as free to manage.
 [Override protection](../advanced/reference/#override-protection) covers the mechanism in full.
 
