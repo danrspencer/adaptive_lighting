@@ -7,6 +7,32 @@ The version in `custom_components/flare/manifest.json` is what
 HACS shows as installed, so it and the release tag are checked against each other in
 CI — see `.github/workflows/release.yml`.
 
+## [0.3.0] - 2026-08-28
+
+Renamed to **FLARE** (Flexible Lighting Automation & Reconciliation Engine).
+
+### Breaking
+
+- **The domain is now `flare`.** Every service is `flare.apply_lighting`,
+  `flare.check_control` and so on. Home Assistant keys config entries by
+  domain and cannot migrate across one, so FLARE installs as a new
+  integration: add it, then remove the old one. Deleting the old
+  `custom_components/adaptive_lighting_helpers/` directory is part of the
+  upgrade - left in place, its code keeps loading alongside and registers
+  its own services against its own entries.
+- **The card is `custom:flare-curve-card`**, and the blueprint is
+  `flare.yaml` - re-import it and repoint your automations.
+- **Entity ids** drop "adaptive" for "flare": `sensor.<name>_flare` for a
+  schedule sensor, and `sensor.<name>_flare_tracking` / `_controlled` /
+  `_overridden` plus `button.<name>_flare_clear` for a tracking scope.
+  The schedule's own time.* and number.* config entities keep their ids.
+
+### Changed
+
+- The documentation site is restructured into three tiers - Home,
+  Quickstart, and a Power users section carrying the integration
+  reference, scene handoff, and building without the blueprint.
+
 ## [0.2.0] - 2026-08-27
 
 A large release. Override protection was rebuilt around user-configured
