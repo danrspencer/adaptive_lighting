@@ -7,6 +7,33 @@ The version in `custom_components/flare/manifest.json` is what
 HACS shows as installed, so it and the release tag are checked against each other in
 CI — see `.github/workflows/release.yml`.
 
+## [0.4.0] - 2026-08-28
+
+Every phase transition is now configurable, and Day is no longer a
+special case.
+
+### Breaking
+
+- **`day_end_kelvin` is replaced by `day_kelvin`**, which is Day's own
+  colour rather than the value it ramped toward. It defaults to Morning's
+  (6667), because Day's default transition covers the whole phase. Any
+  `compute_curve` caller passing `day_end_kelvin` must rename it.
+- **Evening's opening colour ramp moved before the boundary.** The change
+  now happens in Day's tail, so the Evening boundary *is* the evening
+  colour rather than the start of a ramp toward it.
+- **Evening's brightness fade lost its 1.6x ratio**, which made it reach
+  the night value about 22 minutes early and hold. It now lands exactly
+  on the boundary.
+
+### Added
+
+- **Eight transition durations per schedule sensor** - one per phase per
+  channel, in minutes, named for the phase the transition runs in.
+  `0` is a hard cut; a duration longer than its phase covers the whole
+  phase. Exposed as `number.*` config entities and as `compute_curve`
+  fields.
+- The curve playground gains a Transitions panel.
+
 ## [0.3.1] - 2026-08-28
 
 ### Fixed
