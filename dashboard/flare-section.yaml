@@ -1,7 +1,7 @@
-# A complete dashboard section for one Adaptive Lighting Helpers
+# A complete dashboard section for one FLARE
 # sensor: the curve graph, the phase override + sticky-override switch,
 # and every schedule/curve config entity - everything that lives on
-# that sensor's device (see docs/HELPERS.md), laid out for a dashboard
+# that sensor's device (see https://danrspencer.github.io/flare/advanced/reference/), laid out for a dashboard
 # instead of only reachable via Settings -> Devices.
 #
 # Not auto-deployed - storage-mode dashboards aren't files, so this is
@@ -11,7 +11,7 @@
 # whichever fits, they're not meant to be combined on the same view).
 #
 # Requires:
-#   1. Adaptive Lighting Helpers installed - the curve card ships
+#   1. FLARE installed - the curve card ships
 #      inside the integration and self-registers with the frontend on
 #      startup, no manual Lovelace resource needed.
 #   2. A sensor added (Settings -> Devices & Services -> Adaptive
@@ -126,8 +126,8 @@ cards:
         entity: number.living_room_day_brightness
         name: Day brightness
       - type: tile
-        entity: number.living_room_day_end_kelvin
-        name: Day end colour temp
+        entity: number.living_room_day_kelvin
+        name: Day colour temp
       - type: tile
         entity: number.living_room_evening_brightness
         name: Evening brightness
@@ -140,3 +140,44 @@ cards:
       - type: tile
         entity: number.living_room_night_kelvin
         name: Night colour temp
+  - type: heading
+    heading: Transitions
+    heading_style: subtitle
+  - type: markdown
+    text_only: true
+    grid_options:
+      columns: full
+    content: >-
+      How long before each phase ends to start easing into the next one, in
+      minutes. 0 is a hard cut. Values are clamped to the phase, so anything
+      longer than the phase itself means "ease across the whole phase".
+  - type: grid
+    columns: 2
+    square: false
+    grid_options:
+      columns: full
+    cards:
+      - type: tile
+        entity: number.living_room_morning_brightness_transition
+        name: Morning brightness
+      - type: tile
+        entity: number.living_room_morning_kelvin_transition
+        name: Morning colour
+      - type: tile
+        entity: number.living_room_day_brightness_transition
+        name: Day brightness
+      - type: tile
+        entity: number.living_room_day_kelvin_transition
+        name: Day colour
+      - type: tile
+        entity: number.living_room_evening_brightness_transition
+        name: Evening brightness
+      - type: tile
+        entity: number.living_room_evening_kelvin_transition
+        name: Evening colour
+      - type: tile
+        entity: number.living_room_night_brightness_transition
+        name: Night brightness
+      - type: tile
+        entity: number.living_room_night_kelvin_transition
+        name: Night colour

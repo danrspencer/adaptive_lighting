@@ -212,13 +212,18 @@ export function layoutBoundaryLabels(desired, widths, containerWidth, gap = 6) {
   }));
 }
 
-// title unset -> "FLARE"; title: "" explicitly -> no header at
-// all (ha-card renders nothing for a falsy header) - lets a dashboard that
-// already labels each sensor elsewhere (a heading card, a section title)
-// suppress the card's own redundant one, while everyone else still gets a
-// sensible default with zero config.
-function cardHeader(config) {
-  return config.title === '' ? '' : config.title || 'FLARE';
+// title unset -> the schedule sensor's own name, so a card added with no
+// config announces which schedule it is drawing rather than repeating the
+// integration's name on every card. title: "" explicitly -> no header at
+// all (ha-card renders nothing for a falsy header), which lets a dashboard
+// that already labels each sensor elsewhere (a heading card, a section
+// title) suppress the card's own redundant one. "FLARE" is the last
+// resort, for the error render where there is no entity to name.
+function cardHeader(config, stateObj) {
+  if (config.title === '') return '';
+  if (config.title) return config.title;
+  const name = stateObj && stateObj.attributes && stateObj.attributes.friendly_name;
+  return name || 'FLARE';
 }
 
 // brightness_now/kelvin_now default to the same combined entity as
@@ -251,7 +256,9 @@ function sunTimeInWindow(isoString, dayStart, dayEnd) {
 
 class FlareCurveCard extends HTMLElement {
   static getStubConfig() {
-    return { title: 'FLARE' };
+    // No title: a fresh card names itself after the sensor it is pointed
+    // at (see cardHeader).
+    return {};
   }
 
   setConfig(config) {
@@ -440,9 +447,13 @@ class FlareCurveCard extends HTMLElement {
     });
   }
 
+  _header() {
+    return cardHeader(this._config, this._hass && this._hass.states[this._entities.phase]);
+  }
+
   _renderError(message) {
     this.shadowRoot.innerHTML = `
-      <ha-card header="${cardHeader(this._config)}">
+      <ha-card header="${this._header()}">
         <div style="padding: 16px; color: var(--error-color, red);">${message}</div>
       </ha-card>
     `;
@@ -709,7 +720,7 @@ class FlareCurveCard extends HTMLElement {
           z-index: 2;
         }
       </style>
-      <ha-card header="${cardHeader(this._config)}">
+      <ha-card header="${this._header()}">
         <div class="card-content">
           <div class="now-label">${nowLabel}</div>
           ${sunLabel ? `<div class="sun-label">${sunLabel}</div>` : ''}

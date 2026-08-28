@@ -68,7 +68,9 @@ links onward. Everything else lives in `docs/` and is published to
 <https://danrspencer.github.io/flare/>: `installation.md`,
 the `playground.html` interactive curve, `helpers.md` (full service and
 entity reference), `blueprint.md` (full per-feature/input breakdown),
-and `contributing.md` (repo layout, tests, how to build the site).
+Contributing lives at the repo root as `CONTRIBUTING.md` (repo layout,
+tests, how to build the site) - it is for people working on the code,
+who are already on GitHub, so it is not a site page.
 
 These pages are **site pages, not files meant to be read on GitHub** -
 that distinction is load-bearing. An earlier arrangement kept
@@ -778,7 +780,7 @@ HA derives the id from the name at creation.
   it must match the release tag - enforced by `tests/test_version.py`
   and again by `.github/workflows/release.yml`, which refuses to publish
   a mismatch. `CHANGELOG.md` must carry a section for the version.
-  Releasing is bump + changelog + tag; see docs/contributing.md.
+  Releasing is bump + changelog + tag; see CONTRIBUTING.md.
 - **Integration**: HACS. `update_information` then `download`, confirm
   the deployed file matches the merge with `ha_read_file` before
   restarting (see lesson 12), then restart.
@@ -836,7 +838,7 @@ HA derives the id from the name at creation.
 ## Testing
 
 `pip install pytest pytest-homeassistant-custom-component && pytest`
-from the repo root (see `docs/contributing.md`). Python 3.14 - the floor
+from the repo root (see `CONTRIBUTING.md`). Python 3.14 - the floor
 tracks whatever pytest-homeassistant-custom-component's pinned HA
 release requires, since this only ever runs inside a real HA install.
 `pip install -e ".[dev]"` does *not* work here and isn't used anywhere:
