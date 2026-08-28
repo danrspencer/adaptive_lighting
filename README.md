@@ -7,16 +7,16 @@ the afternoon, dimming to a relaxed glow as evening sets in, and low and warm on
 turn their lights on and off as people come and go, manual changes are left alone until you're done with them,
 and anything a scene already has covered is left to the scene.
 
-## 📖 [Read the documentation](https://danrspencer.github.io/adaptive_lighting/)
+## 📖 [Read the documentation](https://danrspencer.github.io/flare/)
 
 The quickest way to see what this actually does is the
-**[interactive curve playground](https://danrspencer.github.io/adaptive_lighting/playground.html)** — it runs the
+**[interactive curve playground](https://danrspencer.github.io/flare/playground.html)** — it runs the
 real dashboard card, and you can drag the schedule and curve settings around and watch it redraw.
 
-- **[Quickstart](https://danrspencer.github.io/adaptive_lighting/installation/)** — HACS, the blueprint, and the dashboard card
-- **[Power users](https://danrspencer.github.io/adaptive_lighting/advanced/)** — every service and entity, scene handoff, and building without the blueprint
-- **[Blueprint reference](https://danrspencer.github.io/adaptive_lighting/blueprint/)** — every input, feature by feature
-- **[Contributing](https://danrspencer.github.io/adaptive_lighting/contributing/)** — repository layout and the test suite
+- **[Quickstart](https://danrspencer.github.io/flare/installation/)** — HACS, the blueprint, and the dashboard card
+- **[Power users](https://danrspencer.github.io/flare/advanced/)** — every service and entity, scene handoff, and building without the blueprint
+- **[Blueprint reference](https://danrspencer.github.io/flare/blueprint/)** — every input, feature by feature
+- **[Contributing](https://danrspencer.github.io/flare/contributing/)** — repository layout and the test suite
 
 ## Why four phases, not a continuous curve
 

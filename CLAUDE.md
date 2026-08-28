@@ -35,7 +35,7 @@ pyscript comes up again in some other project.
 way** (see "The architectural split" below): the
 `flare` HACS integration (curve math + grouping
 logic, exposed as plain HA services anyone can call from their own
-automation) and the `adaptive_lighting` blueprint
+automation) and the `flare` blueprint
 (triggers/conditions/target-resolution, built on top of those services).
 
 Be precise about that asymmetry, because it is easy to describe wrongly
@@ -50,8 +50,9 @@ something different on the same services. "Loosely coupled" is the
 wrong phrase for it, and "independently useful" is simply untrue of the
 blueprint half.
 
-This repo's blueprint is deliberately named `adaptive_lighting.yaml`
-(blueprint name "Adaptive Lighting"), not `adaptive_lighting_unified`
+This repo's blueprint is named `flare.yaml` (blueprint name "FLARE").
+It was previously `adaptive_lighting.yaml`, deliberately not
+`adaptive_lighting_unified`
 - different file, different in-UI name, so it can be installed and
 tested alongside the live `adaptive_lighting_unified.yaml` without
 touching it, and rooms migrated over individually. Linking the two
@@ -64,7 +65,7 @@ project exists, why the day is divided into four named phases
 (Morning/Day/Evening/Night) rather than a single continuous
 sun-elevation curve the way most adaptive-lighting tools work - plus
 links onward. Everything else lives in `docs/` and is published to
-<https://danrspencer.github.io/adaptive_lighting/>: `installation.md`,
+<https://danrspencer.github.io/flare/>: `installation.md`,
 the `playground.html` interactive curve, `helpers.md` (full service and
 entity reference), `blueprint.md` (full per-feature/input breakdown),
 and `contributing.md` (repo layout, tests, how to build the site).
@@ -800,8 +801,8 @@ HA derives the id from the name at creation.
   `flare-curve-card.js` and feeds it the state shape a live
   HA would, with sliders for every schedule and curve value. Build the
   site and serve `docs/_preview/` (`.claude/launch.json`'s `docs-site`),
-  which symlinks `adaptive_lighting` -> `_site` so the site's
-  `/adaptive_lighting` baseurl resolves. Verify by reading the rendered
+  which symlinks `flare` -> `_site` so the site's `/flare` baseurl
+  resolves. Verify by reading the rendered
   shadow DOM directly; screenshot capture has been unreliable here.
   This replaced `dashboard/preview.html` + `generate_preview_data.py`
   and a `render_preview_svg.py` that rendered a static SVG for the

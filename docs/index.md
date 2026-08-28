@@ -13,7 +13,7 @@ built in.
 
 [Quickstart (5 mins)]({{ site.baseurl }}/installation/){: .btn .btn-primary .mr-2 }
 [Curve playground]({{ site.baseurl }}/playground/){: .btn .mr-2 }
-[GitHub](https://github.com/danrspencer/adaptive_lighting){: .btn }
+[GitHub](https://github.com/danrspencer/flare){: .btn }
 
 ---
 

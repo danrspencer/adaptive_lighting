@@ -5,9 +5,9 @@ blueprint:
     temperature from a FLARE schedule sensor,
     keeping lights updated as it changes, and turns them off a while
     after occupancy clears. Full details on every input:
-    [the blueprint reference](https://danrspencer.github.io/adaptive_lighting/blueprint.html).
+    [the blueprint reference](https://danrspencer.github.io/flare/blueprint.html).
   domain: automation
-  source_url: https://github.com/danrspencer/adaptive_lighting/blob/main/blueprints/automation/danspencer/adaptive_lighting.yaml
+  source_url: https://github.com/danrspencer/flare/blob/main/blueprints/automation/danspencer/flare.yaml
   author: Dan Spencer
   homeassistant:
     # Already required by the occupancy.* triggers/conditions below
@@ -31,7 +31,7 @@ blueprint:
       description: >
         Entity, device, area, floor, or label - lights within it are
         controlled, occupancy-class sensors within it decide when.
-        [Details](https://github.com/danrspencer/adaptive_lighting/blob/main/docs/blueprint.md#one-target-two-jobs).
+        [Details](https://github.com/danrspencer/flare/blob/main/docs/blueprint.md#one-target-two-jobs).
       default: {}
       selector:
         target:
@@ -45,7 +45,7 @@ blueprint:
         Entities that trigger an immediate re-evaluation, e.g. a
         dependency of Scene Template or Brightness Multiplier Template.
         Only updates lights that are already on - never switches one on.
-        [Details](https://github.com/danrspencer/adaptive_lighting/blob/main/docs/blueprint.md#additional-triggers).
+        [Details](https://github.com/danrspencer/flare/blob/main/docs/blueprint.md#additional-triggers).
       default: []
       selector:
         entity:
@@ -64,7 +64,7 @@ blueprint:
             blue-tinted rather than a clean white, so those phases are
             off by default - Evening/Night's warmer values don't have
             that problem.
-            [Details](https://github.com/danrspencer/adaptive_lighting/blob/main/docs/blueprint.md#rgb-colour).
+            [Details](https://github.com/danrspencer/flare/blob/main/docs/blueprint.md#rgb-colour).
           default: [Evening, Night]
           selector:
             select:
@@ -83,7 +83,7 @@ blueprint:
             precedence over the per-phase scenes below whenever it
             returns one - they're the fallback for phases it doesn't
             cover.
-            [Details](https://github.com/danrspencer/adaptive_lighting/blob/main/docs/blueprint.md#scene-handoff).
+            [Details](https://github.com/danrspencer/flare/blob/main/docs/blueprint.md#scene-handoff).
           default: ""
           selector:
             template: {}
@@ -123,7 +123,7 @@ blueprint:
             off, null = skip entirely). Its own per-entity values always
             win over the per-phase exclusions below - those only fill in
             entities it doesn't already mention.
-            [Details](https://github.com/danrspencer/adaptive_lighting/blob/main/docs/blueprint.md#per-light-brightness-scaling).
+            [Details](https://github.com/danrspencer/flare/blob/main/docs/blueprint.md#per-light-brightness-scaling).
           default: "{{ {} }}"
           selector:
             template: {}

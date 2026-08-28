@@ -10,9 +10,9 @@
     "frontend",
     "repairs"
   ],
-  "documentation": "https://github.com/danrspencer/adaptive_lighting",
+  "documentation": "https://github.com/danrspencer/flare",
   "iot_class": "calculated",
-  "issue_tracker": "https://github.com/danrspencer/adaptive_lighting/issues",
+  "issue_tracker": "https://github.com/danrspencer/flare/issues",
   "requirements": [],
   "version": "0.3.0"
 }

@@ -26,7 +26,7 @@ unusual is in [Power users]({{ site.baseurl }}/advanced/).
 HACS → three-dot menu → **Custom repositories**. Add:
 
 ```
-https://github.com/danrspencer/adaptive_lighting
+https://github.com/danrspencer/flare
 ```
 
 with type **Integration**. Then find **FLARE** in the HACS list and download it.
@@ -52,7 +52,7 @@ brightness/Kelvin values as ordinary entities. Adjust them any time — no recon
 
 ## Step 3 — import the blueprint and create an automation
 
-[![Import blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdanrspencer%2Fadaptive_lighting%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fdanspencer%2Fflare.yaml)
+[![Import blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdanrspencer%2Fflare%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fdanspencer%2Fflare.yaml)
 
 Create an automation from it and fill in two things:
 
