@@ -383,7 +383,14 @@ class ClaimRegistry:
         store = self._stores.get(subentry_id)
         if store is None:
             return
-        if any(store.claims.pop(entity_id, None) is not None for entity_id in entity_ids):
+        # Not any(store.claims.pop(...) ... for ...): any() short-circuits
+        # on the first True, and pop() is what actually clears each claim
+        # - a generator here would stop popping after the first entity
+        # that had one, leaving every entity after it in the list
+        # untouched. Confirmed live as the cause of "clear" needing one
+        # press per light instead of clearing the whole scope at once.
+        popped = [store.claims.pop(entity_id, None) for entity_id in entity_ids]
+        if any(value is not None for value in popped):
             self._notify([store])
 
     async def async_record(
