@@ -11,13 +11,21 @@ anything else - including a different automation - gets an unrelated
 one. user_id can't distinguish our own write from another automation's,
 since neither carries one.
 
-There is no caller-supplied owner. A light's claims live on exactly one
-state device, resolved from configuration by scope_for() below, so the
-scope holding a claim *is* its owner - two automations driving one room
-write into the same claims and therefore co-operate rather than each
-reading the other as an intruder. grouping.py's externally_set() and
-override_protection.classify() own the comparison itself; this module
-only records.
+A claim's scope is supplied by the caller, not discovered from the
+entity_id - every read/write method below takes a subentry_id
+identifying which state device to act on. `resolve_scope_device()`
+turns a device_id (what a service call actually receives) into that
+subentry_id; passing none means "don't track this write at all", not
+"go find out where it belongs" - see its own docstring. Two automations
+that pass the *same* scope for one light share its claims and
+co-operate rather than each reading the other as an intruder; two that
+pass different scopes are asking to be tracked apart, and are.
+
+`scope_for()` still exists, but only for the handful of call sites with
+no caller to ask - the event-driven state-change listener, the
+darkness release, and staleness pruning. It is not reachable from any
+service. grouping.py's externally_set() and override_protection.classify()
+own the comparison itself; this module only records.
 
 Deliberately not persisted. Claims live on each state device's tracking
 entity and die with a restart, which is correct rather than merely
@@ -100,10 +108,12 @@ from typing import Optional, Protocol
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import CALLBACK_TYPE, Event, EventStateChangedData, HomeAssistant, callback
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import device_registry as dr, entity_registry as er
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.util import dt as dt_util
 
+from .const import DOMAIN, SUBENTRY_TYPE_STATE
 from .coordinator import StateInstance, state_instances
 from .override_protection import _context_matches, _ContextClaim, _WriteRecord
 
@@ -184,6 +194,11 @@ class ClaimRegistry:
         """Which state device tracks this light - most specific match
         wins, and nothing matches means nothing tracks it.
 
+        Internal only, used by _store_for's own search - never reachable
+        from a service. A caller states its scope; this is what the
+        three event-driven call sites fall back on when there is no
+        caller to state one at all.
+
         Deterministic from configuration rather than from whoever wrote
         last, which is what makes a light's claims live in exactly one
         place no matter how many automations drive it. Two automations
@@ -210,6 +225,37 @@ class ClaimRegistry:
                     return instance
         return None
 
+    def resolve_scope_device(self, device_id: str | None) -> str | None:
+        """Turns a service call's scope_device_id into the subentry_id
+        every read/write method below actually wants.
+
+        None in, None out: omitting scope_device_id means "don't track
+        this write", not "go find out where it belongs" - the caller
+        said nothing, so nothing is recorded, same as every other
+        untracked-light case. A device_id that IS given but isn't one of
+        this tracking entry's own state devices is a caller mistake, not
+        an absent scope, so it raises rather than silently degrading to
+        untracked - a typo'd or stale device_id should be loud."""
+        if device_id is None:
+            return None
+        device = dr.async_get(self._hass).async_get(device_id)
+        subentry_id = next(
+            (sid for (domain, sid) in (device.identifiers if device else ()) if domain == DOMAIN),
+            None,
+        )
+        subentry = self._entry.subentries.get(subentry_id) if subentry_id else None
+        if subentry is None or subentry.subentry_type != SUBENTRY_TYPE_STATE:
+            raise ServiceValidationError(f"{device_id} is not a FLARE tracking scope")
+        return subentry_id
+
+    def title_for_scope(self, subentry_id: str | None) -> str | None:
+        """The scope's display name, for echoing back in a service
+        response - check_control's own "scope" field, for example."""
+        if subentry_id is None:
+            return None
+        subentry = self._entry.subentries.get(subentry_id)
+        return subentry.title if subentry is not None else None
+
     def _store_for(self, entity_id: str) -> ClaimStore | None:
         """The live tracking entity holding this light's claims.
 
@@ -229,8 +275,13 @@ class ClaimRegistry:
         instance = self.scope_for(entity_id)
         return self._stores.get(instance.subentry_id) if instance else None
 
-    def _record(self, entity_id: str) -> _WriteRecord | None:
-        store = self._store_for(entity_id)
+    def _record(self, subentry_id: str | None, entity_id: str) -> _WriteRecord | None:
+        """The one place decision-3's "no scope, no tracking" is
+        implemented for reads: a None scope means nothing to look up,
+        full stop, not a search for where the light might live."""
+        if subentry_id is None:
+            return None
+        store = self._stores.get(subentry_id)
         return store.claims.get(entity_id) if store else None
 
     def all_records(self) -> dict[str, _WriteRecord]:
@@ -279,44 +330,43 @@ class ClaimRegistry:
         }
         return store
 
-    def observed_context_id(self, entity_id: str) -> str | None:
-        record = self._record(entity_id)
+    def observed_context_id(self, subentry_id: str | None, entity_id: str) -> str | None:
+        record = self._record(subentry_id, entity_id)
         claim = record.get("observed") if record else None
         return claim["context_id"] if claim else None
 
-    def observed_target(self, entity_id: str) -> dict | None:
-        record = self._record(entity_id)
+    def observed_target(self, subentry_id: str | None, entity_id: str) -> dict | None:
+        record = self._record(subentry_id, entity_id)
         claim = record.get("observed") if record else None
         return claim.get("target") if claim else None
 
-    def observed_secondary_context_id(self, entity_id: str) -> str | None:
-        record = self._record(entity_id)
+    def observed_secondary_context_id(self, subentry_id: str | None, entity_id: str) -> str | None:
+        record = self._record(subentry_id, entity_id)
         claim = record.get("observed") if record else None
         return claim.get("secondary_context_id") if claim else None
 
-    def latest_context_id(self, entity_id: str) -> str | None:
-        record = self._record(entity_id)
+    def latest_context_id(self, subentry_id: str | None, entity_id: str) -> str | None:
+        record = self._record(subentry_id, entity_id)
         claim = record.get("latest") if record else None
         return claim["context_id"] if claim else None
 
-    def latest_target(self, entity_id: str) -> dict | None:
-        record = self._record(entity_id)
+    def latest_target(self, subentry_id: str | None, entity_id: str) -> dict | None:
+        record = self._record(subentry_id, entity_id)
         claim = record.get("latest") if record else None
         return claim.get("target") if claim else None
 
-    def latest_secondary_context_id(self, entity_id: str) -> str | None:
-        record = self._record(entity_id)
+    def latest_secondary_context_id(self, subentry_id: str | None, entity_id: str) -> str | None:
+        record = self._record(subentry_id, entity_id)
         claim = record.get("latest") if record else None
         return claim.get("secondary_context_id") if claim else None
 
-    async def async_clear(self, entity_ids: list[str]) -> None:
-        """Manually discards an entity's tracked record entirely -
+    async def async_clear(self, subentry_id: str | None, entity_ids: list[str]) -> None:
+        """Manually discards entities' tracked records within one scope -
         deliberately invoked, unlike every other path that removes a
         record (async_start_listening's drop-detection, which only ever
         fires on an *observed* unavailable transition). Backs the
-        clear_claims service and the write-tracking dashboard card's
-        "Clear" action - the escape hatch for a light that's landed in
-        "overridden" without ever actually going unavailable, and so
+        clear_claims service - the escape hatch for a light that's landed
+        in "overridden" without ever actually going unavailable, and so
         has no other way back: build_groups() (grouping.py) never calls
         async_record for anything externally_set() already excludes, so
         an overridden light's own `latest` target only gets staler
@@ -325,19 +375,20 @@ class ClaimRegistry:
         ramp, correctly lit the whole time but permanently excluded once
         the live colour temperature drifted a single Kelvin past the
         rescue tolerance of a `latest` claim that was itself frozen the
-        moment exclusion began. A no-op for an entity with no record."""
-        touched: set[int] = set()
-        stores = []
-        for entity_id in entity_ids:
-            store = self._store_for(entity_id)
-            if store is not None and store.claims.pop(entity_id, None) is not None and id(store) not in touched:
-                touched.add(id(store))
-                stores.append(store)
-        if stores:
-            self._notify(stores)
+        moment exclusion began. A no-op with no scope, or for an entity
+        with no record in that scope."""
+        # subentry_id=None finds no store here just as naturally as a
+        # real id with nothing registered - dict.get(None) is simply
+        # never a key, same reasoning as async_record's own lookup.
+        store = self._stores.get(subentry_id)
+        if store is None:
+            return
+        if any(store.claims.pop(entity_id, None) is not None for entity_id in entity_ids):
+            self._notify([store])
 
     async def async_record(
         self,
+        subentry_id: str | None,
         entity_ids: list[str],
         live_context_before_write: dict[str, str | None],
         context_id: str,
@@ -349,6 +400,18 @@ class ClaimRegistry:
         actually issued a light.turn_on/turn_off for - not ones it merely
         considered. See the module docstring for the two-claim model this
         maintains; this documents the arguments.
+
+        subentry_id is the caller's scope, resolved once for the whole
+        call - not re-derived per entity. A None scope means "write the
+        light, track nothing", the decision-3 behaviour: this returns
+        immediately and no claim is recorded for any of entity_ids.
+
+        If a light was previously tracked under a *different* scope (its
+        automation's target changed, or a different caller now names it
+        under a different scope), the old claim is left where it is
+        rather than migrated - see the module's own note on why that's
+        deliberate. It goes stale and is pruned in the ordinary course,
+        or a Clear press removes it sooner.
 
         live_context_before_write: each entity's context.id as read
         *before* any of this call's writes were dispatched. It cannot be
@@ -379,20 +442,21 @@ class ClaimRegistry:
         everything else, which keeps using `context_id` alone."""
         if not entity_ids:
             return
+        # subentry_id=None (decision 3, "don't track this") finds no
+        # store here just as naturally as a real id whose tracking
+        # entity isn't up yet (services are registered before platforms
+        # are forwarded - see __init__.py) - one guard covers both,
+        # deliberately not a separate `if subentry_id is None` check.
+        store = self._stores.get(subentry_id)
+        if store is None:
+            # Dropped, not queued: a lighting override that goes
+            # unrecorded for one tick costs nothing, and the next tick
+            # records it properly.
+            return
         targets = targets or {}
         secondary_context_ids = secondary_context_ids or {}
         context_id_overrides = context_id_overrides or {}
-        touched: set[int] = set()
-        stores = []
         for entity_id in entity_ids:
-            store = self._store_for(entity_id)
-            if store is None:
-                # No state device covers this light (or its scope's
-                # entity isn't up yet) - see _store_for.
-                continue
-            if id(store) not in touched:
-                touched.add(id(store))
-                stores.append(store)
             old = store.claims.get(entity_id)
             observed: Optional[_ContextClaim]
             if old is not None:
@@ -423,8 +487,7 @@ class ClaimRegistry:
                 },
                 "last_seen": dt_util.utcnow().isoformat(),
             }
-        if stores:
-            self._notify(stores)
+        self._notify([store])
 
     async def async_prune_stale(self) -> None:
         """Discards any tracked record not written or observed in over

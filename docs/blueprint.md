@@ -133,9 +133,11 @@ on, which is what ends that.
 A light with no recorded write yet — brand new, or just after a restart — counts as free to manage.
 [Override protection](../advanced/reference/#override-protection) covers the mechanism in full.
 
-The blueprint declares no ownership, so there is no input for it. Which **state device** tracks a light is
-resolved by the integration from its own configuration. Two automations driving the same room share that room's
-claims and co-operate; give them separate state devices to track them apart.
+**Which state device tracks the room comes from Room Target**, resolved once per tick — not a separate input.
+Room Target naming an area uses that area's own tracking scope directly; naming entities or a device with no
+area falls back to the resolved lights' own area. Nothing to configure: point Room Target at the room the usual
+way and the right scope follows. Two rooms sharing one Room Target therefore share that room's claims and
+co-operate; give them separate targets to track them apart.
 
 **Running the automation manually** — "Run" in the UI, or `automation.trigger` — forces the tick through
 regardless of override protection, the same as calling `apply_lighting` with `force: true`.

@@ -53,31 +53,37 @@ data:
 FLARE stops driving a light once something else has taken it — a switch, a scene, another
 automation — and picks it up again when released.
 
-**Claims belong to a state device, not to a caller.** A state device is a named tracking scope you configure
+**You say which scope a call belongs to.** A state device is a named tracking scope you configure
 (Settings → Devices & Services → **FLARE Tracking** → Add state device), pointed at an area, some
-devices, or specific lights. Every light resolves to exactly one:
+devices, or specific lights — each one is a real HA device. Pass its `scope_device_id` on any of
+`apply_lighting`, `compute_lighting_groups`, `check_control`, `record_write` or `clear_claims`:
 
-1. a state device whose target names the **entity**
-2. …names its **device**
-3. …names its **area**
-4. otherwise **not tracked at all**
+```yaml
+action: flare.apply_lighting
+data:
+  entities: [light.kitchen_1, light.kitchen_2]
+  brightness: 200
+  color_temp_kelvin: 3200
+  transition: 2
+  scope_device_id: "{{ device_id('sensor.kitchen_flare_tracking') }}"
+```
 
-Most specific wins; ties break on the state device's name, so the result is stable across restarts. A light
-matching nothing is never tracked and stays permanently manageable — there is no catch-all bucket, so a light
-missing an area shows up as an absent scope rather than being quietly absorbed.
+**Omitting `scope_device_id` writes the light but tracks nothing** — no claim is recorded, and nothing is
+excluded as already externally-set. Tracking is opt-in per call, not something the integration goes looking
+for on your behalf. A `scope_device_id` that *is* given but isn't one of your tracking scopes raises rather
+than silently behaving like it was omitted — a typo'd or stale id is a mistake worth knowing about.
 
-{: .warning }
-> The target picker also offers **floors and labels**, and a state device pointed at one matches nothing —
-> resolution only looks at entity, device and area. Use an area, or name the lights directly.
+Every entity passed in one call goes into the *same* scope — there's no per-entity resolution any more, so a
+call spanning several rooms needs one call per room's own scope.
 
-An already-tracked light keeps the scope it is already in, even if you retarget the state devices underneath
-it. Press **Clear** on the old scope to move it.
+Because scope is something you state rather than something resolved from configuration, **two calls naming the
+same scope share its claims and co-operate.** Name different scopes to track two automations apart.
 
-Because scope comes from configuration rather than from whoever wrote last, **two automations driving the same
-room share that room's claims and co-operate.** Give them separate state devices to track them apart.
+`force: true` writes through regardless of who holds a light. The write is still recorded against
+`scope_device_id`, so protection works again on the next non-forced call naming that same scope.
 
-`force: true` writes through regardless of who holds a light. The write is still recorded, so protection works
-again on the next non-forced call.
+The blueprint resolves this for you from `room_target` — see [One target, two jobs](../../blueprint/#one-target-two-jobs)
+— so you only need to pass `scope_device_id` by hand when calling these services directly.
 
 #### The two claims
 

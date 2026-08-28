@@ -29,6 +29,7 @@ from pytest_homeassistant_custom_component.common import (
 
 from homeassistant.config_entries import ConfigEntryState, ConfigSubentryData
 from homeassistant.core import Context, HomeAssistant
+from homeassistant.exceptions import ServiceValidationError
 from homeassistant.helpers import entity_registry as er
 from homeassistant.util import dt as dt_util
 
@@ -94,6 +95,8 @@ async def _attach_tracking_sensors(hass: HomeAssistant, entry: MockConfigEntry) 
     _StateTrackingSensor and the real registry routing; only HA's state
     publication is stubbed out, which test_state_devices.py covers
     against a properly added entity."""
+    from homeassistant.helpers import device_registry as dr
+
     from custom_components.flare.sensor import async_setup_entry as sensor_setup
 
     added: list = []
@@ -102,6 +105,23 @@ async def _attach_tracking_sensors(hass: HomeAssistant, entry: MockConfigEntry) 
     for instance, entity in zip(state_instances(entry), [e for e in added if hasattr(e, "claims")]):
         entity.async_claims_changed = lambda: None
         registry.register(instance.subentry_id, entity)
+        # The stub async_add_entities above is a plain list-append, not
+        # the real entity platform - it never triggers the device
+        # registration a real add_entities call does for an entity
+        # carrying device_info. resolve_scope_device (and any test using
+        # scope_device_id) needs a real device to resolve, so create it
+        # explicitly here, the same identifiers StateInstance.device_info
+        # would produce.
+        dr.async_get(hass).async_get_or_create(
+            config_entry_id=entry.entry_id, identifiers=instance.device_info["identifiers"], name=instance.title
+        )
+    # A device registry write also triggers two_step_check.py's own
+    # 5s-debounced watcher (it listens for entity AND device registry
+    # updates) - flush it the same way _track_test_lights already does
+    # for its own entity-registry writes, or the harness fails on a
+    # lingering timer.
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=30))
+    await hass.async_block_till_done()
 
 
 def _registry(hass: HomeAssistant) -> ClaimRegistry:
@@ -109,6 +129,26 @@ def _registry(hass: HomeAssistant) -> ClaimRegistry:
     second tracker against the same Store to read state back; there is
     no Store any more, and no second copy to read."""
     return next(v for v in hass.data[DOMAIN].values() if isinstance(v, ClaimRegistry))
+
+
+def _test_scope_subentry_id(hass: HomeAssistant) -> str:
+    """The Test Scope state device's own subentry_id - what
+    ClaimRegistry's accessors want directly."""
+    entry = next(
+        e for e in hass.config_entries.async_entries(DOMAIN) if e.data.get(CONF_ENTRY_TYPE) == ENTRY_TYPE_TRACKING
+    )
+    return next(iter(entry.subentries))
+
+
+def _scope_device_id(hass: HomeAssistant) -> str:
+    """The Test Scope state device's own device_id - what a real caller
+    resolves once (e.g. from room_target's area) and passes to a service
+    call as scope_device_id, exactly as the blueprint does."""
+    from homeassistant.helpers import device_registry as dr
+
+    device = dr.async_get(hass).async_get_device(identifiers={(DOMAIN, _test_scope_subentry_id(hass))})
+    assert device is not None
+    return device.id
 
 
 def _test_area(hass: HomeAssistant):
@@ -145,10 +185,23 @@ def _set_light(hass: HomeAssistant, entity_id: str, state: str, *, context: Cont
     hass.states.async_set(entity_id, state, attrs, context=context)
 
 
+_UNSET = object()  # distinguishes "use the default scope" from an explicit scope_device_id=None
+
+
 async def _apply(hass: HomeAssistant, entities: list[str], *, context: Context | None = None, **overrides) -> None:
-    """apply_lighting with the fields most tests don't care about defaulted.
-    Pass any of them as a keyword to override."""
-    data = {"entities": entities, "brightness": 200, "color_temp_kelvin": 3000, "transition": 0, **overrides}
+    """apply_lighting with the fields most tests don't care about
+    defaulted, including scope_device_id (Test Scope's own device) -
+    most tests here are about override protection, which needs a real
+    scope to mean anything. Pass scope_device_id=None explicitly to
+    exercise the untracked path instead."""
+    data = {
+        "entities": entities,
+        "brightness": 200,
+        "color_temp_kelvin": 3000,
+        "transition": 0,
+        "scope_device_id": _scope_device_id(hass),
+        **overrides,
+    }
     await hass.services.async_call(DOMAIN, "apply_lighting", data, blocking=True, context=context)
 
 async def _label_two_step(hass: HomeAssistant, entity_id: str) -> None:
@@ -305,21 +358,39 @@ async def test_compute_lighting_groups_accepts_an_explicit_null_rgb_color(setup_
     assert result["groups"][0]["combined"] == ["light.a"]
 
 
+async def _check(hass: HomeAssistant, entities: list[str], *, scope_device_id=_UNSET) -> dict:
+    if scope_device_id is _UNSET:
+        scope_device_id = _scope_device_id(hass)
+    result = await hass.services.async_call(
+        DOMAIN,
+        "check_control",
+        {"entities": entities, "scope_device_id": scope_device_id},
+        blocking=True,
+        return_response=True,
+    )
+    return result["results"]
+
+
+async def _record_write(hass: HomeAssistant, entities: list[str], *, targets=None, context=None, scope_device_id=_UNSET):
+    if scope_device_id is _UNSET:
+        scope_device_id = _scope_device_id(hass)
+    data = {"entities": entities, "scope_device_id": scope_device_id}
+    if targets is not None:
+        data["targets"] = targets
+    return await hass.services.async_call(
+        DOMAIN, "record_write", data, blocking=True, context=context, return_response=True
+    )
+
+
 async def test_check_control_reports_untracked_for_a_brand_new_entity(setup_integration: HomeAssistant):
     """check_control is genuinely standalone - no apply_lighting call,
     no sensor, just a light and the write-tracking mechanism."""
     hass = setup_integration
     _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=100, color_temp_kelvin=3000)
 
-    result = await hass.services.async_call(
-        DOMAIN,
-        "check_control",
-        {"entities": ["light.a"]},
-        blocking=True,
-        return_response=True,
-    )
+    results = await _check(hass, ["light.a"])
 
-    assert result["results"]["light.a"] == {"blocked": False, "status": "untracked", "matched_via": None, "scope": "Test Scope"}
+    assert results["light.a"] == {"blocked": False, "status": "untracked", "matched_via": None, "scope": "Test Scope"}
 
 
 async def test_check_control_and_record_write_round_trip(setup_integration: HomeAssistant):
@@ -330,12 +401,8 @@ async def test_check_control_and_record_write_round_trip(setup_integration: Home
     our_context = Context()
     _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=100, color_temp_kelvin=3000, context=our_context)
 
-    await hass.services.async_call(
-        DOMAIN,
-        "record_write",
-        {"entities": ["light.a"], "targets": {"light.a": {"brightness": 100, "color_temp_kelvin": 3000}}},
-        blocking=True,
-        context=our_context,
+    await _record_write(
+        hass, ["light.a"], targets={"light.a": {"brightness": 100, "color_temp_kelvin": 3000}}, context=our_context
     )
 
     # Immediately after, still under the same context - not blocked, and
@@ -344,14 +411,8 @@ async def test_check_control_and_record_write_round_trip(setup_integration: Home
     # the pre-write context as `observed` too, so both claims share a
     # context.id here - `latest` is checked first, matching classify()'s
     # own precedence.
-    result = await hass.services.async_call(
-        DOMAIN,
-        "check_control",
-        {"entities": ["light.a"]},
-        blocking=True,
-        return_response=True,
-    )
-    assert result["results"]["light.a"] == {
+    results = await _check(hass, ["light.a"])
+    assert results["light.a"] == {
         "blocked": False,
         "status": "controlled",
         "matched_via": "latest-context",
@@ -361,29 +422,17 @@ async def test_check_control_and_record_write_round_trip(setup_integration: Home
     # Someone else changes it - a different context, different values.
     _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=40, color_temp_kelvin=6000)
 
-    result = await hass.services.async_call(
-        DOMAIN,
-        "check_control",
-        {"entities": ["light.a"]},
-        blocking=True,
-        return_response=True,
-    )
-    assert result["results"]["light.a"] == {"blocked": True, "status": "overridden", "matched_via": None, "scope": "Test Scope"}
+    results = await _check(hass, ["light.a"])
+    assert results["light.a"] == {"blocked": True, "status": "overridden", "matched_via": None, "scope": "Test Scope"}
 
-    # Another caller asking about the same still-matching claim sees it
-    # as *not* blocked. There is no owner comparison any more: the claim
-    # belongs to the state device that covers this light, so any caller
-    # writing it is writing through that same scope. Two automations
-    # driving one room co-operate rather than blocking each other.
+    # Another caller asking about the same still-matching claim, through
+    # the same scope, sees it as *not* blocked. There is no owner
+    # comparison any more: the claim belongs to whatever scope the caller
+    # named, so any caller naming the same scope co-operates rather than
+    # blocking the other.
     _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=100, color_temp_kelvin=3000, context=our_context)
-    result = await hass.services.async_call(
-        DOMAIN,
-        "check_control",
-        {"entities": ["light.a"]},
-        blocking=True,
-        return_response=True,
-    )
-    assert result["results"]["light.a"] == {
+    results = await _check(hass, ["light.a"])
+    assert results["light.a"] == {
         "blocked": False,
         "status": "controlled",
         "matched_via": "latest-context",
@@ -391,47 +440,84 @@ async def test_check_control_and_record_write_round_trip(setup_integration: Home
     }
 
 
-async def test_check_control_reports_the_scope_that_tracks_each_light(setup_integration: HomeAssistant):
-    """A light matching no state device isn't tracked at all, which from
-    the outside looks identical to "tracked and currently fine". `scope`
-    is what tells those apart - without it a caller can't tell that
-    adaptive lighting simply isn't watching a light."""
-    hass = setup_integration
-    ctx = Context()
-    _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=100, color_temp_kelvin=3000, context=ctx)
-    # Registered in no area, so no state device covers it.
-    hass.states.async_set("light.unscoped", "on", {"brightness": 100, "color_temp_kelvin": 3000})
-
-    result = await hass.services.async_call(
-        DOMAIN,
-        "check_control",
-        {"entities": ["light.a", "light.unscoped"]},
-        blocking=True,
-        return_response=True,
-    )
-
-    assert result["results"]["light.a"]["scope"] == "Test Scope"
-    assert result["results"]["light.unscoped"]["scope"] is None
-
-
-async def test_record_write_reports_only_what_it_actually_recorded(setup_integration: HomeAssistant):
-    """A light matching no state device isn't tracked, so recording it
-    is a no-op. Echoing the request back would tell a caller their write
-    was tracked when nothing happened - the same quiet failure as any
-    other success report for work that didn't occur."""
+async def test_check_control_echoes_back_whatever_scope_it_was_given(setup_integration: HomeAssistant):
+    """`scope` is no longer resolved per entity - it simply echoes the
+    caller's own scope_device_id back as a title, for every entity in the
+    call, regardless of whether that light is anywhere near the scope's
+    own target. Omitting scope_device_id checks against no claims at all,
+    and the response says so."""
     hass = setup_integration
     _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=100, color_temp_kelvin=3000)
-    hass.states.async_set("light.unscoped", "on", {"brightness": 100, "color_temp_kelvin": 3000})
+    # Not in the Test Scope's area at all - the point is that passing the
+    # scope explicitly tracks it there anyway, unlike the old per-entity
+    # area resolution.
+    hass.states.async_set("light.elsewhere", "on", {"brightness": 100, "color_temp_kelvin": 3000})
 
-    result = await hass.services.async_call(
-        DOMAIN,
-        "record_write",
-        {"entities": ["light.a", "light.unscoped"]},
-        blocking=True,
-        return_response=True,
+    results = await _check(hass, ["light.a", "light.elsewhere"])
+    assert results["light.a"]["scope"] == "Test Scope"
+    assert results["light.elsewhere"]["scope"] == "Test Scope"
+
+    results = await _check(hass, ["light.a"], scope_device_id=None)
+    assert results["light.a"] == {"blocked": False, "status": "untracked", "matched_via": None, "scope": None}
+
+
+async def test_record_write_with_no_scope_records_nothing(setup_integration: HomeAssistant):
+    """Decision: a service call with no scope still writes the light (if
+    it writes at all), but tracks nothing - no claim, nothing excluded as
+    already externally-set. Omitting scope_device_id is that "don't
+    track this" signal, not a request to go find out where the light
+    belongs."""
+    hass = setup_integration
+    _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=100, color_temp_kelvin=3000)
+
+    result = await _record_write(hass, ["light.a"], scope_device_id=None)
+
+    assert result["recorded"] == []
+    assert _registry(hass).all_records() == {}
+
+
+async def test_record_write_records_everything_passed_once_a_scope_is_given(setup_integration: HomeAssistant):
+    """The counterpart: with a scope, every entity in the call is
+    recorded into it - one scope per call, not one resolved per entity.
+    light.elsewhere isn't anywhere near the scope's own target area, and
+    is recorded anyway, because the caller said so."""
+    hass = setup_integration
+    _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=100, color_temp_kelvin=3000)
+    hass.states.async_set("light.elsewhere", "on", {"brightness": 100, "color_temp_kelvin": 3000})
+
+    result = await _record_write(hass, ["light.a", "light.elsewhere"])
+
+    assert sorted(result["recorded"]) == ["light.a", "light.elsewhere"]
+
+
+async def test_scope_device_id_rejects_a_nonexistent_device(setup_integration: HomeAssistant):
+    """A typo'd or stale device_id is a caller mistake, not an absent
+    scope - it must be loud, not silently treated the same as omitting
+    scope_device_id entirely."""
+    hass = setup_integration
+    with pytest.raises(ServiceValidationError):
+        await _check(hass, ["light.a"], scope_device_id="not_a_real_device_id")
+
+
+async def test_scope_device_id_rejects_a_device_that_isnt_a_tracking_scope(setup_integration: HomeAssistant):
+    """Any other device - a schedule sensor's device, or something from
+    a completely unrelated integration - is just as much a caller
+    mistake as a nonexistent id, and rejected the same way."""
+    hass = setup_integration
+    from homeassistant.helpers import device_registry as dr
+
+    entry = MockConfigEntry(domain="not_flare")
+    entry.add_to_hass(hass)
+    other_device = dr.async_get(hass).async_get_or_create(
+        config_entry_id=entry.entry_id, identifiers={("not_flare", "something_else")}
     )
-
-    assert result["recorded"] == ["light.a"]
+    # A device registry write also triggers two_step_check.py's own
+    # 5s-debounced watcher (see _attach_tracking_sensors's own note) -
+    # flush it or the harness fails on a lingering timer.
+    async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=30))
+    await hass.async_block_till_done()
+    with pytest.raises(ServiceValidationError):
+        await _check(hass, ["light.a"], scope_device_id=other_device.id)
 
 
 async def test_check_control_does_not_take_force(setup_integration: HomeAssistant):
@@ -450,22 +536,13 @@ async def test_check_control_does_not_take_force(setup_integration: HomeAssistan
         )
 
 
-async def _check(hass: HomeAssistant, entities: list[str]) -> dict:
-    result = await hass.services.async_call(
-        DOMAIN, "check_control", {"entities": entities}, blocking=True, return_response=True
-    )
-    return result["results"]
-
-
 async def test_the_last_light_going_off_releases_the_whole_scope(setup_integration: HomeAssistant):
     """A room with nothing on is a room nobody is using, so its claims
     go and every light in it is free again."""
     hass = setup_integration
     our_context = Context()
     _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=100, color_temp_kelvin=3000, context=our_context)
-    await hass.services.async_call(
-        DOMAIN, "record_write", {"entities": ["light.a"]}, blocking=True, context=our_context
-    )
+    await _record_write(hass, ["light.a"], context=our_context)
     _set_light(hass, "light.a", "off", context=Context(id="ctx-motion-off"))
     await hass.async_block_till_done()
 
@@ -486,14 +563,10 @@ async def test_a_light_switched_off_by_hand_in_a_lit_room_is_left_off(setup_inte
     ours = Context()
     for e in ("light.a", "light.sibling"):
         _set_light(hass, e, "on", supported_color_modes=["color_temp"], brightness=100, color_temp_kelvin=3000, context=ours)
-    await hass.services.async_call(
-        DOMAIN,
-        "record_write",
-        {
-            "entities": ["light.a", "light.sibling"],
-            "targets": {"light.a": {"brightness": 100, "color_temp_kelvin": 3000}},
-        },
-        blocking=True,
+    await _record_write(
+        hass,
+        ["light.a", "light.sibling"],
+        targets={"light.a": {"brightness": 100, "color_temp_kelvin": 3000}},
         context=ours,
     )
     _set_light(hass, "light.a", "off", context=Context(id="ctx-wall-switch"))
@@ -534,44 +607,45 @@ async def test_clear_claims_frees_a_light_stuck_overridden(setup_integration: Ho
     hass = setup_integration
     our_context = Context()
     _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=100, color_temp_kelvin=3000, context=our_context)
-    await hass.services.async_call(
-        DOMAIN,
-        "record_write",
-        {"entities": ["light.a"]},
-        blocking=True,
-        context=our_context,
-    )
+    await _record_write(hass, ["light.a"], context=our_context)
     # A genuinely different value under a genuinely different context -
     # the delayed-echo rescue can't save this one either, so it reads as
     # overridden and would stay excluded from every future write.
     _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=40, color_temp_kelvin=6000)
-    result = await hass.services.async_call(
-        DOMAIN,
-        "check_control",
-        {"entities": ["light.a"]},
-        blocking=True,
-        return_response=True,
+    results = await _check(hass, ["light.a"])
+    assert results["light.a"]["status"] == "overridden"
+
+    await hass.services.async_call(
+        DOMAIN, "clear_claims", {"entities": ["light.a"], "scope_device_id": _scope_device_id(hass)}, blocking=True
     )
-    assert result["results"]["light.a"]["status"] == "overridden"
 
-    await hass.services.async_call(DOMAIN, "clear_claims", {"entities": ["light.a"]}, blocking=True)
-
-    result = await hass.services.async_call(
-        DOMAIN,
-        "check_control",
-        {"entities": ["light.a"]},
-        blocking=True,
-        return_response=True,
-    )
-    assert result["results"]["light.a"] == {"blocked": False, "status": "untracked", "matched_via": None, "scope": "Test Scope"}
+    results = await _check(hass, ["light.a"])
+    assert results["light.a"] == {"blocked": False, "status": "untracked", "matched_via": None, "scope": "Test Scope"}
 
 
-async def test_clear_claims_is_a_noop_for_an_untracked_entity(setup_integration: HomeAssistant):
+async def test_clear_claims_is_a_noop_with_no_scope(setup_integration: HomeAssistant):
+    """No scope means nothing to clear from - a caller-error-free no-op,
+    same as any other omitted-scope call."""
     hass = setup_integration
     result = await hass.services.async_call(
         DOMAIN, "clear_claims", {"entities": ["light.never_tracked"]}, blocking=True, return_response=True
     )
     assert result == {"cleared": ["light.never_tracked"]}
+
+
+async def test_clear_claims_is_a_noop_for_an_untracked_entity_within_a_real_scope(setup_integration: HomeAssistant):
+    """The more meaningful case: a scope that genuinely exists, asked to
+    clear an entity it's never written - nothing to discard, no error."""
+    hass = setup_integration
+    result = await hass.services.async_call(
+        DOMAIN,
+        "clear_claims",
+        {"entities": ["light.never_tracked"], "scope_device_id": _scope_device_id(hass)},
+        blocking=True,
+        return_response=True,
+    )
+    assert result == {"cleared": ["light.never_tracked"]}
+    assert _registry(hass).all_records() == {}
 
 
 async def test_override_protection_survives_a_real_write_tracking_round_trip(setup_integration: HomeAssistant):
@@ -759,8 +833,9 @@ async def test_two_step_transition_generates_two_distinct_contexts(setup_integra
     assert brightness_call.context.id != color_call.context.id
 
     tracker = _registry(hass)
-    assert tracker.latest_context_id("light.a") == color_call.context.id
-    assert tracker.latest_secondary_context_id("light.a") == brightness_call.context.id
+    scope = _test_scope_subentry_id(hass)
+    assert tracker.latest_context_id(scope, "light.a") == color_call.context.id
+    assert tracker.latest_secondary_context_id(scope, "light.a") == brightness_call.context.id
 
 
 async def test_two_step_brightness_step_landing_alone_is_recognised_as_ours(setup_integration: HomeAssistant):
@@ -791,14 +866,8 @@ async def test_two_step_brightness_step_landing_alone_is_recognised_as_ours(setu
         hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=200, context=brightness_context
     )
 
-    result = await hass.services.async_call(
-        DOMAIN,
-        "check_control",
-        {"entities": ["light.a"]},
-        blocking=True,
-        return_response=True,
-    )
-    assert result["results"]["light.a"] == {
+    results = await _check(hass, ["light.a"])
+    assert results["light.a"] == {
         "blocked": False,
         "status": "controlled",
         "matched_via": "latest-context",
@@ -823,8 +892,9 @@ async def test_two_step_promotion_recognises_a_match_via_the_secondary_context(s
     await _apply(hass, ['light.a'], transition=0.2)
 
     tracker = _registry(hass)
-    brightness_ctx_1 = tracker.latest_secondary_context_id("light.a")
-    color_ctx_1 = tracker.latest_context_id("light.a")
+    scope = _test_scope_subentry_id(hass)
+    brightness_ctx_1 = tracker.latest_secondary_context_id(scope, "light.a")
+    color_ctx_1 = tracker.latest_context_id(scope, "light.a")
     assert brightness_ctx_1 is not None and color_ctx_1 is not None
 
     # The device only ever confirms the brightness step - the colour
@@ -847,8 +917,8 @@ async def test_two_step_promotion_recognises_a_match_via_the_secondary_context(s
     # `confirmed`, proven via the secondary (brightness) context match,
     # not the primary (colour) one - the light never reported the
     # colour step's context at all.
-    assert tracker_after.observed_context_id("light.a") == color_ctx_1
-    assert tracker_after.observed_secondary_context_id("light.a") == brightness_ctx_1
+    assert tracker_after.observed_context_id(scope, "light.a") == color_ctx_1
+    assert tracker_after.observed_secondary_context_id(scope, "light.a") == brightness_ctx_1
 
 
 async def test_a_dropped_first_write_self_heals_on_the_next_tick_with_no_interference(
@@ -955,11 +1025,12 @@ async def test_force_bypasses_protection_and_reclaims_the_light(setup_integratio
             "entities": ["light.a"],
             "brightness": 180,
             "color_temp_kelvin": 3200,
+            "scope_device_id": _scope_device_id(hass),
         },
         blocking=True,
         return_response=True,
     )
-    # Same context as the forced write, same owner_id checking it back -
+    # Same context as the forced write, same scope checking it back -
     # not externally-set, and still short of target, so correctly
     # included for update.
     assert result["groups"][0]["combined"] == ["light.a"]
@@ -1122,6 +1193,7 @@ async def test_recovered_light_is_freed_while_an_unrelated_override_stays_protec
             "entities": ["light.recovering", "light.sibling"],
             "brightness": 180,
             "color_temp_kelvin": 3200,
+            "scope_device_id": _scope_device_id(hass),
         },
         blocking=True,
         return_response=True,
@@ -1195,6 +1267,7 @@ async def test_a_restart_style_unavailable_blip_does_not_clear_an_existing_recor
             "entities": ["light.a"],
             "brightness": 180,
             "color_temp_kelvin": 3200,
+            "scope_device_id": _scope_device_id(hass),
         },
         blocking=True,
         return_response=True,

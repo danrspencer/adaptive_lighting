@@ -533,6 +533,34 @@ variables:
   # also directly name occupancy-class sensor entities, hence the filter.
   resolved_entities: >
     {{ all_target_entities | select('match', '^light\\.') | list }}
+  # Which FLARE tracking scope this room's writes belong to - resolved
+  # here, once, rather than left for the integration to search for.
+  # Room Target names an area directly, that area's own state device
+  # wins outright: "pick the area, the scope comes with it". Otherwise
+  # (Room Target names entities/a device with no area) falls back to
+  # the resolved lights' own area, first one that actually has a state
+  # device - the same entity->area fallback the integration used to do
+  # internally, now done here where the caller can see it.
+  #
+  # Either way this only ever finds a scope whose target reduces to a
+  # single area, since that's the only shape a state device's own
+  # tracking-sensor device lands in an area at all (see
+  # sensor.py's _assign_scope_area) - a scope spanning several areas,
+  # or targeting devices/entities directly, isn't discoverable this
+  # way. None here means untracked, not "go find out" - a room whose
+  # lights don't resolve to any state device's area simply isn't
+  # tracked, the same as passing no scope to any of these services
+  # directly.
+  tracking_scope_device_id: >
+    {% if room_target is not none and room_target.area_id is defined %}
+      {% set aids = room_target.area_id %}
+      {% set aid = (aids if aids is iterable and aids is not string else [aids]) | first %}
+    {% else %}
+      {% set candidate_areas = resolved_entities | map('area_id') | reject('none') | unique | list %}
+      {% set aid = candidate_areas | first if candidate_areas | length > 0 else none %}
+    {% endif %}
+    {% set tracking_entities = area_entities(aid) | select('search', '^sensor\\..*_flare_tracking$') | list if aid is not none else [] %}
+    {{ device_id(tracking_entities | first) if tracking_entities | length > 0 else none }}
   # Entities HA already knows it can't reach right now - no point
   # commanding them - minus anything the multiplier template handed off
   # (see hands_off_entities above). Only feeds the motion_off turn-off.
@@ -730,6 +758,7 @@ action:
             action: flare.record_write
             data:
               entities: "{{ reachable_entities }}"
+              scope_device_id: "{{ tracking_scope_device_id }}"
               targets: >-
                 {% set ns = namespace(t={}) %}
                 {% for e in reachable_entities %}
@@ -803,6 +832,7 @@ action:
             action: flare.record_write
             data:
               entities: "{{ entities_still_on }}"
+              scope_device_id: "{{ tracking_scope_device_id }}"
               targets: >-
                 {% set ns = namespace(t={}) %}
                 {% for e in entities_still_on %}
@@ -835,6 +865,7 @@ action:
           - action: flare.clear_claims
             data:
               entities: "{{ handed_off_entities }}"
+              scope_device_id: "{{ tracking_scope_device_id }}"
       # Reachability, multiplier bucketing, tolerance checks, override
       # protection, two-step/combined routing and RGB-vs-colour-temp
       # dispatch all live in the FLARE integration
@@ -864,12 +895,8 @@ action:
             rgb_color: "{{ rgb_color }}"
             transition: "{{ script_transition }}"
             prefer_rgb_color: "{{ prefer_rgb_color }}"
-            # Identifies this room's automation as the owner of its own
-            # writes (see docs/helpers.md's apply_lighting reference) -
+            scope_device_id: "{{ tracking_scope_device_id }}"
             # A manual run (someone hit "Run" on this automation, or
             # called automation.trigger directly) forces the whole tick
-            # through regardless of override protection. Which state
-            # device tracks each light is decided by the integration from
-            # its own configuration, not declared here - see
-            # write_tracking.py's scope_for.
+            # through regardless of override protection.
             force: "{{ manual_run }}"
