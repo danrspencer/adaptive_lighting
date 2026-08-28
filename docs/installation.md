@@ -50,6 +50,15 @@ rooms to track:
 
 Scopes can be added, retargeted or removed at any time from the Tracking entry.
 
+{: .note }
+> Adding another schedule sensor or state device later shows a Home Assistant entry
+> picker offering **both FLARE Schedules and FLARE Tracking**, regardless of which one
+> you clicked "Add" from — a Home Assistant frontend quirk, not a FLARE bug: the picker
+> lists every entry for the domain before checking which one actually supports what
+> you're adding. Pick the entry matching what you clicked (Schedules for a schedule
+> sensor, Tracking for a state device) — picking the other one simply fails rather than
+> creating anything in the wrong place.
+
 Each schedule sensor gets its own device, with the phase boundaries, curve values and
 transition durations as ordinary entities you can edit from the device page.
 
