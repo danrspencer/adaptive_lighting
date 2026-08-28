@@ -47,18 +47,18 @@ permalink: /dashboard/
   so both are needed for the curve to actually span the section instead of rendering
   at roughly a third of it. The same setting is what packs several cards onto one
   row elsewhere in the section — <code>columns</code> is out of the section's own
-  12-column grid, so e.g. <code>3</code> fits four gauges per row instead of one.
+  12-column grid, so e.g. <code>3</code> fits four sliders per row instead of one.
 </p>
 
 <p>
-  The eight curve values and eight transition minutes render as <strong>gauge</strong>
-  cards rather than tiles: each is one number in a fixed range (brightness 0–255,
-  colour temperature 1000–10000 Kelvin, transition 0–1440 minutes), and a gauge shows
-  where today's value sits in that range at a glance — which is the point of glancing
-  at this section in the first place. Tap one to open its editor. Phase, Sticky and
-  the five schedule times stay as tiles, since neither a dropdown state nor a time of
-  day has a meaningful "how full is this" reading; Phase gets the inline
-  <code>select-options</code> feature so it's a dropdown rather than tap-to-open.
+  The eight curve values and eight transition minutes are tiles carrying the
+  <code>numeric-input</code> feature (<code>style: slider</code>) — drag to set the value
+  directly from the dashboard, no need to open anything. The slider's own range comes
+  from the entity itself (brightness 0–255, colour temperature 1000–10000 Kelvin,
+  transition 0–1440 minutes), not from anything typed into this generator, so it can
+  never drift out of sync with what the entity actually accepts. Phase gets the inline
+  <code>select-options</code> feature so it's a dropdown rather than tap-to-open; Sticky
+  and the five schedule times stay as plain tiles.
 </p>
 
 <h2 id="repeat-per-schedule">Repeat per schedule</h2>
