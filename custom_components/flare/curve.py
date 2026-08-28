@@ -42,19 +42,20 @@ DEFAULT_NIGHT_KELVIN = 2700
 # how the old hardcoded full-phase slide is expressed now that Day is an
 # ordinary phase.
 #
-# Morning's defaults do nothing on the shipped values, since Day holds
-# the same brightness and colour Morning does and there is nothing to
-# interpolate. They matter the moment Day is given its own.
-DEFAULT_MORNING_BRIGHTNESS_TRANSITION = 30
-DEFAULT_MORNING_KELVIN_TRANSITION = 30
-DEFAULT_DAY_BRIGHTNESS_TRANSITION = 0
+# Morning's do nothing on the shipped values, since Day holds the same
+# brightness and colour Morning does and there is nothing to interpolate.
+# They matter the moment Day is given its own.
+DEFAULT_MORNING_BRIGHTNESS_TRANSITION = 60
+DEFAULT_MORNING_KELVIN_TRANSITION = 60
+DEFAULT_DAY_BRIGHTNESS_TRANSITION = 65
 DEFAULT_DAY_KELVIN_TRANSITION = 1440
 DEFAULT_EVENING_BRIGHTNESS_TRANSITION = 60
 DEFAULT_EVENING_KELVIN_TRANSITION = 60
-DEFAULT_NIGHT_BRIGHTNESS_TRANSITION = 15
+DEFAULT_NIGHT_BRIGHTNESS_TRANSITION = 30
 DEFAULT_NIGHT_KELVIN_TRANSITION = 30
 
-# All eight, keyed exactly like coordinator.py's CURVE_KEYS - the one
+# Sixteen now: eight values and eight transitions, keyed exactly like
+# coordinator.py's CURVE_KEYS - the one
 # place config_flow.py (and anything else wanting the full default set)
 # reads actual numbers from, rather than hand-copying each constant.
 DEFAULT_CURVE_VALUES = {

@@ -200,7 +200,8 @@ them. Two consequences worth knowing:
 > midnight.
 
 Brightness and colour have separate durations because they genuinely differ: by
-default Evening dims over its last hour while Day's colour slides all afternoon.
+default Day's colour slides across the whole afternoon while its brightness only eases
+over the last hour or so.
 
 ### Inspecting tracked state
 

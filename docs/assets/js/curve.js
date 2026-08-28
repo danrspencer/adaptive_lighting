@@ -37,13 +37,13 @@ export const DEFAULT_CURVE_VALUES = {
   // value, named for the phase the transition runs *in*. Day's is longer
   // than any Day can be on purpose: durations clamp to their own phase,
   // so it reads as "always be transitioning".
-  morning_brightness_transition: 30,
-  morning_kelvin_transition: 30,
-  day_brightness_transition: 0,
+  morning_brightness_transition: 60,
+  morning_kelvin_transition: 60,
+  day_brightness_transition: 65,
   day_kelvin_transition: 1440,
   evening_brightness_transition: 60,
   evening_kelvin_transition: 60,
-  night_brightness_transition: 15,
+  night_brightness_transition: 30,
   night_kelvin_transition: 30,
 };
 

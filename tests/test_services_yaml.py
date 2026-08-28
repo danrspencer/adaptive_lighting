@@ -74,3 +74,24 @@ def test_every_documented_service_is_one_this_integration_registers():
         "clear_claims",
     }
     assert set(SERVICES) == expected
+
+
+def test_compute_curve_documents_the_defaults_it_actually_uses():
+    """services.yaml is what Developer Tools -> Actions shows, so a stale
+    `default:` there is a number a user reads, types nowhere, and gets
+    something else from. It's the third copy of these values after
+    curve.py and curve.js - the JS one is pinned in
+    test_curve_js_parity.py."""
+    from curve import DEFAULT_CURVE_VALUES
+
+    fields = SERVICES["compute_curve"]["fields"]
+    documented = {k: v.get("default") for k, v in fields.items() if k in DEFAULT_CURVE_VALUES}
+
+    assert documented == DEFAULT_CURVE_VALUES, (
+        "services.yaml's documented defaults have drifted from curve.py's:\n"
+        + "\n".join(
+            f"  {k}: curve.py={DEFAULT_CURVE_VALUES[k]} services.yaml={documented.get(k, '<missing>')}"
+            for k in sorted(DEFAULT_CURVE_VALUES)
+            if DEFAULT_CURVE_VALUES[k] != documented.get(k)
+        )
+    )
