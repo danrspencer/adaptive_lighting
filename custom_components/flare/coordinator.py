@@ -96,11 +96,19 @@ CURVE_KEYS = (
     "morning_brightness",
     "morning_kelvin",
     "day_brightness",
-    "day_end_kelvin",
+    "day_kelvin",
     "evening_brightness",
     "evening_kelvin",
     "night_brightness",
     "night_kelvin",
+    "morning_brightness_transition",
+    "morning_kelvin_transition",
+    "day_brightness_transition",
+    "day_kelvin_transition",
+    "evening_brightness_transition",
+    "evening_kelvin_transition",
+    "night_brightness_transition",
+    "night_kelvin_transition",
 )
 
 
@@ -327,7 +335,7 @@ def _compute_curve_points(boundaries: dict[str, float], curve_kwargs: dict[str, 
     for i in range(289):
         t = midnight + i * 300
         phase = phase_at(t, morning_ts, day_ts, evening_ts, night_ts)
-        targets = targets_for_phase(phase, t, evening_ts, day_ts, night_ts, **curve_kwargs)
+        targets = targets_for_phase(phase, t, evening_ts, day_ts, night_ts, morning_ts, **curve_kwargs)
         points.append(
             {
                 "t": int(t),
@@ -357,7 +365,13 @@ class ScheduleCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         computed_phase = phase_at(now_ts, boundaries["morning_ts"], boundaries["day_ts"], boundaries["evening_ts"], boundaries["night_ts"])
         phase = _phase_override(self.hass, self._instance.override_entity_id) or computed_phase
         targets = targets_for_phase(
-            phase, now_ts, boundaries["evening_ts"], boundaries["day_ts"], boundaries["night_ts"], **curve_kwargs
+            phase,
+            now_ts,
+            boundaries["evening_ts"],
+            boundaries["day_ts"],
+            boundaries["night_ts"],
+            boundaries["morning_ts"],
+            **curve_kwargs,
         )
         return {
             **boundaries,

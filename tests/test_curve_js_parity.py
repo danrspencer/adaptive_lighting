@@ -74,14 +74,20 @@ BOUNDARY_SETS = [
     {"morningTs": 6 * 3600, "dayStartTs": 8 * 3600, "eveningTs": 20 * 3600, "nightTs": 21.5 * 3600},
 ]
 
-# Defaults, plus ranges chosen to land on exact .5 ties in the ramps -
-# an evening/night brightness span of 81 puts the 1.6x fade on halves,
-# and odd Kelvin endpoints do the same for the colour ramps.
+# Defaults, plus ranges and durations chosen to land on exact .5 ties in
+# the ramps - odd endpoints over an even number of steps put the
+# interpolation on halves, which is the only place Python's half-to-even
+# and JS's half-up disagree.
 CURVE_VALUE_SETS = [
     dict(DEFAULT_CURVE_VALUES),
     {**DEFAULT_CURVE_VALUES, "evening_brightness": 161, "night_brightness": 80},
-    {**DEFAULT_CURVE_VALUES, "morning_kelvin": 6501, "day_end_kelvin": 4001, "evening_kelvin": 3001, "night_kelvin": 2701},
-    {**DEFAULT_CURVE_VALUES, "evening_brightness": 3, "night_brightness": 254, "morning_kelvin": 2000, "day_end_kelvin": 6500},
+    {**DEFAULT_CURVE_VALUES, "morning_kelvin": 6501, "day_kelvin": 4001, "evening_kelvin": 3001, "night_kelvin": 2701},
+    {**DEFAULT_CURVE_VALUES, "evening_brightness": 3, "night_brightness": 254, "morning_kelvin": 2000, "day_kelvin": 6500},
+    # Durations away from the defaults, including zero (a hard cut) and a
+    # value far longer than its phase (clamped to the whole phase).
+    {**DEFAULT_CURVE_VALUES, "evening_kelvin_transition": 0, "evening_brightness_transition": 0},
+    {**DEFAULT_CURVE_VALUES, "night_kelvin_transition": 1440, "morning_brightness_transition": 1440},
+    {**DEFAULT_CURVE_VALUES, "day_kelvin_transition": 37, "evening_brightness_transition": 91},
 ]
 
 PHASES = ["Morning", "Day", "Evening", "Night"]
@@ -137,8 +143,8 @@ const out = input.cases.map((c) => {{
   const b = c.boundaries;
   return [
     phaseAt(c.t, b.morningTs, b.dayStartTs, b.eveningTs, b.nightTs),
-    brightnessForPhase(c.phase, c.t, b.nightTs, c.values),
-    kelvinForPhase(c.phase, c.t, b.eveningTs, b.dayStartTs, b.nightTs, c.values),
+    brightnessForPhase(c.phase, c.t, b, c.values),
+    kelvinForPhase(c.phase, c.t, b, c.values),
   ];
 }});
 
@@ -161,8 +167,9 @@ def test_curve_js_matches_curve_py():
         b, v, t, phase = case["boundaries"], case["values"], case["t"], case["phase"]
 
         py_phase = phase_at(t, b["morningTs"], b["dayStartTs"], b["eveningTs"], b["nightTs"])
-        py_brightness = brightness_for_phase(phase, t, b["nightTs"], **_brightness_kwargs(v))
-        py_kelvin = kelvin_for_phase(phase, t, b["eveningTs"], b["dayStartTs"], b["nightTs"], **_kelvin_kwargs(v))
+        args = (b["morningTs"], b["dayStartTs"], b["eveningTs"], b["nightTs"])
+        py_brightness = brightness_for_phase(phase, t, *args, **_brightness_kwargs(v))
+        py_kelvin = kelvin_for_phase(phase, t, *args, **_kelvin_kwargs(v))
 
         if py_phase != js_phase:
             mismatches.append(f"phase_at(t={t}, {b}) py={py_phase} js={js_phase}")
@@ -182,11 +189,11 @@ def test_curve_js_matches_curve_py():
 
 
 def _brightness_kwargs(values):
-    return {k: values[k] for k in ("morning_brightness", "day_brightness", "evening_brightness", "night_brightness")}
+    return {k: v for k, v in values.items() if "brightness" in k}
 
 
 def _kelvin_kwargs(values):
-    return {k: values[k] for k in ("morning_kelvin", "day_end_kelvin", "evening_kelvin", "night_kelvin")}
+    return {k: v for k, v in values.items() if "kelvin" in k}
 
 
 # --- the dashboard card's own copies --------------------------------

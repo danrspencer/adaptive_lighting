@@ -50,9 +50,25 @@ const BRIGHTNESS_CONTROLS = [
 
 const KELVIN_CONTROLS = [
   { key: 'morning_kelvin', label: 'Morning Colour Temperature', entity: 'number.<name>_morning_kelvin' },
-  { key: 'day_end_kelvin', label: 'Day End Colour Temperature', entity: 'number.<name>_day_end_kelvin' },
+  { key: 'day_kelvin', label: 'Day Colour Temperature', entity: 'number.<name>_day_kelvin' },
   { key: 'evening_kelvin', label: 'Evening Colour Temperature', entity: 'number.<name>_evening_kelvin' },
   { key: 'night_kelvin', label: 'Night Colour Temperature', entity: 'number.<name>_night_kelvin' },
+];
+
+// Named for the phase the transition runs *in* - it is that phase's exit,
+// so "Day Colour Transition" is how long before Day ends to start easing
+// to Evening's colour. 0 is a hard cut; anything longer than the phase
+// clamps to it, which is how Day's default of 1440 reads as "slide all
+// day".
+const TRANSITION_CONTROLS = [
+  { key: 'morning_brightness_transition', label: 'Morning Brightness Transition', entity: 'number.<name>_morning_brightness_transition' },
+  { key: 'morning_kelvin_transition', label: 'Morning Colour Transition', entity: 'number.<name>_morning_kelvin_transition' },
+  { key: 'day_brightness_transition', label: 'Day Brightness Transition', entity: 'number.<name>_day_brightness_transition' },
+  { key: 'day_kelvin_transition', label: 'Day Colour Transition', entity: 'number.<name>_day_kelvin_transition' },
+  { key: 'evening_brightness_transition', label: 'Evening Brightness Transition', entity: 'number.<name>_evening_brightness_transition' },
+  { key: 'evening_kelvin_transition', label: 'Evening Colour Transition', entity: 'number.<name>_evening_kelvin_transition' },
+  { key: 'night_brightness_transition', label: 'Night Brightness Transition', entity: 'number.<name>_night_brightness_transition' },
+  { key: 'night_kelvin_transition', label: 'Night Colour Transition', entity: 'number.<name>_night_kelvin_transition' },
 ];
 
 // Sunrise is display-only on the card (a dot on the top axis); it plays
@@ -137,7 +153,7 @@ function buildHass() {
   const nowTs = midnight + state.now * 60;
 
   const phase = phaseAt(nowTs, b.morningTs, b.dayStartTs, b.eveningTs, b.nightTs);
-  const targets = targetsForPhase(phase, nowTs, b.eveningTs, b.dayStartTs, b.nightTs, values);
+  const targets = targetsForPhase(phase, nowTs, b, values);
 
   return {
     states: {
@@ -272,6 +288,15 @@ const BRIGHTNESS_OPTS = {
   format: (v) => `${v} (${Math.round((v / 255) * 100)}%)`,
 };
 const KELVIN_OPTS = { min: 1500, max: 8000, step: 50, format: (v) => `${v} K` };
+const TRANSITION_OPTS = {
+  min: 0,
+  max: 1440,
+  step: 5,
+  // 0 and "the whole phase" are the two ends worth naming: a duration
+  // longer than its phase clamps to it, so the top of the range means
+  // "always be transitioning" rather than anything out of bounds.
+  format: (v) => (v === 0 ? 'off (hard cut)' : fmtMinutes(v)),
+};
 
 const controlEls = [];
 
@@ -280,6 +305,7 @@ function mountControls() {
     ['alp-times', TIME_CONTROLS, TIME_OPTS],
     ['alp-brightness', BRIGHTNESS_CONTROLS, BRIGHTNESS_OPTS],
     ['alp-kelvin', KELVIN_CONTROLS, KELVIN_OPTS],
+    ['alp-transitions', TRANSITION_CONTROLS, TRANSITION_OPTS],
   ];
   for (const [containerId, controls, opts] of groups) {
     const container = document.getElementById(containerId);

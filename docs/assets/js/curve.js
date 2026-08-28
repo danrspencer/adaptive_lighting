@@ -28,11 +28,23 @@ export const DEFAULT_CURVE_VALUES = {
   morning_brightness: 255,
   morning_kelvin: 6667,
   day_brightness: 255,
-  day_end_kelvin: 4000,
+  day_kelvin: 6667,
   evening_brightness: 180,
   evening_kelvin: 3200,
   night_brightness: 80,
   night_kelvin: 2700,
+  // Minutes before each phase ends to begin easing to the next phase's
+  // value, named for the phase the transition runs *in*. Day's is longer
+  // than any Day can be on purpose: durations clamp to their own phase,
+  // so it reads as "always be transitioning".
+  morning_brightness_transition: 30,
+  morning_kelvin_transition: 30,
+  day_brightness_transition: 0,
+  day_kelvin_transition: 1440,
+  evening_brightness_transition: 60,
+  evening_kelvin_transition: 60,
+  night_brightness_transition: 15,
+  night_kelvin_transition: 30,
 };
 
 export const DEFAULT_SCHEDULE_HOURS = {
@@ -93,59 +105,87 @@ export function phaseAt(t, morningTs, dayStartTs, eveningTs, nightTs) {
   return 'Night';
 }
 
-/** Mirrors curve.py's brightness_for_phase(). */
-export function brightnessForPhase(dayPhase, nowTs, nightTs, v = DEFAULT_CURVE_VALUES) {
-  if (dayPhase === 'Morning') return v.morning_brightness;
-  if (dayPhase === 'Day') return v.day_brightness;
-  if (dayPhase === 'Evening') {
-    const fadeStartTs = nightTs - 3600;
-    if (nowTs < fadeStartTs) return v.evening_brightness;
-    const t = (nightTs - nowTs) / 3600;
-    // 1.6x the evening->night span, not the span itself - see curve.py's
-    // comment. Kept as a ratio so a custom brightness range keeps the shape.
-    const b = v.night_brightness + (v.evening_brightness - v.night_brightness) * 1.6 * t;
-    const [lo, hi] = [v.night_brightness, v.evening_brightness].sort((x, y) => x - y);
-    return pyRound(clamp(b, lo, hi));
-  }
-  return v.night_brightness; // Night
+const SECONDS_PER_DAY = 86400;
+
+const NEXT_PHASE = { Morning: 'Day', Day: 'Evening', Evening: 'Night', Night: 'Morning' };
+
+/** Mirrors curve.py's _phase_span(). Night is the only phase whose span
+ * crosses midnight - phaseAt() returns 'Night' both before morningTs and
+ * after nightTs, so which segment nowTs is in decides whether its handover
+ * to Morning is today's or tomorrow's. */
+function phaseSpan(dayPhase, nowTs, b) {
+  if (dayPhase === 'Morning') return [b.morningTs, b.dayStartTs];
+  if (dayPhase === 'Day') return [b.dayStartTs, b.eveningTs];
+  if (dayPhase === 'Evening') return [b.eveningTs, b.nightTs];
+  if (nowTs >= b.nightTs) return [b.nightTs, b.morningTs + SECONDS_PER_DAY];
+  return [b.nightTs - SECONDS_PER_DAY, b.morningTs];
 }
 
-/** Mirrors curve.py's kelvin_for_phase(), including every ramp's clamp. */
-export function kelvinForPhase(dayPhase, nowTs, eveningTs, dayStartTs, nightTs, v = DEFAULT_CURVE_VALUES) {
-  if (dayPhase === 'Morning') return v.morning_kelvin;
+/** Mirrors curve.py's _value_at(), including both clamps. */
+function valueAt(dayPhase, nowTs, b, values, durationMinutes) {
+  const own = values[dayPhase];
+  const [spanStart, spanEnd] = phaseSpan(dayPhase, nowTs, b);
+  const duration = Math.min(Math.max(durationMinutes, 0) * 60, Math.max(spanEnd - spanStart, 0));
+  if (duration <= 0) return own;
+  const rampStart = spanEnd - duration;
+  if (nowTs <= rampStart) return own;
+  // Clamped because dayPhase is a parameter, not derived from nowTs - a
+  // manual phase override can ask for a phase outside its own span, and
+  // unclamped this extrapolates straight past the target.
+  const t = clamp((nowTs - rampStart) / duration, 0, 1);
+  return own + (values[NEXT_PHASE[dayPhase]] - own) * t;
+}
 
-  if (dayPhase === 'Day') {
-    const totalDay = eveningTs - dayStartTs;
-    let tDay = totalDay > 0 ? (nowTs - dayStartTs) / totalDay : 0;
-    tDay = clamp(tDay, 0, 1);
-    return pyRound(v.morning_kelvin - (v.morning_kelvin - v.day_end_kelvin) * tDay);
-  }
+/** Mirrors curve.py's brightness_for_phase(). */
+export function brightnessForPhase(dayPhase, nowTs, b, v = DEFAULT_CURVE_VALUES) {
+  return pyRound(
+    valueAt(
+      dayPhase,
+      nowTs,
+      b,
+      {
+        Morning: v.morning_brightness,
+        Day: v.day_brightness,
+        Evening: v.evening_brightness,
+        Night: v.night_brightness,
+      },
+      {
+        Morning: v.morning_brightness_transition,
+        Day: v.day_brightness_transition,
+        Evening: v.evening_brightness_transition,
+        Night: v.night_brightness_transition,
+      }[dayPhase],
+    ),
+  );
+}
 
-  if (dayPhase === 'Evening') {
-    const fadeStartTs = nightTs - 3600;
-    if (nowTs >= fadeStartTs) {
-      // Clamped because dayPhase is a parameter, not derived from nowTs -
-      // "Evening" can legitimately be asked for past nightTs (a manual phase
-      // override). Unclamped this extrapolates straight through nightKelvin.
-      const t = clamp((nightTs - nowTs) / 3600, 0, 1);
-      return pyRound(v.night_kelvin + (v.evening_kelvin - v.night_kelvin) * t);
-    }
-    const holdStartTs = Math.min(eveningTs + 3600, fadeStartTs);
-    if (nowTs < holdStartTs) {
-      const rampLen = holdStartTs - eveningTs;
-      const t = clamp(rampLen > 0 ? (nowTs - eveningTs) / rampLen : 1, 0, 1);
-      return pyRound(v.day_end_kelvin - (v.day_end_kelvin - v.evening_kelvin) * t);
-    }
-    return v.evening_kelvin;
-  }
-
-  return v.night_kelvin; // Night
+/** Mirrors curve.py's kelvin_for_phase(). */
+export function kelvinForPhase(dayPhase, nowTs, b, v = DEFAULT_CURVE_VALUES) {
+  return pyRound(
+    valueAt(
+      dayPhase,
+      nowTs,
+      b,
+      {
+        Morning: v.morning_kelvin,
+        Day: v.day_kelvin,
+        Evening: v.evening_kelvin,
+        Night: v.night_kelvin,
+      },
+      {
+        Morning: v.morning_kelvin_transition,
+        Day: v.day_kelvin_transition,
+        Evening: v.evening_kelvin_transition,
+        Night: v.night_kelvin_transition,
+      }[dayPhase],
+    ),
+  );
 }
 
 /** Mirrors curve.py's targets_for_phase(). */
-export function targetsForPhase(dayPhase, nowTs, eveningTs, dayStartTs, nightTs, v = DEFAULT_CURVE_VALUES) {
-  const brightness = brightnessForPhase(dayPhase, nowTs, nightTs, v);
-  const kelvin = kelvinForPhase(dayPhase, nowTs, eveningTs, dayStartTs, nightTs, v);
+export function targetsForPhase(dayPhase, nowTs, b, v = DEFAULT_CURVE_VALUES) {
+  const brightness = brightnessForPhase(dayPhase, nowTs, b, v);
+  const kelvin = kelvinForPhase(dayPhase, nowTs, b, v);
   return { brightness, kelvin, rgb_color: kelvinToRgb(kelvin) };
 }
 

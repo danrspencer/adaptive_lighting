@@ -25,9 +25,34 @@ DEFAULT_DAY_BRIGHTNESS = 255
 DEFAULT_EVENING_BRIGHTNESS = 180
 DEFAULT_NIGHT_BRIGHTNESS = 80
 DEFAULT_MORNING_KELVIN = 6667
-DEFAULT_DAY_END_KELVIN = 4000
+# Day starts at Morning's colour and spends the whole phase easing to
+# Evening's - see DEFAULT_DAY_KELVIN_TRANSITION.
+DEFAULT_DAY_KELVIN = DEFAULT_MORNING_KELVIN
 DEFAULT_EVENING_KELVIN = 3200
 DEFAULT_NIGHT_KELVIN = 2700
+
+# How long before each phase ends to begin easing to the next phase's
+# value, in minutes - one per phase per channel, named for the phase the
+# transition runs *in*. 0 is a hard cut, which is a real choice: some
+# boundaries should be visible.
+#
+# Day's Kelvin default is longer than any Day can be on purpose. Because
+# a duration clamps to its own phase, "24 hours" reads as "always be
+# transitioning", and keeps meaning that if the boundaries move - it is
+# how the old hardcoded full-phase slide is expressed now that Day is an
+# ordinary phase.
+#
+# Morning's defaults do nothing on the shipped values, since Day holds
+# the same brightness and colour Morning does and there is nothing to
+# interpolate. They matter the moment Day is given its own.
+DEFAULT_MORNING_BRIGHTNESS_TRANSITION = 30
+DEFAULT_MORNING_KELVIN_TRANSITION = 30
+DEFAULT_DAY_BRIGHTNESS_TRANSITION = 0
+DEFAULT_DAY_KELVIN_TRANSITION = 1440
+DEFAULT_EVENING_BRIGHTNESS_TRANSITION = 60
+DEFAULT_EVENING_KELVIN_TRANSITION = 60
+DEFAULT_NIGHT_BRIGHTNESS_TRANSITION = 15
+DEFAULT_NIGHT_KELVIN_TRANSITION = 30
 
 # All eight, keyed exactly like coordinator.py's CURVE_KEYS - the one
 # place config_flow.py (and anything else wanting the full default set)
@@ -36,11 +61,19 @@ DEFAULT_CURVE_VALUES = {
     "morning_brightness": DEFAULT_MORNING_BRIGHTNESS,
     "morning_kelvin": DEFAULT_MORNING_KELVIN,
     "day_brightness": DEFAULT_DAY_BRIGHTNESS,
-    "day_end_kelvin": DEFAULT_DAY_END_KELVIN,
+    "day_kelvin": DEFAULT_DAY_KELVIN,
     "evening_brightness": DEFAULT_EVENING_BRIGHTNESS,
     "evening_kelvin": DEFAULT_EVENING_KELVIN,
     "night_brightness": DEFAULT_NIGHT_BRIGHTNESS,
     "night_kelvin": DEFAULT_NIGHT_KELVIN,
+    "morning_brightness_transition": DEFAULT_MORNING_BRIGHTNESS_TRANSITION,
+    "morning_kelvin_transition": DEFAULT_MORNING_KELVIN_TRANSITION,
+    "day_brightness_transition": DEFAULT_DAY_BRIGHTNESS_TRANSITION,
+    "day_kelvin_transition": DEFAULT_DAY_KELVIN_TRANSITION,
+    "evening_brightness_transition": DEFAULT_EVENING_BRIGHTNESS_TRANSITION,
+    "evening_kelvin_transition": DEFAULT_EVENING_KELVIN_TRANSITION,
+    "night_brightness_transition": DEFAULT_NIGHT_BRIGHTNESS_TRANSITION,
+    "night_kelvin_transition": DEFAULT_NIGHT_KELVIN_TRANSITION,
 }
 
 # A representative day schedule (hour-of-day), not read by anything
@@ -174,89 +207,155 @@ def phase_marks(morning_ts: float, day_start_ts: float, evening_ts: float, night
     return marks
 
 
+SECONDS_PER_DAY = 86400
+
+# Which phase each one hands over to. Night wraps back to Morning, which
+# is what makes it the only phase whose span crosses midnight.
+_NEXT_PHASE = {"Morning": "Day", "Day": "Evening", "Evening": "Night", "Night": "Morning"}
+
+
+def _phase_span(day_phase: str, now_ts: float, boundaries: dict) -> tuple:
+    """(start, end) of the phase's own stretch of the timeline.
+
+    Every phase but Night is a plain [start, end) between two of today's
+    boundaries. Night is two segments of one period - phase_at() returns
+    "Night" both before morning_ts and after night_ts - so which one we
+    are in decides whether its handover to Morning is today's or
+    tomorrow's. Treating it as a single span that crosses midnight keeps
+    the transition maths identical to every other phase's."""
+    if day_phase == "Morning":
+        return boundaries["morning"], boundaries["day"]
+    if day_phase == "Day":
+        return boundaries["day"], boundaries["evening"]
+    if day_phase == "Evening":
+        return boundaries["evening"], boundaries["night"]
+    # Night, in whichever of its two segments now_ts falls.
+    if now_ts >= boundaries["night"]:
+        return boundaries["night"], boundaries["morning"] + SECONDS_PER_DAY
+    return boundaries["night"] - SECONDS_PER_DAY, boundaries["morning"]
+
+
+def _value_at(
+    day_phase: str,
+    now_ts: float,
+    boundaries: dict,
+    values: dict,
+    duration_minutes: float,
+) -> float:
+    """This phase's value now, easing toward the next phase's over the
+    last `duration_minutes` of the phase.
+
+    The transition sits *before* the boundary, so the value arrives at
+    the next phase's exactly as that phase begins - "if Morning is at
+    6am, it IS the morning setting at 6am". A duration of 0 is therefore
+    a hard cut, which is the point: some boundaries should be visible.
+
+    The duration is clamped to the phase it runs in, so a value too long
+    to fit simply means "the whole phase" rather than bleeding backwards
+    into the phase before. Clamping happens here rather than by rewriting
+    the config: phase lengths move daily (Evening tracks sunset), so a
+    duration that fits in summer and not in winter has to keep working.
+
+    The interpolation factor is clamped as well, and that is load-bearing
+    for a different reason - day_phase is a *parameter*, not derived from
+    now_ts. coordinator.py passes a manually-overridden phase alongside
+    the real clock, so a phase can legitimately be asked for at an
+    instant outside its own span. Unclamped, the ramp would extrapolate
+    straight past the target and keep going."""
+    own = values[day_phase]
+    span_start, span_end = _phase_span(day_phase, now_ts, boundaries)
+    duration = min(max(duration_minutes, 0) * 60, max(span_end - span_start, 0))
+    if duration <= 0:
+        return own
+    ramp_start = span_end - duration
+    if now_ts <= ramp_start:
+        return own
+    t = _clamp((now_ts - ramp_start) / duration, 0, 1)
+    return own + (values[_NEXT_PHASE[day_phase]] - own) * t
+
+
 def brightness_for_phase(
     day_phase: str,
     now_ts: float,
+    morning_ts: float,
+    day_start_ts: float,
+    evening_ts: float,
     night_ts: float,
     *,
     morning_brightness: int = DEFAULT_MORNING_BRIGHTNESS,
     day_brightness: int = DEFAULT_DAY_BRIGHTNESS,
     evening_brightness: int = DEFAULT_EVENING_BRIGHTNESS,
     night_brightness: int = DEFAULT_NIGHT_BRIGHTNESS,
+    morning_brightness_transition: float = DEFAULT_MORNING_BRIGHTNESS_TRANSITION,
+    day_brightness_transition: float = DEFAULT_DAY_BRIGHTNESS_TRANSITION,
+    evening_brightness_transition: float = DEFAULT_EVENING_BRIGHTNESS_TRANSITION,
+    night_brightness_transition: float = DEFAULT_NIGHT_BRIGHTNESS_TRANSITION,
 ) -> int:
     """Target brightness (0-255) for the given phase/instant."""
-    if day_phase == "Morning":
-        return morning_brightness
-    if day_phase == "Day":
-        return day_brightness
-    if day_phase == "Evening":
-        fade_start_ts = night_ts - 3600
-        if now_ts < fade_start_ts:
-            return evening_brightness
-        t = (night_ts - now_ts) / 3600
-        # The original hardcoded formula (80 + 160*t) reaches
-        # evening_brightness before the fade window's nominal hour is
-        # up (at t=0.625, ~37.5 minutes in) and holds there via the
-        # clamp below for the rest - 160 is 1.6x the 80->180 span, not
-        # the span itself. Preserved as a ratio, not the literal span,
-        # so a custom brightness range keeps the same timing shape.
-        b = night_brightness + ((evening_brightness - night_brightness) * 1.6 * t)
-        lo, hi = sorted((night_brightness, evening_brightness))
-        return round(min(max(b, lo), hi))
-    return night_brightness  # Night
+    return round(
+        _value_at(
+            day_phase,
+            now_ts,
+            {"morning": morning_ts, "day": day_start_ts, "evening": evening_ts, "night": night_ts},
+            {
+                "Morning": morning_brightness,
+                "Day": day_brightness,
+                "Evening": evening_brightness,
+                "Night": night_brightness,
+            },
+            {
+                "Morning": morning_brightness_transition,
+                "Day": day_brightness_transition,
+                "Evening": evening_brightness_transition,
+                "Night": night_brightness_transition,
+            }[day_phase],
+        )
+    )
 
 
 def kelvin_for_phase(
     day_phase: str,
     now_ts: float,
-    evening_ts: float,
+    morning_ts: float,
     day_start_ts: float,
+    evening_ts: float,
     night_ts: float,
     *,
     morning_kelvin: int = DEFAULT_MORNING_KELVIN,
-    day_end_kelvin: int = DEFAULT_DAY_END_KELVIN,
+    day_kelvin: int = DEFAULT_DAY_KELVIN,
     evening_kelvin: int = DEFAULT_EVENING_KELVIN,
     night_kelvin: int = DEFAULT_NIGHT_KELVIN,
+    morning_kelvin_transition: float = DEFAULT_MORNING_KELVIN_TRANSITION,
+    day_kelvin_transition: float = DEFAULT_DAY_KELVIN_TRANSITION,
+    evening_kelvin_transition: float = DEFAULT_EVENING_KELVIN_TRANSITION,
+    night_kelvin_transition: float = DEFAULT_NIGHT_KELVIN_TRANSITION,
 ) -> int:
     """Target colour temperature (Kelvin) for the given phase/instant.
 
-    morning_kelvin: Morning's steady value, and where Day's ramp starts
-    from. day_end_kelvin: what Day ramps down to by the time Evening
-    starts (also where Evening's own ramp starts). evening_kelvin:
-    Evening's steady hold, after its opening ramp from day_end_kelvin.
-    night_kelvin: what Evening's final hour fades toward, and what Night
-    sits at."""
-    if day_phase == "Morning":
-        return morning_kelvin
-    if day_phase == "Day":
-        total_day = evening_ts - day_start_ts
-        t_day = (now_ts - day_start_ts) / total_day if total_day > 0 else 0
-        t_day = min(max(t_day, 0), 1)
-        return round(morning_kelvin - ((morning_kelvin - day_end_kelvin) * t_day))
-    if day_phase == "Evening":
-        fade_start_ts = night_ts - 3600
-        if now_ts >= fade_start_ts:
-            # Clamped like every other ramp in this file (Day's above,
-            # Evening's own opening ramp below, and brightness_for_phase's
-            # equivalent fade, which clamps its output instead). Needed
-            # because day_phase is a *parameter*, not derived from now_ts:
-            # coordinator.py passes a manually-overridden phase alongside
-            # the real current time, so "Evening" can legitimately be
-            # asked for at an instant past night_ts. Unclamped, t goes
-            # negative there and the interpolation extrapolates straight
-            # through night_kelvin - the floor this fade is meant to
-            # bottom out at - returning 2200K at 23:00 and 1708K by 23:59
-            # on the defaults, below many bulbs' min_color_temp_kelvin.
-            t = min(max((night_ts - now_ts) / 3600, 0), 1)
-            return round(night_kelvin + ((evening_kelvin - night_kelvin) * t))
-        hold_start_ts = min(evening_ts + 3600, fade_start_ts)
-        if now_ts < hold_start_ts:
-            ramp_len = hold_start_ts - evening_ts
-            t = ((now_ts - evening_ts) / ramp_len) if ramp_len > 0 else 1
-            t = min(max(t, 0), 1)
-            return round(day_end_kelvin - ((day_end_kelvin - evening_kelvin) * t))
-        return evening_kelvin
-    return night_kelvin  # Night
+    Every phase holds its own value and then eases to the next phase's
+    over its own transition - there is no special case for Day any more.
+    Day's default transition is longer than any Day can be, which is how
+    "slide from Morning's colour to Evening's across the whole day" is
+    expressed."""
+    return round(
+        _value_at(
+            day_phase,
+            now_ts,
+            {"morning": morning_ts, "day": day_start_ts, "evening": evening_ts, "night": night_ts},
+            {
+                "Morning": morning_kelvin,
+                "Day": day_kelvin,
+                "Evening": evening_kelvin,
+                "Night": night_kelvin,
+            },
+            {
+                "Morning": morning_kelvin_transition,
+                "Day": day_kelvin_transition,
+                "Evening": evening_kelvin_transition,
+                "Night": night_kelvin_transition,
+            }[day_phase],
+        )
+    )
 
 
 def targets_for_phase(
@@ -265,15 +364,8 @@ def targets_for_phase(
     evening_ts: float,
     day_start_ts: float,
     night_ts: float,
-    *,
-    morning_brightness: int = DEFAULT_MORNING_BRIGHTNESS,
-    day_brightness: int = DEFAULT_DAY_BRIGHTNESS,
-    evening_brightness: int = DEFAULT_EVENING_BRIGHTNESS,
-    night_brightness: int = DEFAULT_NIGHT_BRIGHTNESS,
-    morning_kelvin: int = DEFAULT_MORNING_KELVIN,
-    day_end_kelvin: int = DEFAULT_DAY_END_KELVIN,
-    evening_kelvin: int = DEFAULT_EVENING_KELVIN,
-    night_kelvin: int = DEFAULT_NIGHT_KELVIN,
+    morning_ts: float,
+    **curve_values,
 ) -> dict:
     """brightness/kelvin/rgb_color for an already-known phase, in one
     call - the single orchestration point for
@@ -282,34 +374,23 @@ def targets_for_phase(
     Takes day_phase rather than computing it via phase_at() itself
     because some callers need to substitute a different phase first
     (coordinator.py's manual override reads phase_at()'s result but then
-    may replace it with select.adaptive_lighting_phase's value before
+    may replace it with the phase-override select's value before
     computing brightness/kelvin from it) - phase_at() stays a separate
     call so that substitution has somewhere to happen. Callers that don't
     need it can just call phase_at() immediately before this.
 
-    Previously this 4-line sequence was hand-copied at every call site
-    (the compute_curve service, the coordinator's "now" values, its
-    289-point curve loop) - risking drift if
-    the shape of what gets computed here ever changed. One copy now."""
+    Curve values arrive as **kwargs and are split by name rather than
+    listed twice: there are sixteen of them now (four phases x value and
+    transition x brightness and Kelvin), and re-declaring every one here
+    only to pass it straight through was the largest source of
+    copy-paste in this file. Unknown keys raise from the callee, so a
+    typo still fails loudly rather than being silently dropped."""
+    boundaries = (now_ts, morning_ts, day_start_ts, evening_ts, night_ts)
     brightness = brightness_for_phase(
-        day_phase,
-        now_ts,
-        night_ts,
-        morning_brightness=morning_brightness,
-        day_brightness=day_brightness,
-        evening_brightness=evening_brightness,
-        night_brightness=night_brightness,
+        day_phase, *boundaries, **{k: v for k, v in curve_values.items() if "brightness" in k}
     )
     kelvin = kelvin_for_phase(
-        day_phase,
-        now_ts,
-        evening_ts,
-        day_start_ts,
-        night_ts,
-        morning_kelvin=morning_kelvin,
-        day_end_kelvin=day_end_kelvin,
-        evening_kelvin=evening_kelvin,
-        night_kelvin=night_kelvin,
+        day_phase, *boundaries, **{k: v for k, v in curve_values.items() if "kelvin" in k}
     )
     return {
         "brightness": brightness,
