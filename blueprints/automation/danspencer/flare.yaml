@@ -5,7 +5,7 @@ blueprint:
     temperature from a FLARE schedule sensor,
     keeping lights updated as it changes, and turns them off a while
     after occupancy clears. Full details on every input:
-    [the blueprint reference](https://danrspencer.github.io/flare/blueprint.html).
+    [the blueprint reference](https://danrspencer.github.io/flare/blueprint/).
   domain: automation
   source_url: https://github.com/danrspencer/flare/blob/main/blueprints/automation/danspencer/flare.yaml
   author: Dan Spencer
