@@ -1,5 +1,5 @@
 /**
- * Adaptive Lighting Curve — custom Lovelace card
+ * FLARE Curve — custom Lovelace card
  *
  * Renders the day's brightness + color-temperature curve as an actual
  * rendered-color chart (Kelvin -> RGB). The curve itself is NOT
@@ -212,13 +212,13 @@ export function layoutBoundaryLabels(desired, widths, containerWidth, gap = 6) {
   }));
 }
 
-// title unset -> "Adaptive Lighting"; title: "" explicitly -> no header at
+// title unset -> "FLARE"; title: "" explicitly -> no header at
 // all (ha-card renders nothing for a falsy header) - lets a dashboard that
 // already labels each sensor elsewhere (a heading card, a section title)
 // suppress the card's own redundant one, while everyone else still gets a
 // sensible default with zero config.
 function cardHeader(config) {
-  return config.title === '' ? '' : config.title || 'Adaptive Lighting';
+  return config.title === '' ? '' : config.title || 'FLARE';
 }
 
 // brightness_now/kelvin_now default to the same combined entity as
@@ -251,7 +251,7 @@ function sunTimeInWindow(isoString, dayStart, dayEnd) {
 
 class FlareCurveCard extends HTMLElement {
   static getStubConfig() {
-    return { title: 'Adaptive Lighting' };
+    return { title: 'FLARE' };
   }
 
   setConfig(config) {
@@ -775,6 +775,6 @@ customElements.define('flare-curve-card', FlareCurveCard);
 window.customCards = window.customCards || [];
 window.customCards.push({
   type: 'flare-curve-card',
-  name: 'Adaptive Lighting Curve',
-  description: 'Live brightness + rendered-color curve for the solar adaptive lighting schedule.',
+  name: 'FLARE Curve',
+  description: 'Live brightness and rendered-colour curve for a FLARE schedule.',
 });

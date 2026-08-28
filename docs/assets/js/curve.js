@@ -210,7 +210,7 @@ export function buildPoints(midnightTs, boundaries, v = DEFAULT_CURVE_VALUES) {
   for (let i = 0; i < 289; i++) {
     const t = midnightTs + i * 300;
     const phase = phaseAt(t, morningTs, dayStartTs, eveningTs, nightTs);
-    const targets = targetsForPhase(phase, t, eveningTs, dayStartTs, nightTs, v);
+    const targets = targetsForPhase(phase, t, boundaries, v);
     points.push({ t: Math.trunc(t), brightness: targets.brightness, kelvin: targets.kelvin });
   }
   return points;
