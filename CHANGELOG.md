@@ -7,6 +7,37 @@ The version in `custom_components/flare/manifest.json` is what
 HACS shows as installed, so it and the release tag are checked against each other in
 CI — see `.github/workflows/release.yml`.
 
+## [0.10.0] - 2026-08-28
+
+### Breaking
+
+- **`check_control`/`record_write`/`clear_claims` are renamed to
+  `claims_check`/`claims_record`/`claims_clear`.** All three exist only to
+  read or write override-protection claims, and previously used three
+  different nouns for the same underlying thing ("control", "write",
+  "claims") - unified to one, and prefixed so the three sort and group
+  together in Developer Tools -> Actions. Re-import the blueprint
+  alongside this release; without it, its own `claims_record`/`claims_clear`
+  calls (the turn-off and scene-handoff steps) fail outright, since the
+  old service names no longer exist.
+
+### Changed
+
+- **A state device's `target` no longer has any bearing on which lights
+  get tracked - it only decides where the device's own entry lands in
+  the Area registry.** Which lights a scope tracks was already entirely
+  decided by whichever caller (typically the blueprint, via
+  `room_target`) names that scope's `tracking_device_id` on a call -
+  `target`'s only other job, an implicit area/device/entity fallback for
+  the handful of call sites with no caller to ask (`scope_for()`),
+  turned out to be dead code: every one of those call sites already
+  required an entity to be claimed *somewhere* before it would even
+  reach that fallback, which the direct claims lookup always found
+  first. Removed rather than fixed, since it never had an effect to
+  preserve. The setup form's own description was rewritten to match -
+  it previously implied `target` decided claim ownership, which it
+  never actually did once caller-supplied scope shipped in 0.7.0.
+
 ## [0.9.3] - 2026-08-28
 
 ### Fixed

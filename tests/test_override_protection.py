@@ -1,6 +1,6 @@
 """
 Pure unit tests for override_protection.classify()/target_matches_values() -
-the standalone decision logic behind the check_control/record_write
+the standalone decision logic behind the claims_check/claims_record
 services and grouping.py's own EntityLookup.externally_set() (now a thin
 adapter over classify(), see grouping.py's own docstring).
 

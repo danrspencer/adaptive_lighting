@@ -267,9 +267,9 @@ class SensorSubentryFlow(ConfigSubentryFlow):
 
 def _areas_with_lights(hass) -> list[tuple[str, str]]:
     """(area_id, name) for every area a light entity resolves to, by the
-    entity's own area or its device's - the same fallback
-    write_tracking.py's scope_for uses, so what's offered here is
-    exactly what would resolve later."""
+    entity's own area or its device's - just to size the setup offer to
+    areas that actually have something to track; not used to resolve
+    claims (see StateSubentryFlow's own docstring)."""
     from homeassistant.helpers import area_registry as ar, device_registry as dr, entity_registry as er
 
     entity_registry = er.async_get(hass)
@@ -294,14 +294,18 @@ def _areas_with_lights(hass) -> list[tuple[str, str]]:
 
 
 class StateSubentryFlow(ConfigSubentryFlow):
-    """Adds one state device - a named tracking scope owning the
-    override-protection claims for whatever lights its target covers.
+    """Adds one state device - a named, empty tracking scope. Nothing
+    about which lights it tracks is decided here: a caller (typically
+    the blueprint, via room_target) states a scope explicitly on each
+    apply_lighting/claims_record/etc call by passing this device's own
+    tracking_device_id - see write_tracking.py's module docstring.
 
-    The target is the same area/device/entity shape the blueprint's
-    room_target uses, so "the kitchen" means the same thing in both
-    places. Most specific match wins when scopes overlap; a light
-    matching nothing is simply not tracked - see write_tracking.py's
-    scope_for."""
+    The target asked for below decides only where this device's own
+    entry lands in the Area registry (sensor.py's _assign_scope_area,
+    area-only, best-effort) - it plays no part in which lights get
+    tracked. It's the same area/device/entity shape the blueprint's
+    room_target uses only so "the kitchen" reads the same way in both
+    places, not because the two are wired together."""
 
     async def async_step_user(self, user_input: dict[str, Any] | None = None) -> SubentryFlowResult:
         return await self._async_form(user_input)

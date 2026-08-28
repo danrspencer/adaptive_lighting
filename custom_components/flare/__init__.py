@@ -144,8 +144,8 @@ COMPUTE_SCENE_COVERAGE_SCHEMA = vol.Schema(
         # about one specific scene - with no candidate scene, the caller
         # already knows the answer (nothing's covered, everything falls
         # to their own default) without asking, the same reasoning as
-        # CHECK_CONTROL_SCHEMA/RECORD_WRITE_SCHEMA/CLEAR_CLAIMS_SCHEMA
-        # above for tracking_device_id.
+        # CLAIMS_CHECK_SCHEMA/CLAIMS_RECORD_SCHEMA/CLAIMS_CLEAR_SCHEMA
+        # below for tracking_device_id.
         vol.Required("scene_entity_id"): cv.entity_id,
         vol.Required("scope_entities"): [cv.entity_id],
         vol.Required("target_entities"): [cv.entity_id],
@@ -177,14 +177,16 @@ APPLY_LIGHTING_SCHEMA = vol.Schema(
     }
 )
 
-# These three exist for no reason other than to read or write tracking
-# claims - unlike apply_lighting/compute_lighting_groups, which still do
-# something useful (dispatch/plan lights) with no scope at all, there is
-# no meaningful reason to call any of these three without one. Required,
+# These three (claims_check/claims_record/claims_clear - prefixed so
+# they sort and group together in Developer Tools -> Actions) exist for
+# no reason other than to read or write tracking claims - unlike
+# apply_lighting/compute_lighting_groups, which still do something
+# useful (dispatch/plan lights) with no scope at all, there is no
+# meaningful reason to call any of these three without one. Required,
 # not vol.Any(None, ...): a caller with nothing to name shouldn't be
 # calling these services in the first place, and a schema-level failure
 # is a much louder signal than the previous "always empty, silently" was.
-CHECK_CONTROL_SCHEMA = vol.Schema(
+CLAIMS_CHECK_SCHEMA = vol.Schema(
     {
         vol.Required("entities"): [cv.entity_id],
         vol.Required("tracking_device_id"): cv.string,
@@ -194,7 +196,7 @@ CHECK_CONTROL_SCHEMA = vol.Schema(
     }
 )
 
-RECORD_WRITE_SCHEMA = vol.Schema(
+CLAIMS_RECORD_SCHEMA = vol.Schema(
     {
         vol.Required("entities"): [cv.entity_id],
         vol.Required("tracking_device_id"): cv.string,
@@ -202,7 +204,7 @@ RECORD_WRITE_SCHEMA = vol.Schema(
     }
 )
 
-CLEAR_CLAIMS_SCHEMA = vol.Schema(
+CLAIMS_CLEAR_SCHEMA = vol.Schema(
     {
         vol.Required("entities"): [cv.entity_id],
         vol.Required("tracking_device_id"): cv.string,
@@ -699,8 +701,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         return _groups_response(groups)
 
-    async def check_control(call: ServiceCall) -> ServiceResponse:
-        """flare.check_control
+    async def claims_check(call: ServiceCall) -> ServiceResponse:
+        """flare.claims_check
 
         For each of `entities`, decides whether a write should currently
         be blocked - the exact same override-protection mechanism
@@ -709,7 +711,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         override_protection.classify()/is_blocked()), exposed standalone
         so any caller can ask "should I write this entity" without any
         of this integration's brightness/curve logic at all - see
-        docs/helpers.md's "Override protection" section.
+        docs/advanced/reference.md's "Override protection" section.
 
         Takes no `force`: forcing is something a *write* does, and as a
         question it has only one possible answer (is_blocked returns
@@ -778,18 +780,18 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             }
         return {"results": results}
 
-    async def record_write(call: ServiceCall) -> ServiceResponse:
-        """flare.record_write
+    async def claims_record(call: ServiceCall) -> ServiceResponse:
+        """flare.claims_record
 
         Records that this call's own context just wrote `entities`,
         optionally with what each write actually asked for (`targets`) -
         a thin wrapper around write_tracker.async_record(), exposed
-        standalone so a caller using check_control on its own can
+        standalone so a caller using claims_check on its own can
         participate in the same bookkeeping apply_lighting uses, without
         going through apply_lighting's brightness/curve logic. Call this
         *after* actually issuing whatever write you decided on, the same
         way apply_lighting does - recording a write that didn't happen
-        would make a later check_control see a claim with nothing behind
+        would make a later claims_check see a claim with nothing behind
         it.
 
         Returns: {"recorded": [...]} - the entity_ids that were actually
@@ -813,8 +815,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         tracked = write_tracker.records_for_scope(scope)
         return {"recorded": [e for e in entities if e in tracked]}
 
-    async def clear_claims(call: ServiceCall) -> ServiceResponse:
-        """flare.clear_claims
+    async def claims_clear(call: ServiceCall) -> ServiceResponse:
+        """flare.claims_clear
 
         Discards `entities`' tracked observed/latest claims within
         tracking_device_id - the manual escape hatch for a light stuck
@@ -890,23 +892,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
         hass.services.async_register(
             DOMAIN,
-            "check_control",
-            check_control,
-            schema=CHECK_CONTROL_SCHEMA,
+            "claims_check",
+            claims_check,
+            schema=CLAIMS_CHECK_SCHEMA,
             supports_response=SupportsResponse.ONLY,
         )
         hass.services.async_register(
             DOMAIN,
-            "record_write",
-            record_write,
-            schema=RECORD_WRITE_SCHEMA,
+            "claims_record",
+            claims_record,
+            schema=CLAIMS_RECORD_SCHEMA,
             supports_response=SupportsResponse.OPTIONAL,
         )
         hass.services.async_register(
             DOMAIN,
-            "clear_claims",
-            clear_claims,
-            schema=CLEAR_CLAIMS_SCHEMA,
+            "claims_clear",
+            claims_clear,
+            schema=CLAIMS_CLEAR_SCHEMA,
             supports_response=SupportsResponse.OPTIONAL,
         )
 
@@ -989,9 +991,9 @@ async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             "compute_curve",
             "compute_scene_coverage",
             "apply_lighting",
-            "check_control",
-            "record_write",
-            "clear_claims",
+            "claims_check",
+            "claims_record",
+            "claims_clear",
         ):
             hass.services.async_remove(DOMAIN, service)
         unloaded = await hass.config_entries.async_unload_platforms(entry, TRACKING_PLATFORMS)
