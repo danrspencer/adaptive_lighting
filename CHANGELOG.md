@@ -7,6 +7,27 @@ The version in `custom_components/flare/manifest.json` is what
 HACS shows as installed, so it and the release tag are checked against each other in
 CI — see `.github/workflows/release.yml`.
 
+## [0.6.0] - 2026-08-28
+
+### Changed
+
+- **Switching a light off is now an override.** FLARE used to ignore it
+  and relight the light on the next tick; it now leaves it off. The
+  claim is released when every light in its tracking scope is off, so
+  a room that empties comes back under FLARE's control on its own.
+  Anything not reporting `on` counts as off, unavailable included.
+- A turn-off records `{"state": "off"}` as its target, so FLARE's own
+  off is distinguishable from anyone else's once the write's context
+  expires.
+- The blueprint records its own turn-offs. Re-import it alongside this
+  release — without that step every light in a room reads as externally
+  switched off each time the room empties.
+
+### Fixed
+
+- `overridden` now has an automatic way out. Previously only the Clear
+  button or a device drop could end it.
+
 ## [0.5.1] - 2026-08-28
 
 ### Changed
