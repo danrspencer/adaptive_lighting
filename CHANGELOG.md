@@ -7,6 +7,21 @@ The version in `custom_components/flare/manifest.json` is what
 HACS shows as installed, so it and the release tag are checked against each other in
 CI — see `.github/workflows/release.yml`.
 
+## [0.4.2] - 2026-08-28
+
+### Changed
+
+- Transition defaults tuned: an hour at most boundaries, half an hour
+  into Morning, and a full-phase colour slide across Day. Only affects
+  new schedule sensors - existing ones keep whatever they are set to.
+
+### Fixed
+
+- The sixteen curve defaults live in `curve.py`, `curve.js` and
+  `services.yaml`, and nothing compared the three. Both copies are now
+  pinned against `curve.py`, so a stale playground default or a stale
+  number in Developer Tools -> Actions fails the build.
+
 ## [0.4.1] - 2026-08-28
 
 ### Fixed
