@@ -7,6 +7,19 @@ The version in `custom_components/flare/manifest.json` is what
 HACS shows as installed, so it and the release tag are checked against each other in
 CI — see `.github/workflows/release.yml`.
 
+## [0.9.1] - 2026-08-28
+
+### Fixed
+
+- **The curve card's "now" marker is legible against any colour.** It
+  used to be a filled dot on the chart itself, which all but vanished
+  whenever the current colour temperature came out pale - a cold white
+  sits close to the chart's own background. Replaced with a colour
+  swatch on the "Now HH:MM · ..." label instead, matching the swatch
+  the hover tooltip already used. Both swatches now carry a black
+  border so a pale swatch stays visible against a light card background,
+  dropped entirely in dark mode.
+
 ## [0.9.0] - 2026-08-28
 
 ### Changed
