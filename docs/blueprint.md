@@ -10,7 +10,7 @@ render_with_liquid: false
 # paths, which need no baseurl to be right.
 ---
 
-# The Adaptive Lighting blueprint — feature reference
+# The FLARE blueprint — feature reference
 {: .no_toc }
 
 <details open markdown="block">
@@ -21,11 +21,11 @@ render_with_liquid: false
 </details>
 
 
-> Part of [Adaptive Lighting](../) — see there for why this project is shaped the way it is
+> Part of [FLARE](../) — see there for why this project is shaped the way it is
 > (in particular, [why the schedule has four named phases](../#why-four-phases-not-a-continuous-curve)
 > rather than a single continuous curve) and how to install it.
 
-Built on the [Adaptive Lighting Helpers](../helpers/) services, but the two are only loosely coupled — the
+Built on the [FLARE's services](../advanced/reference/) services, but the two are only loosely coupled — the
 blueprint just calls `apply_lighting` the same way it calls `light.turn_on`, and doesn't otherwise assume
 anything about how that service is implemented.
 
@@ -36,14 +36,14 @@ applied once a minute to whichever of the room's lights are already on, so they 
 instead of jumping - regardless of whether the room currently reads as occupied (see
 [Occupancy-driven on/off](#occupancy-driven-onoff) - occupancy decides whether to turn lights on or off, never
 whether an already-on light keeps tracking the curve). The blueprint reads `brightness`/`color_temp`/`rgb_color`
-straight off the Adaptive Lighting Sensor's own attributes and passes them to `apply_lighting` as plain values -
-`apply_lighting` itself doesn't read any sensor entity at all (see [the integration reference](../helpers/) for its full
-field contract), so the Adaptive Lighting Sensor input isn't limited to this integration's own sensor - see
+straight off the FLARE Sensor's own attributes and passes them to `apply_lighting` as plain values -
+`apply_lighting` itself doesn't read any sensor entity at all (see [the integration reference](../advanced/reference/) for its full
+field contract), so the FLARE Sensor input isn't limited to this integration's own sensor - see
 ["Bring your own sensor"](#bring-your-own-sensor) below.
 
 ### Bring your own sensor
 
-The Adaptive Lighting Sensor input can point at any entity exposing this attribute shape, not just this
+The FLARE Sensor input can point at any entity exposing this attribute shape, not just this
 integration's own named schedule sensors:
 
 | Attribute | Type | Required |
@@ -57,7 +57,7 @@ A minimal hand-written template sensor satisfying that contract:
 ```yaml
 template:
   - sensor:
-      - name: "My Room's Adaptive Lighting"
+      - name: "My Room's FLARE"
         state: "{{ 'Evening' if now().hour >= 18 else 'Day' }}" # anything - the blueprint only reads the phase off this integration's own sensor for phase-name-keyed inputs (rgb_phases, phase scenes/exclusions) - a custom sensor doesn't need a matching state to work for brightness/colour
         attributes:
           brightness: "{{ 180 if now().hour >= 18 else 255 }}"
@@ -66,7 +66,7 @@ template:
           rgb_color: "{{ [255, 200, 150] if now().hour >= 18 else [255, 255, 255] }}"
 ```
 
-The Adaptive Lighting Sensor input's own picker is filtered to just this integration's sensors (so you don't have
+The FLARE Sensor input's own picker is filtered to just this integration's sensors (so you don't have
 to hunt through every sensor in the house to find the right one) - a hand-written "bring your own" sensor won't
 show up in that dropdown. It still works if you point at it via the automation's **Edit in YAML** view instead of
 the picker.
@@ -82,7 +82,7 @@ a new phase. This same periodic tick also drives the [Self-healing](#self-healin
 separate interval for that.
 
 Both of these, plus a genuine phase change, are also where Update Jitter applies: a random delay (default
-up to 15 seconds) so that many rooms sharing one Adaptive Lighting Sensor don't all send commands in the same
+up to 15 seconds) so that many rooms sharing one FLARE Sensor don't all send commands in the same
 wall-clock second — most noticeable right at a phase boundary, when every such room would otherwise fire at
 literally the same instant. Motion, manual runs, and Additional Triggers are never delayed - self-healing is,
 since it shares the same tick.
@@ -150,12 +150,12 @@ others are already lit. This looks at the whole room's state, not just the indiv
 A light changed by anything other than this integration's own last write — a wall switch, an app, a voice
 assistant, or another automation entirely (including one with no identifiable "user" of its own, such as one
 triggered directly by a physical button) — is left alone rather than being overwritten on the next adaptive tick.
-Detected by comparing the light's current `context.id` against the `context.id`(s) [Adaptive Lighting
-Helpers](../helpers/) itself last wrote that light with: if either still matches, nothing has touched it since our
+Detected by comparing the light's current `context.id` against the `context.id`(s) [FLARE
+Helpers](../advanced/reference/) itself last wrote that light with: if either still matches, nothing has touched it since our
 own last update and it's updated normally; if neither does, something else has, and it's left alone. A light with
 no recorded write at all yet (brand new, or right after this integration's own restart) is treated the same way —
-free to manage — rather than getting stuck unmanaged until it happens to change some other way. [Adaptive Lighting
-Helpers](../helpers/#override-protection) covers the full mechanism, including how a single write that silently
+free to manage — rather than getting stuck unmanaged until it happens to change some other way. [FLARE
+Helpers](../advanced/reference/#override-protection) covers the full mechanism, including how a single write that silently
 fails to land self-heals on the next tick instead of locking the light out permanently.
 
 The blueprint declares no ownership of its own. Which **state device** tracks a light is resolved by the
@@ -163,7 +163,7 @@ integration from its own configuration — by area, or by a target you point at 
 there's no blueprint input for this and none needed. Two automations driving the same room therefore share
 that room's claims and co-operate, rather than each treating the other's write as external; give them separate
 state devices if you want them tracked apart. See
-[the integration reference](../helpers/#override-protection) for the resolution rules.
+[the integration reference](../advanced/reference/#override-protection) for the resolution rules.
 
 **Running the automation manually** (hitting "Run" in the UI, or calling `automation.trigger` directly, rather
 than one of its own configured triggers firing) forces the whole tick through regardless of override
@@ -173,7 +173,7 @@ that - open an issue if you need it.
 
 **A device regaining power after an outage does *not* fall under the "not treated as an override" umbrella** —
 its own reconnect state report gets a fresh context too, indistinguishable from a real external change. [Adaptive
-Lighting Helpers](../helpers/) itself closes this gap directly: it clears a light's override-protection record the
+FLARE](../advanced/reference/) itself closes this gap directly: it clears a light's override-protection record the
 moment it's *observed* going unavailable, so by the time it reconnects there's no stale record left for its new
 context to conflict with - it's simply "free to manage" again, the same as a brand new light, through completely
 ordinary means. No forced write, no scoped call, nothing blueprint-specific at all - a genuinely different light
@@ -199,7 +199,7 @@ nothing else currently on, is left off rather than switched on.
 
 If you want to deliberately force a light back under adaptive control from your own script without turning it
 off first, call `apply_lighting` directly with `force: true` - see
-[the integration reference](../helpers/#override-protection) for the full contract.
+[the integration reference](../advanced/reference/#override-protection) for the full contract.
 
 ## Scene handoff
 
@@ -267,7 +267,7 @@ deliberately can't turn a dark room on. Have a separate automation watch whateve
 Bulbs that can't transition brightness and colour temperature together (some IKEA TRÅDFRI models) can be tagged
 with a `no_combined_transition` label and are sent as two sequential half-length transitions instead of one.
 Everything else gets a single combined call. Entirely handled inside `apply_lighting` (see
-[the integration reference](../helpers/)) — the blueprint itself has no branching for this, it's just a label you add to a
+[the integration reference](../advanced/reference/)) — the blueprint itself has no branching for this, it's just a label you add to a
 light or device.
 
 The label can go on either the **entity** or its **device** — device is better, since it survives entity renames
@@ -278,7 +278,7 @@ all — no error, no log, just a bulb quietly back on combined transitions.
 Because that failure is invisible, the integration watches for it: if a bulb whose model is known to need
 two-step transitions isn't labelled, it raises a **repair** with a Fix button that applies the label for you
 (creating it correctly if it doesn't exist). The list of known models ships with the integration and can be
-extended per-install — see [the integration reference](../helpers/#two-step-transition-bulbs) for the model patterns and
+extended per-install — see [the integration reference](../advanced/reference/#two-step-transition-bulbs) for the model patterns and
 how to add one.
 
 ## RGB colour
@@ -332,11 +332,11 @@ is treated as already settled, rather than retrying an off command against it ev
 
 ## Configuration
 
-Add an automation using the "Adaptive Lighting" blueprint per room, and set:
+Add an automation using the "FLARE" blueprint per room, and set:
 
 | Input | Required | Description |
 |---|---|---|
-| Adaptive Lighting Sensor | yes | Sensor providing brightness/colour temperature - filtered to this integration's own sensors (see [Bring your own sensor](#bring-your-own-sensor) for pointing at a different one) |
+| FLARE Sensor | yes | Sensor providing brightness/colour temperature - filtered to this integration's own sensors (see [Bring your own sensor](#bring-your-own-sensor) for pointing at a different one) |
 | Room | no | Entity/device/area/floor/label - lights within it are controlled, occupancy sensors within it govern on/off (see [One target, two jobs](#one-target-two-jobs)) |
 | Additional Triggers | no | Entities that trigger immediate re-evaluation (see [Additional triggers](#additional-triggers)) |
 | **Colour** section | | |

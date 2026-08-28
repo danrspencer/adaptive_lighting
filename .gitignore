@@ -14,7 +14,7 @@ venv/
 # Copied into the docs site at build time from its real home
 # (custom_components/.../www/) so the site can never show a stale card -
 # see .github/workflows/docs.yml.
-docs/assets/js/adaptive-lighting-curve-card.js
+docs/assets/js/flare-curve-card.js
 docs/_site/
 docs/_preview/
 docs/.bundle/

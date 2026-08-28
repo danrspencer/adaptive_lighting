@@ -86,7 +86,7 @@ brand/
 blueprints/automation/danspencer/flare.yaml
     The automation blueprint: triggers, conditions, target resolution,
     and the action sequence (which service to call, with what target).
-    Deliberately named differently from any prior "Adaptive Lighting
+    Deliberately named differently from any prior "FLARE
     Unified" blueprint so the two can run side by side while rooms are
     migrated over individually, rather than one replacing the other
     in place.
@@ -102,7 +102,8 @@ tests/
     pytest suite for curve.py, grouping.py, and scenes.py.
 
 docs/
-    HELPERS.md     full service/sensor reference for the integration
+    advanced/       power-user reference: services, scene handoff,
+                   building without the blueprint
     BLUEPRINT.md   full feature/input reference for the blueprint
 ```
 

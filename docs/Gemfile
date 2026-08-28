@@ -6,6 +6,6 @@ source 'https://rubygems.org'
 
 # Jekyll 4 specifically, not the github-pages gem (which pins Jekyll 3):
 # docs/_config.yml relies on render_with_liquid, a Jekyll 4 feature, to
-# stop Liquid eating the Jinja examples in BLUEPRINT.md/HELPERS.md.
+# stop Liquid eating the Jinja examples in blueprint.md and the advanced/ pages.
 gem 'jekyll', '~> 4.3'
 gem 'just-the-docs', '~> 0.10'

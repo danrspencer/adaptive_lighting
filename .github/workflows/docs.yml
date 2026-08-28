@@ -31,8 +31,8 @@ jobs:
       # show a stale card.
       - name: Copy the dashboard card into the site
         run: |
-          cp custom_components/adaptive_lighting_helpers/www/adaptive-lighting-curve-card.js \
-             docs/assets/js/adaptive-lighting-curve-card.js
+          cp custom_components/flare/www/flare-curve-card.js \
+             docs/assets/js/flare-curve-card.js
 
       - uses: ruby/setup-ruby@v1
         with:
