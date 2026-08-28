@@ -21,30 +21,23 @@ render_with_liquid: false
 </details>
 
 
-> Part of [FLARE](../) — see there for why this project is shaped the way it is
-> (in particular, [why the schedule has four named phases](../#four-phases-not-one-curve)
-> rather than a single continuous curve) and how to install it.
-
-Built on the [FLARE's services](../advanced/reference/) services, but the two are only loosely coupled — the
-blueprint just calls `apply_lighting` the same way it calls `light.turn_on`, and doesn't otherwise assume
-anything about how that service is implemented.
+Every input, feature by feature. To install it, see the
+[Quickstart](../installation/); for the services underneath, the
+[integration reference](../advanced/reference/).
 
 ## Brightness & colour temperature schedule
 
-Tracks a target brightness and Kelvin value that follows the [Morning/Day/Evening/Night schedule](../#four-phases-not-one-curve),
-applied once a minute to whichever of the room's lights are already on, so they drift with the schedule
-instead of jumping - regardless of whether the room currently reads as occupied (see
-[Occupancy-driven on/off](#occupancy-driven-onoff) - occupancy decides whether to turn lights on or off, never
-whether an already-on light keeps tracking the curve). The blueprint reads `brightness`/`color_temp`/`rgb_color`
-straight off the FLARE Sensor's own attributes and passes them to `apply_lighting` as plain values -
-`apply_lighting` itself doesn't read any sensor entity at all (see [the integration reference](../advanced/reference/) for its full
-field contract), so the FLARE Sensor input isn't limited to this integration's own sensor - see
-["Bring your own sensor"](#bring-your-own-sensor) below.
+The room's lights follow the [Morning/Day/Evening/Night schedule](../#four-phases-not-one-curve),
+reapplied once a minute to whichever of them are already on so they drift with the curve rather than jumping.
+This runs whether or not the room reads as occupied; occupancy only decides whether to switch lights on or off.
+
+The blueprint reads `brightness`/`color_temp`/`rgb_color` off the FLARE Sensor and passes them to
+`apply_lighting` as plain values.
 
 ### Bring your own sensor
 
 The FLARE Sensor input can point at any entity exposing this attribute shape, not just this
-integration's own named schedule sensors:
+integration's own schedule sensors:
 
 | Attribute | Type | Required |
 |---|---|---|
@@ -58,7 +51,10 @@ A minimal hand-written template sensor satisfying that contract:
 template:
   - sensor:
       - name: "My Room's FLARE"
-        state: "{{ 'Evening' if now().hour >= 18 else 'Day' }}" # anything - the blueprint only reads the phase off this integration's own sensor for phase-name-keyed inputs (rgb_phases, phase scenes/exclusions) - a custom sensor doesn't need a matching state to work for brightness/colour
+        # The state can be anything. Only the phase-keyed inputs (Prefer RGB
+        # During, the per-phase scenes and exclusions) read a phase name, and
+        # those read it from this integration's own sensor.
+        state: "{{ 'Evening' if now().hour >= 18 else 'Day' }}"
         attributes:
           brightness: "{{ 180 if now().hour >= 18 else 255 }}"
           color_temp: "{{ 3200 if now().hour >= 18 else 5500 }}"
@@ -66,30 +62,16 @@ template:
           rgb_color: "{{ [255, 200, 150] if now().hour >= 18 else [255, 255, 255] }}"
 ```
 
-The FLARE Sensor input's own picker is filtered to just this integration's sensors (so you don't have
-to hunt through every sensor in the house to find the right one) - a hand-written "bring your own" sensor won't
-show up in that dropdown. It still works if you point at it via the automation's **Edit in YAML** view instead of
-the picker.
+The picker is filtered to this integration's own sensors, so a hand-written one won't appear in it — point at
+it through the automation's **Edit in YAML** view instead.
 
-That cadence comes from two triggers, not one, with two different jobs. A plain time pattern - Update Interval
-below (default every minute) - is the one actually doing the routine work: it reapplies the schedule on a fixed
-interval regardless of whether anything changed, which is what makes "the next tick will correct it" true at
-every hour of the day, including Morning and Night's *flat* stretches (constant brightness and Kelvin for the
-whole phase, where nothing would otherwise trigger an update at all). The sensor's own state trigger only fires
-on an actual phase change (Morning→Day and so on) — not on the attribute-only ticks in between, which the
-periodic tick already covers — so a room isn't left waiting up to a full tick interval to notice it just entered
-a new phase. This same periodic tick also drives the [Self-healing](#self-healing) check below - there's no
-separate interval for that.
+Two triggers drive the cadence. The Update Interval time pattern (default every minute) does the routine work,
+and is what keeps the room correcting itself during Morning and Night, where the curve is flat and nothing else
+would fire. The sensor's state trigger fires only on an actual phase change, so a room doesn't wait up to a full
+interval to notice one. The same tick drives [self-healing](#self-healing).
 
-Both of these, plus a genuine phase change, are also where Update Jitter applies: a random delay (default
-up to 15 seconds) so that many rooms sharing one FLARE Sensor don't all send commands in the same
-wall-clock second — most noticeable right at a phase boundary, when every such room would otherwise fire at
-literally the same instant. Motion, manual runs, and Additional Triggers are never delayed - self-healing is,
-since it shares the same tick.
-
-The [dashboard curve card](https://github.com/danrspencer/flare/blob/main/CONTRIBUTING.md#previewing-the-dashboard-card) also plots today's actual sunrise/sunset
-(from `sun.sun`) against the schedule, so it's easy to see at a glance how far the configured boundaries and
-Evening's earliest/latest clamp are actually tracking the sun.
+Update Jitter (default up to 15s) delays both, so rooms sharing a sensor don't all command in the same second —
+most noticeable at a phase boundary. Motion, manual runs and Additional Triggers are never delayed.
 
 ## One target, two jobs
 
@@ -109,12 +91,9 @@ those to also light a room.
 
 ## Occupancy-driven on/off
 
-Occupancy has exactly two jobs: turning a room on when it's detected, and turning it off `no_motion_wait` seconds
-after it clears. That's the whole scope - it has no say over whether an already-on light keeps tracking the curve
-(see [Brightness & colour temperature schedule](#brightness--colour-temperature-schedule)), only over switching
-lights on or off in the first place. Occupancy is entirely optional either way - a Room with no occupancy-class
-sensor in it just won't turn anything on by itself (see [When a light is allowed to turn on](#when-a-light-is-allowed-to-turn-on)).
-Lights handed off via a `null` multiplier are exempt from the turn-off too — see
+Occupancy turns a room on when it's detected, and off `no_motion_wait` seconds after it clears. That is its
+entire scope. It's optional: a Room with no occupancy-class sensor just never turns anything on by itself.
+Lights handed off via a `null` multiplier are exempt from the turn-off — see
 [Per-light brightness scaling](#per-light-brightness-scaling).
 
 A room with no real occupancy sensor at all (or one you want to override manually — e.g. a nightlight mode) can
@@ -136,70 +115,43 @@ updates a room's lighting — the periodic adaptive tick, an Additional Trigger 
 dropped connection (see [Override detection](#override-detection) below) — may only ever update lights that are
 already on; it never switches a dark room's light on by itself.
 
-This matters most for a light reconnecting after a Zigbee drop or a power cut: without this rule, a light that
-was deliberately left off would come back on the moment it reconnects to the network, purely because it just
-reconnected — not because anyone actually wanted it on. A light that reconnects off, in a room with nothing else
-on, stays off.
+The rule matters most after a Zigbee drop or a power cut: a light that reconnects off, in a room with nothing
+else on, stays off rather than coming back on simply because it reconnected.
 
-The "room already occupied" branch is what lets a *different* off light in an already-in-use multi-light room
-still switch on to match the rest — for example, a periodic tick topping up a room where one lamp's off but the
-others are already lit. This looks at the whole room's state, not just the individual light being considered.
+The "room already in use" branch looks at the whole room, not the individual light, so a tick can top up one
+lamp that's off while the others are lit.
 
 ## Override detection
 
 A light changed by anything other than this integration's own last write — a wall switch, an app, a voice
 assistant, or another automation entirely (including one with no identifiable "user" of its own, such as one
 triggered directly by a physical button) — is left alone rather than being overwritten on the next adaptive tick.
-Detected by comparing the light's current `context.id` against the `context.id`(s) [FLARE
-Helpers](../advanced/reference/) itself last wrote that light with: if either still matches, nothing has touched it since our
-own last update and it's updated normally; if neither does, something else has, and it's left alone. A light with
-no recorded write at all yet (brand new, or right after this integration's own restart) is treated the same way —
-free to manage — rather than getting stuck unmanaged until it happens to change some other way. [FLARE
-Helpers](../advanced/reference/#override-protection) covers the full mechanism, including how a single write that silently
-fails to land self-heals on the next tick instead of locking the light out permanently.
+A light with no recorded write yet — brand new, or just after a restart — counts as free to manage.
+[Override protection](../advanced/reference/#override-protection) covers the mechanism in full.
 
-The blueprint declares no ownership of its own. Which **state device** tracks a light is resolved by the
-integration from its own configuration — by area, or by a target you point at devices or specific lights — so
-there's no blueprint input for this and none needed. Two automations driving the same room therefore share
-that room's claims and co-operate, rather than each treating the other's write as external; give them separate
-state devices if you want them tracked apart. See
-[the integration reference](../advanced/reference/#override-protection) for the resolution rules.
+The blueprint declares no ownership, so there is no input for it. Which **state device** tracks a light is
+resolved by the integration from its own configuration. Two automations driving the same room share that room's
+claims and co-operate; give them separate state devices to track them apart.
 
-**Running the automation manually** (hitting "Run" in the UI, or calling `automation.trigger` directly, rather
-than one of its own configured triggers firing) forces the whole tick through regardless of override
-protection - the same "I ran this on purpose, take it back" intent as calling `apply_lighting` yourself with
-`force: true`. If you'd rather it respect protection even on a manual run, there's currently no input for
-that - open an issue if you need it.
+**Running the automation manually** — "Run" in the UI, or `automation.trigger` — forces the tick through
+regardless of override protection, the same as calling `apply_lighting` with `force: true`.
 
-**A device regaining power after an outage does *not* fall under the "not treated as an override" umbrella** —
-its own reconnect state report gets a fresh context too, indistinguishable from a real external change. [Adaptive
-FLARE](../advanced/reference/) itself closes this gap directly: it clears a light's override-protection record the
-moment it's *observed* going unavailable, so by the time it reconnects there's no stale record left for its new
-context to conflict with - it's simply "free to manage" again, the same as a brand new light, through completely
-ordinary means. No forced write, no scoped call, nothing blueprint-specific at all - a genuinely different light
-in the same room, under its own real override, was never at risk either way, since only the entity that actually
-went unavailable ever has its record cleared.
+A device regaining power reports its own state under a fresh context, indistinguishable from an external change.
+The integration handles that by clearing a light's record when it is observed going unavailable, so it comes back
+free to manage.
 
-The blueprint's only remaining role here is promptness: a dedicated `recovered` trigger fires when the room comes
-back from being entirely unreachable (a Zigbee mesh drop, or someone physically cutting and restoring power to
-the room), causing an ordinary tick to run right away rather than waiting for the room's next unrelated trigger.
+The blueprint adds promptness: a `recovered` trigger arms while *every* light in the room is
+`unavailable`/`unknown` and fires as the first one returns, running a tick immediately instead of waiting for the
+next unrelated trigger.
 
-Precisely, it arms while *every* light in the room is `unavailable`/`unknown` and fires as the first one returns.
-It deliberately does **not** ask "is nothing unavailable", which sounds equivalent but isn't: a single orphaned
-entity that is permanently unavailable — a deleted Zigbee group whose entity was never cleaned up, for instance —
-would hold that condition false forever and silently disable recovery for the entire room. Asking whether
-*anything* is reachable makes a dead entity just one more member of the dark set rather than a permanent veto.
+{: .note }
+> It asks whether *anything* is reachable rather than whether nothing is unavailable. One permanently
+> unavailable entity — an orphaned Zigbee group, say — would make the second form false forever and disable
+> recovery for the whole room. The trade-off is that a single flaky bulb returning alongside healthy siblings
+> doesn't move the aggregate, so `recovered` won't fire for it; the periodic tick picks it up instead.
 
-The trade-off is that one flaky bulb dropping and returning while its siblings stay up doesn't move the aggregate,
-so `recovered` won't fire for it. That case is left to the periodic tick described in
-[Brightness & colour temperature schedule](#brightness--colour-temperature-schedule), which runs regardless. That tick treats the recovered light exactly like any other light on any other trigger - subject to
-[the "when a light is allowed to turn on" rule](#when-a-light-is-allowed-to-turn-on) above like everything else:
-a light that reconnects already on gets brought to the adaptive target, one that reconnects *off*, in a room with
-nothing else currently on, is left off rather than switched on.
-
-If you want to deliberately force a light back under adaptive control from your own script without turning it
-off first, call `apply_lighting` directly with `force: true` - see
-[the integration reference](../advanced/reference/#override-protection) for the full contract.
+To force a light back under control from your own script without turning it off first, call `apply_lighting`
+with `force: true`.
 
 ## Scene handoff
 
@@ -208,8 +160,7 @@ Two ways to hand a room over to a scene instead of the adaptive curve, usable to
 - **Per-phase scene pickers** - four optional entity pickers, one per phase (e.g. pick `scene.kitchen_night` for
   Night). The simple, explicit case: no template to write.
 - **Scene Template** - an optional template returning the entity_id of a scene to activate, for cases a phase
-  alone can't express - for example, a different scene while the TV is on, regardless of what phase it is. Written
-  directly by whoever sets up the room, so the mapping is explicit rather than guessed from a naming convention.
+  alone can't express — a different scene while the TV is on, say.
 
 **The template wins whenever it returns a valid scene** - the matching phase picker is only used as the fallback,
 for phases the template doesn't have an opinion on (or when no template is set at all). A scene only qualifies -
@@ -264,22 +215,14 @@ deliberately can't turn a dark room on. Have a separate automation watch whateve
 
 ## Two-step transitions
 
-Bulbs that can't transition brightness and colour temperature together (some IKEA TRÅDFRI models) can be tagged
-with a `no_combined_transition` label and are sent as two sequential half-length transitions instead of one.
-Everything else gets a single combined call. Entirely handled inside `apply_lighting` (see
-[the integration reference](../advanced/reference/)) — the blueprint itself has no branching for this, it's just a label you add to a
-light or device.
+Bulbs that can't transition brightness and colour temperature in one command (some IKEA TRÅDFRI models) are
+tagged with a `no_combined_transition` label and sent as two sequential half-length transitions instead.
+Everything else gets a single combined call. There is nothing to configure in the blueprint — it's a label you
+add to a light or its device, and `apply_lighting` does the rest.
 
-The label can go on either the **entity** or its **device** — device is better, since it survives entity renames
-and covers every light entity that device exposes. What matters is the label's *id* (`no_combined_transition`),
-not its display name; the lookup is an exact match, so a label whose id doesn't line up silently does nothing at
-all — no error, no log, just a bulb quietly back on combined transitions.
-
-Because that failure is invisible, the integration watches for it: if a bulb whose model is known to need
-two-step transitions isn't labelled, it raises a **repair** with a Fix button that applies the label for you
-(creating it correctly if it doesn't exist). The list of known models ships with the integration and can be
-extended per-install — see [the integration reference](../advanced/reference/#two-step-transition-bulbs) for the model patterns and
-how to add one.
+If a bulb whose model is known to need this isn't labelled, the integration raises a repair with a Fix button.
+See [two-step transition bulbs](../advanced/reference/#two-step-transition-bulbs) for the label rules and the
+model list.
 
 ## RGB colour
 
@@ -308,25 +251,19 @@ drifting smoothly the rest of the time:
 ## Reachability and redundancy filtering
 
 Lights reported `unavailable` or `unknown` are skipped. Lights already within tolerance of the target
-brightness/colour-temperature (±2 brightness, ±10K, to absorb rounding differences some bulbs report back) are
-left alone rather than recommanded on every tick.
+(±2 brightness, ±10K, absorbing the rounding some bulbs report back) are left alone rather than re-commanded on
+every tick.
 
 ## Self-healing
 
-On every Update tick (the same periodic tick that drives ordinary brightness/colour tracking — see
-[Brightness & colour temperature schedule](#brightness--colour-temperature-schedule) — there's no separate
-interval for this), if the room's occupancy sensors have been continuously clear for the full Wait time but a
-light is still on, the off command is retried instead of the normal reapply. This recovers from dropped commands
-(a missed Zigbee message, for example) without manual intervention.
+On each Update tick, if the room's occupancy sensors have been continuously clear for the full Wait time but a
+light is still on, the off command is retried instead of the normal reapply. This recovers from a dropped
+command — a missed Zigbee message, say — without intervention.
 
-The Wait time check here is debounced against a momentary sensor blip, not just an instantaneous "is it clear
-right now" read — a noisy occupancy sensor that briefly reports clear before going occupied again won't trip an
-early turn-off just because a tick happens to land in that gap.
+The Wait time is measured over the whole period rather than read instantaneously, so an occupancy sensor that
+blips clear and back doesn't trip an early turn-off.
 
-Lights handed off via a `null` multiplier (see
-[Per-light brightness scaling](#per-light-brightness-scaling)) are excluded from this retry, and don't count as
-"still on" for the purpose of triggering it — so a room whose only lit light is one this automation doesn't own
-is treated as already settled, rather than retrying an off command against it every interval.
+Lights handed off via a `null` multiplier are excluded, and don't count as "still on" for triggering it.
 
 ## Configuration
 

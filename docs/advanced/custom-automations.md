@@ -12,9 +12,8 @@ render_with_liquid: false
 # Building without the blueprint
 {: .no_toc }
 
-The blueprint is a worked example, not the product. Every service it calls is a plain
-Home Assistant action, so anything that can call an action — a YAML automation, a script,
-Node-RED, AppDaemon, an ESPHome-driven button — can drive FLARE directly.
+Every service the blueprint calls is a plain Home Assistant action, so anything that can
+call one — a YAML automation, a script, Node-RED, AppDaemon — can drive FLARE directly.
 
 <details open markdown="block">
   <summary>On this page</summary>
@@ -51,9 +50,8 @@ two-step bulbs, RGB routing and override protection itself.
 
 ### Using override protection standalone
 
-Everything above is also its own pair of services - `check_control` (read-only) and `record_write`
-(records a write) - not specific to lights, or to this integration's own `apply_lighting`. Any automation can
-use them directly on its own entities:
+Override protection is also two standalone services — `check_control` (read-only) and
+`record_write` — usable on your own entities, with or without `apply_lighting`:
 
 ```yaml
 action: flare.check_control
@@ -76,16 +74,12 @@ data:
     light.kitchen_1: { brightness: 200, color_temp_kelvin: 3000 }
 ```
 
-`apply_lighting`/`compute_lighting_groups` use the exact same underlying logic internally (a direct Python
-call, not a service-to-service round trip) - `check_control`'s `status` values are the same ones
-each state device's `claims` attribute shows (see below), and `targets` is the same shape `apply_lighting`
-itself records automatically on every write it makes.
+`check_control`'s `status` values are the same ones a state device's `claims` attribute
+shows, and `targets` is the same shape `apply_lighting` records on every write.
 
-A third service, `clear_claims`, is the manual escape hatch for a light stuck reporting `overridden` with no
-other way back - possible because `apply_lighting`/`compute_lighting_groups` never call `record_write`
-internally for anything already excluded, so an overridden light's own `latest` claim can go permanently stale
-(most concretely: during a ramping curve, once its recorded target drifts more than a tick or two away from
-where the curve has since moved on to):
+`clear_claims` is the escape hatch for a light stuck on `overridden`. An excluded light
+never gets a fresh claim recorded, so on a ramping curve its stored target keeps drifting
+further from the current one and it cannot recover on its own:
 
 ```yaml
 action: flare.clear_claims
@@ -93,11 +87,9 @@ data:
   entities: [light.kitchen_1]
 ```
 
-The next write to a cleared entity, from anyone, is treated exactly like a brand-new entity's first write - no
-owner-conflict check is possible until a fresh claim exists to compare against. The **FLARE Write
-Tracking** dashboard card exposes this as a "Clear" button on every row, no confirmation prompt - it's a
-diagnostic bookkeeping entry, not the light itself, and a fresh claim gets re-established the moment anything
-next writes to that entity.
+The next write to a cleared entity is treated like a brand-new entity's first write. Each
+state device exposes the same thing as a `button.<name>_flare_clear` entity, which clears
+every claim in that scope.
 
 ## Doing your own dispatch
 
