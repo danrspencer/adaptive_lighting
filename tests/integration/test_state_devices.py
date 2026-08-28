@@ -358,6 +358,13 @@ async def test_the_override_event_carries_the_scopes_device_id(hass: HomeAssista
         config_entry_id=entry.entry_id, identifiers=instance.device_info["identifiers"], name="Kitchen"
     )
     tracker = next(e for e in added if hasattr(e, "claims"))
+    # _fire_overridden looks the device up by identifier + config_entry_id
+    # via the entity's own registry_entry - a real added entity has one;
+    # this stripped-down harness needs it set by hand, same as
+    # test_a_state_device_lands_in_the_area_it_targets already does.
+    tracker.registry_entry = er.async_get(hass).async_get_or_create(
+        "sensor", DOMAIN, tracker.unique_id, config_entry=entry, device_id=device.id
+    )
 
     events: list = []
     hass.bus.async_listen("flare_light_overridden", events.append)

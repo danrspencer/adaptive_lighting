@@ -229,9 +229,17 @@ class _StateTrackingSensor(SensorEntity):
         self, entity_id: str, record: dict, previous: str | None, live_context_id: str | None
     ) -> None:
         state = self.hass.states.get(entity_id)
-        device = dr.async_get(self.hass).async_get_device(
-            identifiers=self._instance.device_info["identifiers"]
-        )
+        # async_get_device(identifiers=...) is deprecated - identifiers
+        # are no longer guaranteed unique across every config entry, only
+        # within one, so the by-identifier lookup now also needs the
+        # config_entry_id an already-added entity carries on its own
+        # registry_entry.
+        device = None
+        if self.registry_entry is not None and self.registry_entry.config_entry_id is not None:
+            identifier = next(iter(self._instance.device_info["identifiers"]))
+            device = dr.async_get(self.hass).async_get_device_by_identifier(
+                identifier, self.registry_entry.config_entry_id
+            )
         self.hass.bus.async_fire(
             EVENT_LIGHT_OVERRIDDEN,
             {

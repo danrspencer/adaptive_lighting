@@ -131,13 +131,16 @@ def _registry(hass: HomeAssistant) -> ClaimRegistry:
     return next(v for v in hass.data[DOMAIN].values() if isinstance(v, ClaimRegistry))
 
 
+def _tracking_entry(hass: HomeAssistant):
+    return next(
+        e for e in hass.config_entries.async_entries(DOMAIN) if e.data.get(CONF_ENTRY_TYPE) == ENTRY_TYPE_TRACKING
+    )
+
+
 def _test_scope_subentry_id(hass: HomeAssistant) -> str:
     """The Test Scope state device's own subentry_id - what
     ClaimRegistry's accessors want directly."""
-    entry = next(
-        e for e in hass.config_entries.async_entries(DOMAIN) if e.data.get(CONF_ENTRY_TYPE) == ENTRY_TYPE_TRACKING
-    )
-    return next(iter(entry.subentries))
+    return next(iter(_tracking_entry(hass).subentries))
 
 
 def _scope_device_id(hass: HomeAssistant) -> str:
@@ -146,7 +149,12 @@ def _scope_device_id(hass: HomeAssistant) -> str:
     call as scope_device_id, exactly as the blueprint does."""
     from homeassistant.helpers import device_registry as dr
 
-    device = dr.async_get(hass).async_get_device(identifiers={(DOMAIN, _test_scope_subentry_id(hass))})
+    entry = _tracking_entry(hass)
+    identifier = (DOMAIN, next(iter(entry.subentries)))
+    # async_get_device(identifiers=...) is deprecated in favour of the
+    # by-identifier lookup, which also needs the owning config_entry_id -
+    # identifiers are only guaranteed unique within one entry now.
+    device = dr.async_get(hass).async_get_device_by_identifier(identifier, entry.entry_id)
     assert device is not None
     return device.id
 
