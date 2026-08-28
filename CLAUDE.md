@@ -454,7 +454,7 @@ rather than assumed:
   caller naming that scope writes through it.
 - **Scope is caller-supplied, not resolved.** Every tracking service
   (`apply_lighting`, `compute_lighting_groups`, `check_control`,
-  `record_write`, `clear_claims`) takes `scope_device_id` - a real HA
+  `record_write`, `clear_claims`) takes `tracking_device_id` - a real HA
   device, one per state device (`StateInstance.device_info`).
   `ClaimRegistry.resolve_scope_device()` turns that into a subentry_id.
   **Optional only on `apply_lighting`/`compute_lighting_groups`** -
@@ -473,7 +473,7 @@ rather than assumed:
   configured state device), still exists but is internal-only now -
   used solely by the three call sites with no caller to ask at all:
   `async_start_listening`'s state-changed listener, `_release_if_dark`,
-  and `async_prune_stale`. The blueprint resolves `scope_device_id`
+  and `async_prune_stale`. The blueprint resolves `tracking_device_id`
   itself from `room_target` (its own `tracking_scope_device_id`
   variable) - area named directly wins outright, entities/a device with
   no area fall back to the first resolved light's own area - so this is

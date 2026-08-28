@@ -124,7 +124,7 @@ compute_lighting_groups:
       default: false
       selector:
         boolean:
-    scope_device_id:
+    tracking_device_id:
       name: Tracking scope
       description: >-
         The FLARE state device (Settings -> Devices & Services -> FLARE
@@ -274,7 +274,7 @@ apply_lighting:
       default: false
       selector:
         boolean:
-    scope_device_id:
+    tracking_device_id:
       name: Tracking scope
       description: >-
         The FLARE state device (Settings -> Devices & Services -> FLARE
@@ -517,9 +517,11 @@ compute_scene_coverage:
     scene_entity_id:
       name: Scene
       description: >-
-        The scene to check, if any. Leave blank to always get "no
-        scene" behaviour (everything in target_entities comes back
-        uncovered).
+        The scene to check. If you don't have a candidate scene this
+        tick (no scene template, no per-phase scene for the current
+        phase), skip calling this service entirely - every target
+        entity is uncovered either way, so there's nothing to ask.
+      required: true
       selector:
         entity:
           domain: scene
@@ -543,6 +545,7 @@ compute_scene_coverage:
       required: true
       selector:
         entity:
+          multiple: true
 
 check_control:
   name: Check control
@@ -555,10 +558,10 @@ check_control:
     logic at all. Read-only - call record_write afterwards if you do
     write the entity, so a later check recognises that write.
 
-    Checks against scope_device_id's own claims. This service exists
+    Checks against tracking_device_id's own claims. This service exists
     only to answer questions about tracking, so unlike apply_lighting
     there's nothing useful to do without one - it's required. The
-    response's "scope" field simply echoes scope_device_id's own title
+    response's "scope" field simply echoes tracking_device_id's own title
     back.
   fields:
     entities:
@@ -568,7 +571,7 @@ check_control:
       selector:
         entity:
           multiple: true
-    scope_device_id:
+    tracking_device_id:
       name: Tracking scope
       description: >-
         The FLARE state device (Settings -> Devices & Services -> FLARE
@@ -633,7 +636,7 @@ record_write:
       selector:
         entity:
           multiple: true
-    scope_device_id:
+    tracking_device_id:
       name: Tracking scope
       description: >-
         The FLARE state device (Settings -> Devices & Services -> FLARE
@@ -656,13 +659,12 @@ record_write:
       example: '{"light.lamp": {"brightness": 200, "color_temp_kelvin": 3000}}'
       selector:
         object:
-          multiple: true
 
 clear_claims:
   name: Clear claims
   description: >-
     Discards entities' tracked observed/latest claims within
-    scope_device_id - the manual escape hatch for an entity stuck
+    tracking_device_id - the manual escape hatch for an entity stuck
     reporting as overridden with no other way back (a claim can go
     permanently stale for an entity that's excluded from every future
     write once overridden, since nothing ever gets the chance to record
@@ -681,7 +683,7 @@ clear_claims:
       selector:
         entity:
           multiple: true
-    scope_device_id:
+    tracking_device_id:
       name: Tracking scope
       description: >-
         The FLARE state device (Settings -> Devices & Services -> FLARE

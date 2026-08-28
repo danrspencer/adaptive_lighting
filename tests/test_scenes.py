@@ -2,15 +2,6 @@ from fakes import make_scene_lookup
 from scenes import compute_scene_coverage
 
 
-def test_no_scene_entity_id_covers_nothing():
-    lookup = make_scene_lookup({})
-    result = compute_scene_coverage(None, scope_entities=[], target_entities=["light.a", "light.b"], lookup=lookup)
-    assert result.scene_active is False
-    assert result.scene_valid is False
-    assert result.covered_entities == []
-    assert result.uncovered_entities == ["light.a", "light.b"]
-
-
 def test_nonexistent_scene_covers_nothing():
     lookup = make_scene_lookup({})  # scene.missing not in the dict at all
     result = compute_scene_coverage(

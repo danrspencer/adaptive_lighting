@@ -109,7 +109,7 @@ async def _attach_tracking_sensors(hass: HomeAssistant, entry: MockConfigEntry) 
         # the real entity platform - it never triggers the device
         # registration a real add_entities call does for an entity
         # carrying device_info. resolve_scope_device (and any test using
-        # scope_device_id) needs a real device to resolve, so create it
+        # tracking_device_id) needs a real device to resolve, so create it
         # explicitly here, the same identifiers StateInstance.device_info
         # would produce.
         dr.async_get(hass).async_get_or_create(
@@ -143,10 +143,10 @@ def _test_scope_subentry_id(hass: HomeAssistant) -> str:
     return next(iter(_tracking_entry(hass).subentries))
 
 
-def _scope_device_id(hass: HomeAssistant) -> str:
+def _tracking_device_id(hass: HomeAssistant) -> str:
     """The Test Scope state device's own device_id - what a real caller
     resolves once (e.g. from room_target's area) and passes to a service
-    call as scope_device_id, exactly as the blueprint does."""
+    call as tracking_device_id, exactly as the blueprint does."""
     from homeassistant.helpers import device_registry as dr
 
     entry = _tracking_entry(hass)
@@ -193,21 +193,21 @@ def _set_light(hass: HomeAssistant, entity_id: str, state: str, *, context: Cont
     hass.states.async_set(entity_id, state, attrs, context=context)
 
 
-_UNSET = object()  # distinguishes "use the default scope" from an explicit scope_device_id=None
+_UNSET = object()  # distinguishes "use the default scope" from an explicit tracking_device_id=None
 
 
 async def _apply(hass: HomeAssistant, entities: list[str], *, context: Context | None = None, **overrides) -> None:
     """apply_lighting with the fields most tests don't care about
-    defaulted, including scope_device_id (Test Scope's own device) -
+    defaulted, including tracking_device_id (Test Scope's own device) -
     most tests here are about override protection, which needs a real
-    scope to mean anything. Pass scope_device_id=None explicitly to
+    scope to mean anything. Pass tracking_device_id=None explicitly to
     exercise the untracked path instead."""
     data = {
         "entities": entities,
         "brightness": 200,
         "color_temp_kelvin": 3000,
         "transition": 0,
-        "scope_device_id": _scope_device_id(hass),
+        "tracking_device_id": _tracking_device_id(hass),
         **overrides,
     }
     await hass.services.async_call(DOMAIN, "apply_lighting", data, blocking=True, context=context)
@@ -366,23 +366,23 @@ async def test_compute_lighting_groups_accepts_an_explicit_null_rgb_color(setup_
     assert result["groups"][0]["combined"] == ["light.a"]
 
 
-async def _check(hass: HomeAssistant, entities: list[str], *, scope_device_id=_UNSET) -> dict:
-    if scope_device_id is _UNSET:
-        scope_device_id = _scope_device_id(hass)
+async def _check(hass: HomeAssistant, entities: list[str], *, tracking_device_id=_UNSET) -> dict:
+    if tracking_device_id is _UNSET:
+        tracking_device_id = _tracking_device_id(hass)
     result = await hass.services.async_call(
         DOMAIN,
         "check_control",
-        {"entities": entities, "scope_device_id": scope_device_id},
+        {"entities": entities, "tracking_device_id": tracking_device_id},
         blocking=True,
         return_response=True,
     )
     return result["results"]
 
 
-async def _record_write(hass: HomeAssistant, entities: list[str], *, targets=None, context=None, scope_device_id=_UNSET):
-    if scope_device_id is _UNSET:
-        scope_device_id = _scope_device_id(hass)
-    data = {"entities": entities, "scope_device_id": scope_device_id}
+async def _record_write(hass: HomeAssistant, entities: list[str], *, targets=None, context=None, tracking_device_id=_UNSET):
+    if tracking_device_id is _UNSET:
+        tracking_device_id = _tracking_device_id(hass)
+    data = {"entities": entities, "tracking_device_id": tracking_device_id}
     if targets is not None:
         data["targets"] = targets
     return await hass.services.async_call(
@@ -450,7 +450,7 @@ async def test_check_control_and_record_write_round_trip(setup_integration: Home
 
 async def test_check_control_echoes_back_whatever_scope_it_was_given(setup_integration: HomeAssistant):
     """`scope` is no longer resolved per entity - it simply echoes the
-    caller's own scope_device_id back as a title, for every entity in the
+    caller's own tracking_device_id back as a title, for every entity in the
     call, regardless of whether that light is anywhere near the scope's
     own target."""
     hass = setup_integration
@@ -472,7 +472,7 @@ async def test_check_control_requires_a_scope(setup_integration: HomeAssistant):
     hass = setup_integration
     _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=100, color_temp_kelvin=3000)
     with pytest.raises(vol.Invalid):
-        await _check(hass, ["light.a"], scope_device_id=None)
+        await _check(hass, ["light.a"], tracking_device_id=None)
 
 
 async def test_record_write_requires_a_scope(setup_integration: HomeAssistant):
@@ -482,7 +482,7 @@ async def test_record_write_requires_a_scope(setup_integration: HomeAssistant):
     hass = setup_integration
     _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=100, color_temp_kelvin=3000)
     with pytest.raises(vol.Invalid):
-        await _record_write(hass, ["light.a"], scope_device_id=None)
+        await _record_write(hass, ["light.a"], tracking_device_id=None)
 
 
 async def test_record_write_records_everything_passed_once_a_scope_is_given(setup_integration: HomeAssistant):
@@ -499,16 +499,16 @@ async def test_record_write_records_everything_passed_once_a_scope_is_given(setu
     assert sorted(result["recorded"]) == ["light.a", "light.elsewhere"]
 
 
-async def test_scope_device_id_rejects_a_nonexistent_device(setup_integration: HomeAssistant):
+async def test_tracking_device_id_rejects_a_nonexistent_device(setup_integration: HomeAssistant):
     """A typo'd or stale device_id is a caller mistake, not an absent
     scope - it must be loud, not silently treated the same as omitting
-    scope_device_id entirely."""
+    tracking_device_id entirely."""
     hass = setup_integration
     with pytest.raises(ServiceValidationError):
-        await _check(hass, ["light.a"], scope_device_id="not_a_real_device_id")
+        await _check(hass, ["light.a"], tracking_device_id="not_a_real_device_id")
 
 
-async def test_scope_device_id_rejects_a_device_that_isnt_a_tracking_scope(setup_integration: HomeAssistant):
+async def test_tracking_device_id_rejects_a_device_that_isnt_a_tracking_scope(setup_integration: HomeAssistant):
     """Any other device - a schedule sensor's device, or something from
     a completely unrelated integration - is just as much a caller
     mistake as a nonexistent id, and rejected the same way."""
@@ -526,7 +526,7 @@ async def test_scope_device_id_rejects_a_device_that_isnt_a_tracking_scope(setup
     async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=30))
     await hass.async_block_till_done()
     with pytest.raises(ServiceValidationError):
-        await _check(hass, ["light.a"], scope_device_id=other_device.id)
+        await _check(hass, ["light.a"], tracking_device_id=other_device.id)
 
 
 async def test_check_control_does_not_take_force(setup_integration: HomeAssistant):
@@ -625,7 +625,7 @@ async def test_clear_claims_frees_a_light_stuck_overridden(setup_integration: Ho
     assert results["light.a"]["status"] == "overridden"
 
     await hass.services.async_call(
-        DOMAIN, "clear_claims", {"entities": ["light.a"], "scope_device_id": _scope_device_id(hass)}, blocking=True
+        DOMAIN, "clear_claims", {"entities": ["light.a"], "tracking_device_id": _tracking_device_id(hass)}, blocking=True
     )
 
     results = await _check(hass, ["light.a"])
@@ -650,12 +650,49 @@ async def test_clear_claims_is_a_noop_for_an_untracked_entity_within_a_real_scop
     result = await hass.services.async_call(
         DOMAIN,
         "clear_claims",
-        {"entities": ["light.never_tracked"], "scope_device_id": _scope_device_id(hass)},
+        {"entities": ["light.never_tracked"], "tracking_device_id": _tracking_device_id(hass)},
         blocking=True,
         return_response=True,
     )
     assert result == {"cleared": ["light.never_tracked"]}
     assert _registry(hass).all_records() == {}
+
+
+async def test_compute_scene_coverage_requires_a_scene(setup_integration: HomeAssistant):
+    """This service answers a question about one specific scene - with no
+    candidate scene, the caller already knows the answer (nothing's
+    covered) without asking, so the schema says so up front rather than
+    always answering "no scene"."""
+    hass = setup_integration
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(
+            DOMAIN,
+            "compute_scene_coverage",
+            {"scope_entities": ["light.a"], "target_entities": ["light.a"]},
+            blocking=True,
+            return_response=True,
+        )
+
+
+async def test_compute_scene_coverage_reports_covered_and_uncovered_entities(setup_integration: HomeAssistant):
+    hass = setup_integration
+    hass.states.async_set("scene.night", "2024-01-01T00:00:00+00:00", {"entity_id": ["light.a"]})
+    await hass.async_block_till_done()
+
+    result = await hass.services.async_call(
+        DOMAIN,
+        "compute_scene_coverage",
+        {
+            "scene_entity_id": "scene.night",
+            "scope_entities": ["light.a", "light.b"],
+            "target_entities": ["light.a", "light.b"],
+        },
+        blocking=True,
+        return_response=True,
+    )
+    assert result["scene_active"] is True
+    assert result["covered_entities"] == ["light.a"]
+    assert result["uncovered_entities"] == ["light.b"]
 
 
 async def test_override_protection_survives_a_real_write_tracking_round_trip(setup_integration: HomeAssistant):
@@ -1035,7 +1072,7 @@ async def test_force_bypasses_protection_and_reclaims_the_light(setup_integratio
             "entities": ["light.a"],
             "brightness": 180,
             "color_temp_kelvin": 3200,
-            "scope_device_id": _scope_device_id(hass),
+            "tracking_device_id": _tracking_device_id(hass),
         },
         blocking=True,
         return_response=True,
@@ -1203,7 +1240,7 @@ async def test_recovered_light_is_freed_while_an_unrelated_override_stays_protec
             "entities": ["light.recovering", "light.sibling"],
             "brightness": 180,
             "color_temp_kelvin": 3200,
-            "scope_device_id": _scope_device_id(hass),
+            "tracking_device_id": _tracking_device_id(hass),
         },
         blocking=True,
         return_response=True,
@@ -1277,7 +1314,7 @@ async def test_a_restart_style_unavailable_blip_does_not_clear_an_existing_recor
             "entities": ["light.a"],
             "brightness": 180,
             "color_temp_kelvin": 3200,
-            "scope_device_id": _scope_device_id(hass),
+            "tracking_device_id": _tracking_device_id(hass),
         },
         blocking=True,
         return_response=True,

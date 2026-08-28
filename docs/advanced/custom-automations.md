@@ -26,7 +26,7 @@ call one — a YAML automation, a script, Node-RED, AppDaemon — can drive FLAR
 
 {: .note }
 > A FLARE **schedule sensor** for the values, and — if you want override protection — the
-> `scope_device_id` of a **tracking scope** covering the lights. Omit it and the call still
+> `tracking_device_id` of a **tracking scope** covering the lights. Omit it and the call still
 > writes the light, it just isn't tracked, so nothing is ever left alone.
 
 The smallest useful automation reads the schedule sensor and applies it:
@@ -43,7 +43,7 @@ The smallest useful automation reads the schedule sensor and applies it:
         brightness: "{{ state_attr('sensor.ground_floor_flare', 'brightness') }}"
         color_temp_kelvin: "{{ state_attr('sensor.ground_floor_flare', 'color_temp') }}"
         transition: 30
-        scope_device_id: "{{ device_id('sensor.kitchen_flare_tracking') }}"
+        tracking_device_id: "{{ device_id('sensor.kitchen_flare_tracking') }}"
 ```
 
 That is the whole contract. `apply_lighting` handles reachability, tolerance checks,
@@ -54,21 +54,21 @@ whichever scope you name.
 
 Override protection is also two standalone services — `check_control` (read-only) and
 `record_write` — usable on your own entities, with or without `apply_lighting`. Unlike
-`apply_lighting`, both exist only to read or write tracking claims, so `scope_device_id`
+`apply_lighting`, both exist only to read or write tracking claims, so `tracking_device_id`
 is **required** on each — there's nothing useful either can do without one:
 
 ```yaml
 action: flare.check_control
 data:
   entities: [light.kitchen_1]
-  scope_device_id: "{{ device_id('sensor.kitchen_flare_tracking') }}"
+  tracking_device_id: "{{ device_id('sensor.kitchen_flare_tracking') }}"
 response_variable: control
 # control.results["light.kitchen_1"] ->
 #   {"blocked": false, "status": "controlled", "matched_via": "latest-context", "scope": "Kitchen"}
 # matched_via is "context" (a direct match on either of the claim's context ids) or "value" (the
 # delayed-echo/mired rescue above, against either claim's target) for a `controlled` status, null
 # otherwise - useful for understanding *why* a light is considered ours, not just that it is.
-# "scope" simply echoes scope_device_id's own title back.
+# "scope" simply echoes tracking_device_id's own title back.
 ```
 
 ```yaml
@@ -76,7 +76,7 @@ response_variable: control
 action: flare.record_write
 data:
   entities: [light.kitchen_1]
-  scope_device_id: "{{ device_id('sensor.kitchen_flare_tracking') }}"
+  tracking_device_id: "{{ device_id('sensor.kitchen_flare_tracking') }}"
   targets:
     light.kitchen_1: { brightness: 200, color_temp_kelvin: 3000 }
 ```
@@ -92,7 +92,7 @@ further from the current one and it cannot recover on its own:
 action: flare.clear_claims
 data:
   entities: [light.kitchen_1]
-  scope_device_id: "{{ device_id('sensor.kitchen_flare_tracking') }}"
+  tracking_device_id: "{{ device_id('sensor.kitchen_flare_tracking') }}"
 ```
 
 The next write to a cleared entity is treated like a brand-new entity's first write. Each

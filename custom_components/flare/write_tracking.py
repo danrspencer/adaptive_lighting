@@ -226,10 +226,10 @@ class ClaimRegistry:
         return None
 
     def resolve_scope_device(self, device_id: str | None) -> str | None:
-        """Turns a service call's scope_device_id into the subentry_id
+        """Turns a service call's tracking_device_id into the subentry_id
         every read/write method below actually wants.
 
-        None in, None out: omitting scope_device_id means "don't track
+        None in, None out: omitting tracking_device_id means "don't track
         this write", not "go find out where it belongs" - the caller
         said nothing, so nothing is recorded, same as every other
         untracked-light case. A device_id that IS given but isn't one of

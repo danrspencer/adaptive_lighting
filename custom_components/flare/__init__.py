@@ -118,7 +118,7 @@ COMPUTE_LIGHTING_GROUPS_SCHEMA = vol.Schema(
         # already externally-set. vol.Any(None, ...), same reasoning as
         # rgb_color above: the blueprint renders an explicit Jinja None
         # when it can't resolve a scope, not an omitted key.
-        vol.Optional("scope_device_id"): vol.Any(None, cv.string),
+        vol.Optional("tracking_device_id"): vol.Any(None, cv.string),
     }
 )
 
@@ -140,7 +140,13 @@ COMPUTE_CURVE_SCHEMA = vol.Schema(
 
 COMPUTE_SCENE_COVERAGE_SCHEMA = vol.Schema(
     {
-        vol.Optional("scene_entity_id"): cv.entity_id,
+        # Required, not vol.Optional: this service answers a question
+        # about one specific scene - with no candidate scene, the caller
+        # already knows the answer (nothing's covered, everything falls
+        # to their own default) without asking, the same reasoning as
+        # CHECK_CONTROL_SCHEMA/RECORD_WRITE_SCHEMA/CLEAR_CLAIMS_SCHEMA
+        # above for tracking_device_id.
+        vol.Required("scene_entity_id"): cv.entity_id,
         vol.Required("scope_entities"): [cv.entity_id],
         vol.Required("target_entities"): [cv.entity_id],
     }
@@ -167,7 +173,7 @@ APPLY_LIGHTING_SCHEMA = vol.Schema(
         # already externally-set. vol.Any(None, ...), same reasoning as
         # rgb_color above: the blueprint renders an explicit Jinja None
         # when it can't resolve a scope, not an omitted key.
-        vol.Optional("scope_device_id"): vol.Any(None, cv.string),
+        vol.Optional("tracking_device_id"): vol.Any(None, cv.string),
     }
 )
 
@@ -181,7 +187,7 @@ APPLY_LIGHTING_SCHEMA = vol.Schema(
 CHECK_CONTROL_SCHEMA = vol.Schema(
     {
         vol.Required("entities"): [cv.entity_id],
-        vol.Required("scope_device_id"): cv.string,
+        vol.Required("tracking_device_id"): cv.string,
         vol.Optional("brightness_tolerance", default=2): vol.Coerce(int),
         vol.Optional("color_temp_tolerance", default=10): vol.Coerce(int),
         vol.Optional("rgb_color_tolerance", default=10): vol.Coerce(int),
@@ -191,7 +197,7 @@ CHECK_CONTROL_SCHEMA = vol.Schema(
 RECORD_WRITE_SCHEMA = vol.Schema(
     {
         vol.Required("entities"): [cv.entity_id],
-        vol.Required("scope_device_id"): cv.string,
+        vol.Required("tracking_device_id"): cv.string,
         vol.Optional("targets", default=dict): dict,
     }
 )
@@ -199,7 +205,7 @@ RECORD_WRITE_SCHEMA = vol.Schema(
 CLEAR_CLAIMS_SCHEMA = vol.Schema(
     {
         vol.Required("entities"): [cv.entity_id],
-        vol.Required("scope_device_id"): cv.string,
+        vol.Required("tracking_device_id"): cv.string,
     }
 )
 
@@ -460,7 +466,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         see services.yaml for field docs.
         """
         rgb_color = call.data.get("rgb_color")
-        scope = write_tracker.resolve_scope_device(call.data.get("scope_device_id"))
+        scope = write_tracker.resolve_scope_device(call.data.get("tracking_device_id"))
         groups = build_groups(
             entities=call.data["entities"],
             brightness_multipliers=call.data["brightness_multipliers"],
@@ -513,14 +519,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         shape as compute_lighting_groups for introspection, but nothing
         requires capturing it - see services.yaml for field docs.
 
-        scope_device_id (optional): which FLARE tracking scope this
+        tracking_device_id (optional): which FLARE tracking scope this
         write belongs to, for override protection. Omitting it writes
         the light(s) without recording anything - no claim, and nothing
         excluded as already externally-set.
 
         force (optional, default false): bypasses externally-set
         protection outright for this call. The write is still recorded
-        against scope_device_id if one was given, so a later, non-forced
+        against tracking_device_id if one was given, so a later, non-forced
         call against that same scope correctly recognises it as its own
         rather than finding an orphaned record - the right way to force
         through *and* keep protection working normally afterward. See
@@ -532,7 +538,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         color_temp_kelvin = call.data["color_temp_kelvin"]
         rgb_color_raw = call.data.get("rgb_color")
         rgb_color = tuple(rgb_color_raw) if rgb_color_raw else None
-        scope = write_tracker.resolve_scope_device(call.data.get("scope_device_id"))
+        scope = write_tracker.resolve_scope_device(call.data.get("tracking_device_id"))
         lookup = _build_lookup(hass, write_tracker, scope)
         groups = build_groups(
             entities=call.data["entities"],
@@ -716,10 +722,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "overridden"; "matched_via" is "latest-context",
         "latest-value", "observed-context" or "observed-value" for a
         "controlled" status and null otherwise; "scope" echoes back
-        scope_device_id's own title. See override_protection.classify()
+        tracking_device_id's own title. See override_protection.classify()
         and services.yaml.
 
-        scope_device_id (required): which FLARE tracking scope to check
+        tracking_device_id (required): which FLARE tracking scope to check
         against - this service exists only to answer questions about
         tracking, so unlike apply_lighting there's nothing useful to do
         without one.
@@ -727,7 +733,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         brightness_tolerance = call.data["brightness_tolerance"]
         color_temp_tolerance = call.data["color_temp_tolerance"]
         rgb_color_tolerance = call.data["rgb_color_tolerance"]
-        scope = write_tracker.resolve_scope_device(call.data["scope_device_id"])
+        scope = write_tracker.resolve_scope_device(call.data["tracking_device_id"])
         scope_title = write_tracker.title_for_scope(scope)
         results: dict[str, Any] = {}
         for entity_id in call.data["entities"]:
@@ -793,13 +799,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         request back verbatim would tell a caller their write was
         tracked when nothing had happened.
 
-        scope_device_id (required): which FLARE tracking scope to record
+        tracking_device_id (required): which FLARE tracking scope to record
         into - this service exists only to write tracking claims, so
         unlike apply_lighting there's nothing useful to do without one.
         """
         entities = call.data["entities"]
         targets = call.data.get("targets", {})
-        scope = write_tracker.resolve_scope_device(call.data["scope_device_id"])
+        scope = write_tracker.resolve_scope_device(call.data["tracking_device_id"])
         live_context_before_write = {
             e: (state.context.id if (state := hass.states.get(e)) is not None else None) for e in entities
         }
@@ -811,7 +817,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         """flare.clear_claims
 
         Discards `entities`' tracked observed/latest claims within
-        scope_device_id - the manual escape hatch for a light stuck
+        tracking_device_id - the manual escape hatch for a light stuck
         "overridden" with no other way back (see write_tracking.py's
         async_clear docstring for why that can happen on its own for a
         light that never actually went unavailable). The next write to a
@@ -821,13 +827,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         Returns: {"cleared": [...]} - the entity_ids passed through.
 
-        scope_device_id (required): which FLARE tracking scope to clear
+        tracking_device_id (required): which FLARE tracking scope to clear
         entities out of - this service exists only to discard tracking
         claims, so unlike apply_lighting there's nothing useful to do
         without one.
         """
         entities = call.data["entities"]
-        scope = write_tracker.resolve_scope_device(call.data["scope_device_id"])
+        scope = write_tracker.resolve_scope_device(call.data["tracking_device_id"])
         await write_tracker.async_clear(scope, entities)
         return {"cleared": entities}
 
@@ -838,7 +844,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         "uncovered_entities"} - see services.yaml for field docs.
         """
         result = compute_scene_coverage(
-            scene_entity_id=call.data.get("scene_entity_id"),
+            scene_entity_id=call.data["scene_entity_id"],
             scope_entities=call.data["scope_entities"],
             target_entities=call.data["target_entities"],
             lookup=_build_scene_lookup(hass),

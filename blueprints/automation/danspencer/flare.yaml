@@ -755,7 +755,7 @@ action:
             # *hand* turn-off as. Skipped entirely with no resolvable
             # scope: recording accomplishes nothing when nothing is
             # tracking these lights, and record_write now requires
-            # scope_device_id rather than treating it as optional.
+            # tracking_device_id rather than treating it as optional.
             if:
               - condition: template
                 value_template: "{{ tracking_scope_device_id is not none }}"
@@ -763,7 +763,7 @@ action:
               - action: flare.record_write
                 data:
                   entities: "{{ reachable_entities }}"
-                  scope_device_id: "{{ tracking_scope_device_id }}"
+                  tracking_device_id: "{{ tracking_scope_device_id }}"
                   # dict(a, **b) rather than dict.fromkeys: the same
                   # construct used for the brightness multipliers below,
                   # and known to work in HA's Jinja.
@@ -844,7 +844,7 @@ action:
               - action: flare.record_write
                 data:
                   entities: "{{ entities_still_on }}"
-                  scope_device_id: "{{ tracking_scope_device_id }}"
+                  tracking_device_id: "{{ tracking_scope_device_id }}"
                   targets: >-
                     {% set ns = namespace(t={}) %}
                     {% for e in entities_still_on %}
@@ -880,7 +880,7 @@ action:
           - action: flare.clear_claims
             data:
               entities: "{{ handed_off_entities }}"
-              scope_device_id: "{{ tracking_scope_device_id }}"
+              tracking_device_id: "{{ tracking_scope_device_id }}"
       # Reachability, multiplier bucketing, tolerance checks, override
       # protection, two-step/combined routing and RGB-vs-colour-temp
       # dispatch all live in the FLARE integration
@@ -910,7 +910,7 @@ action:
             rgb_color: "{{ rgb_color }}"
             transition: "{{ script_transition }}"
             prefer_rgb_color: "{{ prefer_rgb_color }}"
-            scope_device_id: "{{ tracking_scope_device_id }}"
+            tracking_device_id: "{{ tracking_scope_device_id }}"
             # A manual run (someone hit "Run" on this automation, or
             # called automation.trigger directly) forces the whole tick
             # through regardless of override protection.

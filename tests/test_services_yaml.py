@@ -22,11 +22,11 @@ SERVICES = yaml.safe_load(
 
 # compute_lighting_groups only *reports* what it would do; apply_lighting
 # actually dispatches. These two describe that difference, so their wording
-# is deliberately not shared. scope_device_id joins them for the same
+# is deliberately not shared. tracking_device_id joins them for the same
 # reason: compute_lighting_groups never writes, so it only ever *reads*
 # the named scope's claims to decide what's already externally-set,
 # where apply_lighting's copy describes recording a write into it.
-INTENTIONALLY_DIFFERENT = {"prefer_rgb_color", "two_step_label", "scope_device_id"}
+INTENTIONALLY_DIFFERENT = {"prefer_rgb_color", "two_step_label", "tracking_device_id"}
 
 
 def _shared_fields():

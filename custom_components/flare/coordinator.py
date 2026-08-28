@@ -201,7 +201,7 @@ class StateInstance:
             identifiers={(DOMAIN, self.subentry_id)},
             name=self.title or "Adaptive Lighting State",
             entry_type=DeviceEntryType.SERVICE,
-            # Lets services.yaml's scope_device_id device selector filter
+            # Lets services.yaml's tracking_device_id device selector filter
             # to tracking-scope devices specifically - ScheduleInstance's
             # own device_info shares this integration's DOMAIN, so a bare
             # `integration: flare` filter alone can't tell the two apart.
