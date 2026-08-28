@@ -1,5 +1,5 @@
 """
-Integration tests for blueprints/automation/danspencer/adaptive_lighting.yaml
+Integration tests for blueprints/automation/danspencer/flare.yaml
 itself - through a real Home Assistant automation/blueprint/template-
 trigger engine, not just YAML parsing or isolated template snippets.
 
@@ -26,7 +26,7 @@ for the two incidents above.
 
 Doesn't re-prove grouping.py's own tolerance/two-step/RGB logic (see
 tests/test_grouping.py) or curve.py's brightness/Kelvin math (see
-tests/test_curve.py) - `adaptive_lighting_helpers.apply_lighting` is
+tests/test_curve.py) - `flare.apply_lighting` is
 mocked here via async_mock_service, so these tests are entirely about
 what the blueprint decides to call it *with*, for a given trigger and
 room state.
@@ -48,7 +48,7 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.setup import async_setup_component
 from homeassistant.util import dt as dt_util
 
-BLUEPRINT_PATH = "danspencer/adaptive_lighting.yaml"
+BLUEPRINT_PATH = "danspencer/flare.yaml"
 
 
 async def _setup_room_automation(
@@ -88,7 +88,7 @@ def _occupancy(hass: HomeAssistant, entity_id: str, state: str) -> None:
 
 @pytest.fixture
 def apply_lighting_calls(hass: HomeAssistant):
-    return async_mock_service(hass, "adaptive_lighting_helpers", "apply_lighting")
+    return async_mock_service(hass, "flare", "apply_lighting")
 
 
 @pytest.fixture
@@ -106,13 +106,13 @@ def clear_claims_calls(hass: HomeAssistant):
     """Autouse because the blueprint releases handed-off lights on every
     tick that has any, in rooms these tests aren't otherwise asserting
     about - an unmocked service call would fail those runs outright."""
-    return async_mock_service(hass, "adaptive_lighting_helpers", "clear_claims")
+    return async_mock_service(hass, "flare", "clear_claims")
 
 
 @pytest.fixture(autouse=True)
 def _sensor(hass: HomeAssistant):
     """The adaptive sensor every test automation points at - a plain
-    state, no real adaptive_lighting_helpers entity needed since the
+    state, no real flare entity needed since the
     blueprint only ever reads its state (for phase/rgb_phases) and
     passes its entity_id straight through to apply_lighting, which is
     mocked in these tests. Phase defaults to "Day" - outside the
@@ -929,7 +929,7 @@ class TestRecoveredTrigger:
 class TestSceneHandoff:
     """docs/blueprint.md#scene-handoff"""
 
-    async def test_valid_scene_activates_via_a_phase_change_and_adaptive_lighting_only_covers_uncovered_entities(
+    async def test_valid_scene_activates_via_a_phase_change_and_flare_only_covers_uncovered_entities(
         self, hass, apply_lighting_calls, scene_turn_on_calls
     ):
         """Regression test for a real bug: an earlier version suppressed

@@ -1,4 +1,4 @@
-DOMAIN = "adaptive_lighting_helpers"
+DOMAIN = "flare"
 
 # The optional day-phase/curve sensors and the phase-override select share
 # these - see coordinator.py, sensor.py, select.py.
@@ -31,7 +31,7 @@ CONF_TARGET = "target"
 # the live values at that instant, which is the thing you can't
 # reconstruct afterwards: by the time anyone looks, the curve has moved
 # and the evidence is gone. See sensor.py's _refresh_statuses.
-EVENT_LIGHT_OVERRIDDEN = "adaptive_lighting_helpers_light_overridden"
+EVENT_LIGHT_OVERRIDDEN = "flare_light_overridden"
 
 # This integration installs as two separate config entries rather than
 # one, so the integration page shows two top-level blocks - schedules and

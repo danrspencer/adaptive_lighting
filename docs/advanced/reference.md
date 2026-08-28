@@ -1,16 +1,27 @@
 ---
 title: Integration reference
-nav_order: 5
-permalink: /helpers/
+parent: Power users
+nav_order: 1
+permalink: /advanced/reference/
 render_with_liquid: false
-# Liquid is off for this page: it contains Home Assistant Jinja,
-# which shares Liquid's {{ }} delimiters. With Liquid on, those
-# examples render as empty strings and nothing errors. That also
-# means no relative_url filter here - links are plain relative
-# paths, which need no baseurl to be right.
+# Liquid is off for this page: it contains Home Assistant Jinja, which
+# shares Liquid's {{ }} delimiters. With Liquid on, those examples render
+# as empty strings and nothing errors - see tests/test_docs_site.py.
 ---
 
-# Adaptive Lighting Helpers — service & sensor reference
+# Integration reference
+{: .no_toc }
+
+The services FLARE registers, and the override-protection machinery behind them.
+
+<details open markdown="block">
+  <summary>On this page</summary>
+  {: .text-delta }
+1. TOC
+{:toc}
+</details>
+
+# FLARE — service & sensor reference
 {: .no_toc }
 
 <details open markdown="block">
@@ -21,25 +32,25 @@ render_with_liquid: false
 </details>
 
 
-> Part of [Adaptive Lighting](../) — see there for why this project is shaped the way it is
+> Part of [FLARE](../) — see there for why this project is shaped the way it is
 > (in particular, [why the schedule has four named phases](../#why-four-phases-not-a-continuous-curve)
 > rather than a single continuous curve) and how to install it.
 
 Seven services, each documented in full in `services.yaml` (visible in Home Assistant's Developer Tools → Actions
 once installed) — call them directly from your own automations or scripts, no blueprint required.
 
-## `adaptive_lighting_helpers.apply_lighting`
+## `flare.apply_lighting`
 
 The "just make it happen" service: given a target brightness/colour-temperature (and optionally RGB colour) as
 plain values, actually turns entities on/off via `light.turn_on`/`light.turn_off`, handling reachability,
 tolerance, override protection, two-step transitions, and RGB-vs-colour-temp dispatch internally. Neither this
 nor `compute_lighting_groups` reads any sensor entity - if you're feeding these values from a sensor's own
-attributes (the adaptive_lighting blueprint in this repo does exactly that, reading its own Adaptive Lighting
+attributes (the adaptive_lighting blueprint in this repo does exactly that, reading its own FLARE
 Sensor input - see [the blueprint reference](../blueprint/#bring-your-own-sensor) for the attribute contract that
 relies on), that's an ordinary template on the caller's side, not something this service does for you.
 
 ```yaml
-action: adaptive_lighting_helpers.apply_lighting
+action: flare.apply_lighting
 data:
   entities: [light.kitchen_1, light.kitchen_2]
   brightness: 200
@@ -57,7 +68,7 @@ another automation — and pick it up again when they let go. That needs an answ
 this light *ours*", which is what the claims below record.
 
 **Claims belong to a state device, not to a caller.** A state device is a named tracking scope you configure
-(Settings → Devices & Services → **Adaptive Lighting Tracking** → Add state device), pointed at an area, some
+(Settings → Devices & Services → **FLARE Tracking** → Add state device), pointed at an area, some
 devices, or specific lights. Every light resolves to exactly one:
 
 1. a state device whose target names the **entity**
@@ -100,61 +111,10 @@ Claims are not persisted. These are lighting overrides — losing them means a b
 back to being managed. After a restart nothing is tracked, so every light is manageable, which is exactly the
 state you'd want anyway.
 
-
-### Using override protection standalone
-
-Everything above is also its own pair of services - `check_control` (read-only) and `record_write`
-(records a write) - not specific to lights, or to this integration's own `apply_lighting`. Any automation can
-use them directly on its own entities:
-
-```yaml
-action: adaptive_lighting_helpers.check_control
-data:
-  entities: [light.kitchen_1]
-response_variable: control
-# control.results["light.kitchen_1"] ->
-#   {"blocked": false, "status": "controlled", "matched_via": "latest-context", "scope": "Kitchen"}
-# matched_via is "context" (a direct match on either of the claim's context ids) or "value" (the
-# delayed-echo/mired rescue above, against either claim's target) for a `controlled` status, null
-# otherwise - useful for understanding *why* a light is considered ours, not just that it is.
-```
-
-```yaml
-# After actually issuing your own light.turn_on, so a later check_control call recognises it as yours:
-action: adaptive_lighting_helpers.record_write
-data:
-  entities: [light.kitchen_1]
-  targets:
-    light.kitchen_1: { brightness: 200, color_temp_kelvin: 3000 }
-```
-
-`apply_lighting`/`compute_lighting_groups` use the exact same underlying logic internally (a direct Python
-call, not a service-to-service round trip) - `check_control`'s `status` values are the same ones
-each state device's `claims` attribute shows (see below), and `targets` is the same shape `apply_lighting`
-itself records automatically on every write it makes.
-
-A third service, `clear_claims`, is the manual escape hatch for a light stuck reporting `overridden` with no
-other way back - possible because `apply_lighting`/`compute_lighting_groups` never call `record_write`
-internally for anything already excluded, so an overridden light's own `latest` claim can go permanently stale
-(most concretely: during a ramping curve, once its recorded target drifts more than a tick or two away from
-where the curve has since moved on to):
-
-```yaml
-action: adaptive_lighting_helpers.clear_claims
-data:
-  entities: [light.kitchen_1]
-```
-
-The next write to a cleared entity, from anyone, is treated exactly like a brand-new entity's first write - no
-owner-conflict check is possible until a fresh claim exists to compare against. The **Adaptive Lighting Write
-Tracking** dashboard card exposes this as a "Clear" button on every row, no confirmation prompt - it's a
-diagnostic bookkeeping entry, not the light itself, and a fresh claim gets re-established the moment anything
-next writes to that entity.
-
 ### The hand-over event
 
 Every time a tracked light passes into someone else's hands, this fires
-`adaptive_lighting_helpers_light_overridden` carrying a full snapshot of that moment:
+`flare_light_overridden` carrying a full snapshot of that moment:
 
 ```yaml
 entity_id: light.kitchen_1
@@ -186,7 +146,7 @@ Trigger on it like any event:
 ```yaml
 trigger:
   - platform: event
-    event_type: adaptive_lighting_helpers_light_overridden
+    event_type: flare_light_overridden
 ```
 
 ### The state device's entities
@@ -195,10 +155,10 @@ Each state device carries four entities, all on its own device so they're rename
 
 | entity | |
 |---|---|
-| `sensor.<name>_adaptive_tracking` | **the claims themselves.** State is the number of lights tracked; the `claims` attribute holds the per-light `observed`/`latest` records |
-| `sensor.<name>_adaptive_controlled` | how many of its lights it is currently driving |
-| `sensor.<name>_adaptive_overridden` | how many are currently held by something else |
-| `button.<name>_adaptive_clear` | press to discard this scope's tracked state |
+| `sensor.<name>_flare_tracking` | **the claims themselves.** State is the number of lights tracked; the `claims` attribute holds the per-light `observed`/`latest` records |
+| `sensor.<name>_flare_controlled` | how many of its lights it is currently driving |
+| `sensor.<name>_flare_overridden` | how many are currently held by something else |
+| `button.<name>_flare_clear` | press to discard this scope's tracked state |
 
 The tracking sensor is the storage, not a view of it — what you see in Developer Tools is the same object
 override protection acts on. Its `claims` attribute is excluded from the recorder (it changes on every tick
@@ -216,10 +176,9 @@ reset rather than one that depends on agreeing about which lights are stuck. The
 lights lose their claims too, so each is unprotected until its next write. For a live room automation that's
 one tick.
 
-
 ### Inspecting tracked state
 
-Each state device's `sensor.<name>_adaptive_tracking` makes the mechanism above inspectable directly, rather
+Each state device's `sensor.<name>_flare_tracking` makes the mechanism above inspectable directly, rather
 than only indirectly through `compute_lighting_groups`'s `combined`/`needing_off` output (which tells you
 *whether* a light is currently excluded, never *why*). Its `claims` attribute holds, per light, the raw
 `observed`/`latest` records. `check_control` turns those into the computed `status` and `matched_via` -
@@ -258,8 +217,7 @@ the claim was stamped. Combined with the claim's `context_id`, that is enough to
 actually happened via HA's own logbook (`logbook/get_events`, filtered by `context_id`) over a narrow window
 around `recorded_at`.
 
-
-## `adaptive_lighting_helpers.compute_lighting_groups`
+## `flare.compute_lighting_groups`
 
 The pure-planner version of `apply_lighting`: given a set of light entities, a target brightness/colour-temperature,
 and optional per-light brightness multipliers, returns the minimal set of groups actually needing a
@@ -269,7 +227,7 @@ two-step transitions — without touching any light itself. Use this instead of 
 dispatch the calls yourself (custom transition curves, logging, etc.).
 
 ```yaml
-action: adaptive_lighting_helpers.compute_lighting_groups
+action: flare.compute_lighting_groups
 data:
   entities: [light.kitchen_1, light.kitchen_2]
   brightness: 200
@@ -289,14 +247,14 @@ below (or `sensor.adaptive_lighting`'s own `rgb_color` attribute) for where that
 own. `rgb_color` can be left unset, or passed explicitly as `null` (useful if you're templating it from a source
 that doesn't always have one) — either way it's simply ignored unless `prefer_rgb_color` is also on.
 
-## `adaptive_lighting_helpers.compute_curve`
+## `flare.compute_curve`
 
 Given today's morning/day/evening/night phase-boundary timestamps, returns the target brightness, colour
 temperature, RGB colour, and phase name for a given instant (or now). Useful for building your own day-phase
 sensor without any of the rest of this project.
 
 ```yaml
-action: adaptive_lighting_helpers.compute_curve
+action: flare.compute_curve
 data:
   morning: "{{ today_at('06:00:00') | as_timestamp }}"
   day: "{{ today_at('08:00:00') | as_timestamp }}"
@@ -318,24 +276,6 @@ response_variable: now
 `rgb_color` is just the Kelvin → RGB conversion of `kelvin` - useful as a ready-made `rgb_color` value for
 `apply_lighting`/`compute_lighting_groups`'s `prefer_rgb_color` path even when you're not using RGB bulbs any
 differently from colour-temperature ones.
-
-## `adaptive_lighting_helpers.compute_scene_coverage`
-
-Given a candidate scene and the entities you want a default behaviour applied to, works out which of those
-entities the scene actually covers — hand covered ones to the scene, apply your default (adaptive lighting or
-anything else) to whatever's left. A scene only counts if it exists and everything it covers is within
-`scope_entities`; a scene reaching outside that scope, or one that doesn't exist, is treated the same as no scene
-at all. Nothing here is specific to adaptive lighting, or even to lighting.
-
-```yaml
-action: adaptive_lighting_helpers.compute_scene_coverage
-data:
-  scene_entity_id: scene.kitchen_night
-  scope_entities: [light.kitchen_1, light.kitchen_2, light.kitchen_strip_effect]
-  target_entities: [light.kitchen_1, light.kitchen_2]
-response_variable: coverage
-# coverage.scene_active / scene_valid / covered_entities / uncovered_entities
-```
 
 ## Two-step transition bulbs
 
@@ -361,7 +301,7 @@ devices, creating the label itself (with the correct id) if it doesn't already e
 the entity or device registry changes, so pairing a new bulb surfaces it without a restart, and the repair
 clears itself once the labels are in place.
 
-The model list lives in the integration's options (Settings → Devices & Services → Adaptive Lighting Helpers →
+The model list lives in the integration's options (Settings → Devices & Services → FLARE →
 **Configure**), one glob per line. The box comes **pre-filled with the shipped defaults**, so what you see there
 is the complete list the check uses — you can add to it or delete from it, and a pattern you remove is genuinely
 gone rather than being re-added from a hidden layer underneath.
@@ -370,7 +310,7 @@ Patterns are case-insensitive globs matched against `"<manufacturer> <model>"`, 
 `IKEA*` work. Clearing the box entirely falls back to the shipped defaults rather than disabling detection — to
 stop being told about unlabelled bulbs, [ignore the repair](#dismissing-the-repair) instead.
 
-The shipped defaults live in `custom_components/adaptive_lighting_helpers/two_step.py` as
+The shipped defaults live in `custom_components/flare/two_step.py` as
 `DEFAULT_TWO_STEP_MODEL_PATTERNS` (currently just `*TRADFRI bulb*`). Adding a newly discovered bulb there is a
 one-line PR — that's the intended way to contribute one, and it reaches every install that hasn't customised
 the field. **Once you save your own list, it's yours**: later releases adding models won't change it, which is
@@ -393,7 +333,7 @@ bulbs the issue clears itself as normal.
 ## Optional: day-phase/curve sensors
 
 If you'd rather have this running continuously as sensors than call `compute_curve` yourself, add a sensor from
-the integration's own page (Settings → Devices & Services → Adaptive Lighting Helpers → Add Sensor) — just a
+the integration's own page (Settings → Devices & Services → FLARE → Add Sensor) — just a
 name. Adding the integration itself needs no configuration and sets up nothing beyond the services above; a
 schedule only exists once you add a sensor.
 
@@ -419,7 +359,7 @@ usable from dashboards/automations, without being sixteen always-visible entitie
 This replaces what used to be a config-flow form only reachable via Configure - the schedule/curve values are now
 just entities like anything else, immediately visible and editable from the device page, no separate step needed.
 
-Point the blueprint's Adaptive Lighting Sensor input (or your own template reading the same attributes into
+Point the blueprint's FLARE Sensor input (or your own template reading the same attributes into
 `apply_lighting`'s `brightness`/`color_temp_kelvin`/`rgb_color` fields) at whichever sensor's
 `sensor.<name_>adaptive_lighting` you want. A sensor's whole device is removable later from the
 integration's page; there's no reconfigure form since there's nothing left to reconfigure that way - edit the

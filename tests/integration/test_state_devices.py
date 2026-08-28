@@ -17,17 +17,17 @@ from homeassistant.helpers import area_registry as ar, device_registry as dr, en
 from pytest_homeassistant_custom_component.common import MockConfigEntry, async_fire_time_changed, mock_component
 from homeassistant.util import dt as dt_util
 
-from custom_components.adaptive_lighting_helpers.button import async_setup_entry as button_setup
-from custom_components.adaptive_lighting_helpers.const import (
+from custom_components.flare.button import async_setup_entry as button_setup
+from custom_components.flare.const import (
     CONF_ENTRY_TYPE,
     CONF_TARGET,
     DOMAIN,
     ENTRY_TYPE_TRACKING,
     SUBENTRY_TYPE_STATE,
 )
-from custom_components.adaptive_lighting_helpers.coordinator import state_instances
-from custom_components.adaptive_lighting_helpers.sensor import async_setup_entry as sensor_setup
-from custom_components.adaptive_lighting_helpers.write_tracking import ClaimRegistry
+from custom_components.flare.coordinator import state_instances
+from custom_components.flare.sensor import async_setup_entry as sensor_setup
+from custom_components.flare.write_tracking import ClaimRegistry
 
 
 def _scope(title: str, target: dict) -> ConfigSubentryData:
@@ -178,8 +178,8 @@ async def test_claims_live_on_the_tracking_entity_and_are_published_there(hass: 
 async def test_counters_split_one_scopes_lights_by_status(hass: HomeAssistant):
     area = ar.async_get(hass).async_get_or_create("Kitchen")
     _entry, registry, added = await _setup(hass, _scope("Kitchen", {"area_id": [area.id]}))
-    controlled = next(e for e in added if e.entity_id.endswith("_adaptive_controlled"))
-    overridden = next(e for e in added if e.entity_id.endswith("_adaptive_overridden"))
+    controlled = next(e for e in added if e.entity_id.endswith("_flare_controlled"))
+    overridden = next(e for e in added if e.entity_id.endswith("_flare_overridden"))
 
     ours = Context()
     _light(hass, "light.mine", area_id=area.id)
@@ -238,7 +238,7 @@ async def test_the_clear_button_clears_only_its_own_scope(hass: HomeAssistant):
     await _record(registry, "light.k", "ctx-k", {"brightness": 200, "color_temp_kelvin": 3000})
     await _record(registry, "light.h", "ctx-h", {"brightness": 200, "color_temp_kelvin": 3000})
 
-    kitchen_button = next(e for e in added if e.entity_id == "button.kitchen_adaptive_clear")
+    kitchen_button = next(e for e in added if e.entity_id == "button.kitchen_flare_clear")
     assert kitchen_button.extra_state_attributes["tracked"] == 1
     await kitchen_button.async_press()
 
@@ -262,7 +262,7 @@ async def test_the_override_event_carries_the_scopes_device_id(hass: HomeAssista
     tracker = next(e for e in added if hasattr(e, "claims"))
 
     events: list = []
-    hass.bus.async_listen("adaptive_lighting_helpers_light_overridden", events.append)
+    hass.bus.async_listen("flare_light_overridden", events.append)
 
     _light(hass, "light.a", area_id=area.id)
     await _record(registry, "light.a", "ctx-ours", {"brightness": 200, "color_temp_kelvin": 3000})
@@ -288,7 +288,7 @@ async def test_the_event_omits_device_id_when_there_is_no_device(hass: HomeAssis
     tracker = next(e for e in added if hasattr(e, "claims"))
 
     events: list = []
-    hass.bus.async_listen("adaptive_lighting_helpers_light_overridden", events.append)
+    hass.bus.async_listen("flare_light_overridden", events.append)
 
     _light(hass, "light.a", area_id=area.id)
     await _record(registry, "light.a", "ctx-ours", {"brightness": 200, "color_temp_kelvin": 3000})
@@ -369,8 +369,8 @@ async def test_upgrading_splits_the_entry_and_keeps_the_schedule_config(stub_ent
     subentries go; the tracking entry re-seeds equivalents, which cost
     nothing since a scope carries only a target and claims aren't
     persisted."""
-    from custom_components.adaptive_lighting_helpers import async_migrate_entry
-    from custom_components.adaptive_lighting_helpers.const import (
+    from custom_components.flare import async_migrate_entry
+    from custom_components.flare.const import (
         CONF_ENTRY_TYPE as CET,
         ENTRY_TYPE_SCHEDULES,
         SUBENTRY_TYPE_SENSOR,
@@ -408,7 +408,7 @@ async def test_upgrading_splits_the_entry_and_keeps_the_schedule_config(stub_ent
 async def test_upgrading_an_already_migrated_entry_adds_nothing(stub_entry_setup, hass: HomeAssistant):
     """The version bump is the guard, so neither the split nor the
     seeding is redone on the next restart."""
-    from custom_components.adaptive_lighting_helpers import async_migrate_entry
+    from custom_components.flare import async_migrate_entry
 
     kitchen = ar.async_get(hass).async_get_or_create("Kitchen")
     _light(hass, "light.k", area_id=kitchen.id)
@@ -424,7 +424,7 @@ async def test_upgrading_an_already_migrated_entry_adds_nothing(stub_entry_setup
 async def test_a_state_device_lands_in_the_area_it_targets(hass: HomeAssistant):
     """A scope created per area should turn up under that room rather
     than in an unsorted heap."""
-    from custom_components.adaptive_lighting_helpers.sensor import _assign_scope_area
+    from custom_components.flare.sensor import _assign_scope_area
 
     kitchen = ar.async_get(hass).async_get_or_create("Kitchen")
     entry, _registry_, added = await _setup(hass, _scope("Kitchen", {"area_id": [kitchen.id]}))
@@ -444,7 +444,7 @@ async def test_a_state_device_lands_in_the_area_it_targets(hass: HomeAssistant):
 
 async def test_a_scope_spanning_several_areas_is_left_unassigned(hass: HomeAssistant):
     """No single right answer, so no guess."""
-    from custom_components.adaptive_lighting_helpers.sensor import _assign_scope_area
+    from custom_components.flare.sensor import _assign_scope_area
 
     kitchen = ar.async_get(hass).async_get_or_create("Kitchen")
     hall = ar.async_get(hass).async_get_or_create("Hall")
@@ -473,7 +473,7 @@ async def test_counters_refresh_when_a_lights_live_state_changes(hass: HomeAssis
     area = ar.async_get(hass).async_get_or_create("Kitchen")
     _entry, registry, added = await _setup(hass, _scope("Kitchen", {"area_id": [area.id]}))
     tracker = next(e for e in added if hasattr(e, "claims"))
-    overridden = next(e for e in added if e.entity_id.endswith("_adaptive_overridden"))
+    overridden = next(e for e in added if e.entity_id.endswith("_flare_overridden"))
 
     _light(hass, "light.a", area_id=area.id)
     await _record(registry, "light.a", "ctx-ours", {"brightness": 200, "color_temp_kelvin": 3000})
@@ -483,7 +483,7 @@ async def test_counters_refresh_when_a_lights_live_state_changes(hass: HomeAssis
     refreshed: list = []
     from homeassistant.helpers.dispatcher import async_dispatcher_connect
 
-    from custom_components.adaptive_lighting_helpers.write_tracking import SIGNAL_WRITE_TRACKING_UPDATED
+    from custom_components.flare.write_tracking import SIGNAL_WRITE_TRACKING_UPDATED
 
     async_dispatcher_connect(hass, SIGNAL_WRITE_TRACKING_UPDATED, lambda: refreshed.append(True))
 
@@ -501,12 +501,12 @@ async def test_each_entry_type_owns_only_its_own_sensors(hass: HomeAssistant):
     which entities belong to which is load-bearing: without it a
     schedules entry would try to build tracking entities (and look up a
     claim registry it doesn't have), and vice versa."""
-    from custom_components.adaptive_lighting_helpers.const import (
+    from custom_components.flare.const import (
         CONF_ENTRY_TYPE as CET,
         ENTRY_TYPE_SCHEDULES,
         SUBENTRY_TYPE_SENSOR,
     )
-    from custom_components.adaptive_lighting_helpers.coordinator import ScheduleCoordinator, schedule_instances
+    from custom_components.flare.coordinator import ScheduleCoordinator, schedule_instances
 
     entry = MockConfigEntry(
         domain=DOMAIN,
@@ -529,6 +529,6 @@ async def test_each_entry_type_owns_only_its_own_sensors(hass: HomeAssistant):
     added: list = []
     await sensor_setup(hass, entry, lambda entities, **kw: added.extend(entities))
 
-    assert [e.entity_id for e in added] == ["sensor.ground_floor_adaptive_lighting"]
+    assert [e.entity_id for e in added] == ["sensor.ground_floor_flare"]
     # No claims storage on a schedules entry - it has no registry at all.
     assert not any(hasattr(e, "claims") for e in added)

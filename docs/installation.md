@@ -1,134 +1,96 @@
 ---
-title: Installation
-nav_order: 3
+title: Quickstart
+nav_order: 2
+permalink: /installation/
 ---
 
-# Installation
+# Quickstart
 {: .no_toc }
 
-Two separate installs, done in order: the integration first, then the blueprint that depends on it. The
-dashboard card comes along with the integration — there's nothing extra to install for it.
+Five minutes to a room running on the curve. This covers the standard setup; anything
+unusual is in [Power users]({{ site.baseurl }}/advanced/).
 
-<details open markdown="block">
-  <summary>On this page</summary>
-  {: .text-delta }
-- TOC
+{: .note }
+> **Prerequisites** — Home Assistant 2026.4.0 or newer (the blueprint uses the native
+> `occupancy.*` triggers), [HACS](https://hacs.xyz) installed, and your lights assigned to
+> areas. Areas aren't strictly required, but FLARE offers to set itself up per room from
+> them, which saves most of the work.
+
+1. TOC
 {:toc}
-</details>
 
 ---
 
-## 1. Install Adaptive Lighting Helpers
+## Step 1 — install via HACS
 
-Requires [HACS](https://hacs.xyz) already set up. This repo isn't in the HACS default store yet, so it's
-added as a *custom repository* first.
+HACS → three-dot menu → **Custom repositories**. Add:
 
-1. In Home Assistant, open **HACS** in the sidebar.
-2. Click the **⋮** menu in the top-right → **Custom repositories**.
-3. Paste this repository's URL, set **Type** to **Integration**, then click **Add**:
-   ```
-   https://github.com/danrspencer/adaptive_lighting
-   ```
-4. Still in HACS, search for **Adaptive Lighting Helpers**, open it, and click **Download**.
-5. Restart Home Assistant: **Settings → System → Restart**.
+```
+https://github.com/danrspencer/adaptive_lighting
+```
 
-   This one-time restart is required because Home Assistant only scans for brand-new custom integrations
-   at startup. Every *later* update installs with just a HACS download — no restart.
-   {: .note }
+with type **Integration**. Then find **FLARE** in the HACS list and download it.
 
-6. Go to **Settings → Devices & Services → Add Integration** and search for **Adaptive Lighting
-   Helpers**.
+{: .tip }
+> The dashboard card ships inside the integration and registers itself. There's no separate
+> Lovelace resource to add, and nothing to keep in sync by hand.
 
-You'll end up with **two** entries, not one:
+## Step 2 — restart, then add FLARE
 
-| Entry | What it holds |
+Restart Home Assistant, then **Settings → Devices & Services → Add Integration → FLARE**.
+
+FLARE installs as two entries, and you'll want both:
+
+- **FLARE Schedules** — the day-phase and colour curve. Add a schedule sensor per part of
+  the house that should share a rhythm; one for the whole house is fine to start.
+- **FLARE Tracking** — which lights FLARE is currently driving. It offers a tracking scope
+  per area that contains lights, pre-selected. Trim it if you like; anything you leave out
+  simply isn't tracked.
+
+Each schedule sensor gets its own device carrying the five phase boundaries and eight
+brightness/Kelvin values as ordinary entities. Adjust them any time — no reconfigure flow.
+
+## Step 3 — import the blueprint and create an automation
+
+[![Import blueprint](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2Fdanrspencer%2Fadaptive_lighting%2Fblob%2Fmain%2Fblueprints%2Fautomation%2Fdanspencer%2Fflare.yaml)
+
+Create an automation from it and fill in two things:
+
+| Input | What to put |
 |---|---|
-| **Adaptive Lighting Schedules** | Your day-phase schedules and their curve settings. One subentry per schedule. |
-| **Adaptive Lighting Tracking** | The services, the override-protection claim registry, and the state devices. |
+| **FLARE Sensor** | The schedule sensor from step 2. |
+| **Lights & Occupancy** | One target for the room — pick the **area**. Lights inside it get driven; occupancy-class binary sensors inside it decide when. |
 
-They're deliberately separate. Home Assistant renders one section per subentry with no way to group them
-by type, so a single entry would flatten schedules and tracking scopes into one long list of peers.
+That's the minimum. Everything else has a working default.
 
-## 2. Add a schedule
-
-Adding the integration creates no devices and no entities on its own — that's deliberate. A schedule is
-something you add explicitly:
-
-1. Open **Settings → Devices & Services → Adaptive Lighting Schedules**.
-2. Click **Add Sensor** and give it a name — "Ground Floor", "First Floor", "Living Room", whatever
-   matches how you want to group rooms.
-3. Every field is optional and has a sensible default. You can change them all later from the dashboard
-   or the device page.
-
-Each schedule you add creates its own device with:
-
-- `sensor.<name>_adaptive_lighting` — the current phase, brightness, colour temperature, today's boundary
-  timestamps, and the full 289-point day curve.
-- `select.<name>_adaptive_lighting_phase` — manual phase override, self-clearing at the next natural
-  boundary unless you turn on `switch.<name>_sticky_phase_override`.
-- Five `time.*` boundaries and eight `number.*` curve values, all live config entities.
-
-Add as many schedules as you like. A house split by floor works well: everyone upstairs generally wants
-the same lighting at the same time, and it's one fewer thing to keep in sync than a schedule per room.
-
-[Try the settings out first]({{ '/playground.html' | relative_url }}){: .btn .btn-purple }
-
-## 3. Install the blueprint
-
-Requires step 1. The blueprint calls the `apply_lighting` service that the integration registers —
-importing it early works, but the automation won't run correctly until the integration exists.
-
-1. Go to **Settings → Automations & Scenes → Blueprints** → **Import Blueprint**.
-2. Paste this URL, click **Preview**, then **Import Blueprint**:
-   ```
-   https://github.com/danrspencer/adaptive_lighting/blob/main/blueprints/automation/danspencer/adaptive_lighting.yaml
-   ```
-3. Go to **Settings → Automations & Scenes → Create Automation → Use existing blueprint** and choose
-   **Adaptive Lighting**.
-4. Fill in the room's lights and (optionally) the schedule sensor from step 2, then save.
-
-Repeat once per room. The [blueprint reference]({{ '/blueprint/' | relative_url }}) covers what every
-input does.
-
-### Setting the room target
-
-The single **Room target** input does double duty: lights inside it are controlled, and any
-occupancy-class `binary_sensor` inside it governs occupancy. You can point it at an area, a floor, a
-label, specific devices, or specific entities.
-
-Occupancy filters strictly by `device_class: occupancy`. Motion-class sensors are never picked up, even
-if you target them directly.
-{: .warning }
-
-## 4. Add the dashboard card
-
-The card ships inside the integration and registers itself the moment the integration is added. There's
-no separate HACS entry and nothing to add under **Settings → Dashboards → Resources**.
-
-1. Open the dashboard you want it on → **Edit Dashboard** → **Add Card** → scroll to the bottom →
-   **Manual**.
-2. Paste this, changing `ground_floor` to match your schedule's name (lowercased, spaces become
-   underscores — "Ground Floor" becomes `ground_floor`):
-   ```yaml
-   type: custom:adaptive-lighting-curve-card
-   sensor: ground_floor
-   ```
-3. Click **Save**.
-
-For a fuller layout — the curve graph plus the phase override and every schedule and curve setting as
-tiles — use
-[`dashboard/adaptive-lighting-section.yaml`](https://github.com/danrspencer/adaptive_lighting/blob/main/dashboard/adaptive-lighting-section.yaml)
-instead. See that file's header comment for the one extra step it needs.
-
-In a `sections` view, add `grid_options: {columns: full}` to the card or it renders at about a third
-width, even in a full-width section.
 {: .note }
+> Occupancy is optional. With no occupancy sensor in the target, FLARE keeps the room's
+> lights on the curve but never turns them on or off by itself.
 
-## Migrating from an older version
+Repeat per room. Rooms can share a schedule sensor — the update jitter setting exists so
+they don't all issue commands in the same instant.
 
-If you're coming from a pre-rewrite version of this blueprint, the inputs changed
-(`scene_sensor`/`scene_name_prefix` became `scene_template`/`extra_triggers`). Every room automation
-still using the old inputs shows as misconfigured until updated.
+## Step 4 — add the card (optional)
 
-Do this deliberately, one room at a time, rather than all at once.
-{: .warning }
+Add a **Manual** card to any dashboard:
+
+```yaml
+type: custom:flare-curve-card
+sensor: ground_floor
+```
+
+`sensor` is the schedule sensor's slug — `ground_floor` for `sensor.ground_floor_flare`. The
+card draws the day's brightness and colour curve with a marker at the current time.
+
+---
+
+## What now
+
+- Lights not behaving as you expect? Each tracking scope has **Controlled** and
+  **Overridden** counters and a **Clear** button — see
+  [the integration reference]({{ site.baseurl }}/advanced/reference/#override-protection).
+- Want a scene to own the room at certain times?
+  [Scene handoff]({{ site.baseurl }}/advanced/scenes/).
+- Want to skip the blueprint entirely?
+  [Building without it]({{ site.baseurl }}/advanced/custom-automations/).
+- Every blueprint input, with defaults: [Blueprint reference]({{ site.baseurl }}/blueprint/).

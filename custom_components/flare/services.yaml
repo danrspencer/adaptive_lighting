@@ -515,7 +515,7 @@ clear_claims:
     no other way back (a claim can go permanently stale for an entity
     that's excluded from every future write once overridden, since
     nothing ever gets the chance to record a fresh one - see
-    docs/HELPERS.md's "Override protection" section). The next write to
+    the integration reference's "Override protection" section). The next write to
     a cleared entity, from anyone, is treated exactly like a brand-new
     entity's first write.
   fields:

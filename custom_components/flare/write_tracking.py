@@ -135,7 +135,7 @@ PRUNE_CHECK_INTERVAL = timedelta(hours=1)
 # Fired (with no payload - listeners re-read through the registry)
 # whenever any scope's claims change, so the per-scope count sensors
 # refresh immediately instead of polling.
-SIGNAL_WRITE_TRACKING_UPDATED = "adaptive_lighting_helpers_write_tracking_updated"
+SIGNAL_WRITE_TRACKING_UPDATED = "flare_claims_updated"
 
 
 def _as_list(value) -> list[str]:

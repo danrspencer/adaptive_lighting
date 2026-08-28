@@ -3,7 +3,7 @@
 Notable changes per release. Versions follow [semantic versioning](https://semver.org),
 with the 0.x caveat that a **minor** bump is where breaking changes land until 1.0.
 
-The version in `custom_components/adaptive_lighting_helpers/manifest.json` is what
+The version in `custom_components/flare/manifest.json` is what
 HACS shows as installed, so it and the release tag are checked against each other in
 CI — see `.github/workflows/release.yml`.
 
@@ -38,8 +38,8 @@ Both halves — integration and blueprint — must be deployed together.
 
 - **State devices**: named tracking scopes with an area/device/entity
   target, seeded per area at setup and on upgrade. Each carries a
-  `_adaptive_tracking` sensor holding the claims, `_adaptive_controlled`
-  and `_adaptive_overridden` counters, and a Clear button.
+  `_flare_tracking` sensor holding the claims, `_flare_controlled`
+  and `_flare_overridden` counters, and a Clear button.
 - **`EVENT_LIGHT_OVERRIDDEN`**, described in the logbook, carrying the
   scope's `device_id` so hand-overs appear in that device's Activity.
 - `check_control` reports the `scope` tracking each light, or null when

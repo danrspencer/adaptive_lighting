@@ -2,7 +2,7 @@
 Manual override for the computed day phase - see coordinator.py for
 how this feeds back into brightness/colour-temperature.
 
-select.<prefix>adaptive_lighting_phase, options Auto/Morning/Day/Evening/Night,
+select.<prefix>flare_phase, options Auto/Morning/Day/Evening/Night,
 default Auto - one per schedule instance (coordinator.py's
 ScheduleInstance/schedule_instances), set up alongside that instance's
 day-phase/curve sensors (sensor.py).
@@ -63,7 +63,7 @@ class _PhaseOverrideSelect(CoordinatorEntity[ScheduleCoordinator], SelectEntity,
     def __init__(self, coordinator: ScheduleCoordinator, instance: ScheduleInstance) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = f"{instance.subentry_id}_phase_override"
-        self.entity_id = f"select.{instance.prefix}adaptive_lighting_phase"
+        self.entity_id = f"select.{instance.prefix}flare_phase"
         # Every instance gets a device (coordinator.py's
         # ScheduleInstance.device_info) - HA prefixes the plain name
         # above with the device's name for display - see sensor.py's

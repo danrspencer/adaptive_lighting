@@ -20,7 +20,7 @@ jobs:
       - name: The tag and manifest.json must agree
         run: |
           tag="${GITHUB_REF_NAME#v}"
-          manifest=$(python -c "import json; print(json.load(open('custom_components/adaptive_lighting_helpers/manifest.json'))['version'])")
+          manifest=$(python -c "import json; print(json.load(open('custom_components/flare/manifest.json'))['version'])")
           if [ "$tag" != "$manifest" ]; then
             echo "::error::tag is v$tag but manifest.json says $manifest - bump the manifest and re-tag"
             exit 1

@@ -183,7 +183,7 @@ def test_kelvin_to_rgb_gets_warmer_as_kelvin_drops():
 
 def test_evening_kelvin_fade_never_extrapolates_past_night_kelvin():
     """day_phase is a parameter, not derived from now_ts - coordinator.py
-    passes a manually-overridden phase (select.<slug>_adaptive_lighting_phase)
+    passes a manually-overridden phase (select.<slug>_flare_phase)
     alongside the real current time, so "Evening" can legitimately be asked
     for at an instant past NIGHT. Unclamped, the fade's interpolation factor
     goes negative there and extrapolates straight through night_kelvin, the

@@ -27,7 +27,15 @@ from pathlib import Path
 import pytest
 
 DOCS = Path(__file__).resolve().parent.parent / "docs"
-PAGES = sorted(list(DOCS.glob("*.md")) + list(DOCS.glob("*.html")))
+# Recursive: pages live in subdirectories too (docs/advanced/), and a
+# top-level-only glob quietly stopped guarding them the moment the site
+# grew a section. Jekyll's own build directories aren't source pages.
+_BUILD_DIRS = {"_site", "_preview", "_build", "vendor", "_includes"}
+PAGES = sorted(
+    p
+    for p in list(DOCS.rglob("*.md")) + list(DOCS.rglob("*.html"))
+    if not _BUILD_DIRS.intersection(p.relative_to(DOCS).parts)
+)
 
 
 def _front_matter(page: Path) -> dict:

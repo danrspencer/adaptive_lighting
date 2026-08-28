@@ -25,7 +25,7 @@ getting it to actually *load* inside pyscript cost an entire session
 chasing dormant bugs that all looked identical from the outside
 ("nothing happens, no error") - see lesson 8 below. That experience is
 why the computation now lives in
-`custom_components/adaptive_lighting_helpers/` instead - a real Home
+`custom_components/flare/` instead - a real Home
 Assistant integration that registers its own services directly, with no
 pyscript dependency and none of that machinery to go wrong. **pyscript
 is entirely gone from this repo now** - lesson 8 is kept only in case
@@ -33,7 +33,7 @@ pyscript comes up again in some other project.
 
 **This repo is now two pieces, and the dependency between them runs one
 way** (see "The architectural split" below): the
-`adaptive_lighting_helpers` HACS integration (curve math + grouping
+`flare` HACS integration (curve math + grouping
 logic, exposed as plain HA services anyone can call from their own
 automation) and the `adaptive_lighting` blueprint
 (triggers/conditions/target-resolution, built on top of those services).
@@ -141,7 +141,7 @@ Blueprint input mechanics worth knowing:
   automation needs the old key removed outright, not left blank, as
   part of deploying a rename.
 
-**Lives in `custom_components/adaptive_lighting_helpers/` (a standalone
+**Lives in `custom_components/flare/` (a standalone
 HACS integration - see Current status for the services):**
 - Reachability filtering, multiplier bucketing, the tolerance-based
   "already at target" check, override protection, and
@@ -305,7 +305,7 @@ blueprint in this repo. Keep them that way.
 13. **`ha_import_blueprint` derives the installed path from the GitHub
     repo *owner* in the URL, not from this repo's own blueprint folder
     name.** This repo's blueprint lives at
-    `blueprints/automation/danspencer/adaptive_lighting.yaml` (no 'r'),
+    `blueprints/automation/danspencer/flare.yaml` (no 'r'),
     but the actual GitHub account is `danrspencer` (with an 'r') - a
     mismatch that predates this file. Importing from this repo's GitHub
     URL installs to `danrspencer/adaptive_lighting.yaml` on the live
@@ -389,7 +389,7 @@ Everything below describes how the system works *now*. Per-change
 history lives in git; this file only carries what stays true, plus the
 decisions and constraints that aren't recoverable from the code.
 
-### Services (`custom_components/adaptive_lighting_helpers/__init__.py`)
+### Services (`custom_components/flare/__init__.py`)
 
 Seven, all unit tested and confirmed working live. Full field contracts
 in `docs/helpers.md` and `services.yaml` - not repeated here.
@@ -517,13 +517,13 @@ displayed name for free.
 
 Per sensor:
 
-- `sensor.<slug>_adaptive_lighting` - state is the phase name;
+- `sensor.<slug>_flare` - state is the phase name;
   `brightness`/`color_temp`/`rgb_color`, today's boundary timestamps,
   and `attributes.points` (289 samples, what the dashboard card reads)
   all live on this one entity. `points` is too large for the recorder,
   which `_unrecorded_attributes = frozenset({"points"})` handles - a
   plain per-attribute-name class field, needing no separate entity.
-- `select.<slug>_adaptive_lighting_phase` - manual phase override,
+- `select.<slug>_flare_phase` - manual phase override,
   self-clearing at the next natural phase boundary unless
   `switch.<slug>_sticky_phase_override` is on. Implemented by comparing
   against the phase computed at override time on every refresh, not a
@@ -562,7 +562,7 @@ facts:
 deliberately at the user's direction. RGB is just the Kelvin→RGB
 conversion of `kelvin`; there is no separate RGB curve.
 
-### Blueprint (`blueprints/automation/danspencer/adaptive_lighting.yaml`)
+### Blueprint (`blueprints/automation/danspencer/flare.yaml`)
 
 **`room_target`** is a single entity/device/area/floor/label `target`
 doing double duty: lights within it are controlled, occupancy-class
@@ -778,7 +778,7 @@ HA derives the id from the name at creation.
   integration meets a not-yet-reimported blueprint is expected and
   self-resolves.
 - **The dashboard cards ship inside the integration**
-  (`custom_components/adaptive_lighting_helpers/www/`) and self-register
+  (`custom_components/flare/www/`) and self-register
   via `async_setup` → `async_register_static_paths` +
   `add_extra_js_url`. `cache_headers=False` is deliberate: neither file
   has a versioned URL, so caching would trade a stale-deployed-file bug
@@ -788,7 +788,7 @@ HA derives the id from the name at creation.
   travel with the integration there was nothing left for it to do, and
   untested deploy tooling nobody runs is a liability (lesson 7).
 - **The integration icon must live inside the integration's own folder**
-  (`custom_components/adaptive_lighting_helpers/brand/`, HA 2026.3.0+),
+  (`custom_components/flare/brand/`, HA 2026.3.0+),
   not the repo root. `home-assistant/brands` no longer accepts custom
   integrations. Root `brand/` is authoring tooling only; the served PNGs
   need re-rendering by hand after a design change. HACS's own store icon
@@ -797,7 +797,7 @@ HA derives the id from the name at creation.
 - pyscript is fully gone from both this repo and the live host.
 - **The docs site is how the card gets previewed without HA.**
   `docs/playground.html` loads the real
-  `adaptive-lighting-curve-card.js` and feeds it the state shape a live
+  `flare-curve-card.js` and feeds it the state shape a live
   HA would, with sliders for every schedule and curve value. Build the
   site and serve `docs/_preview/` (`.claude/launch.json`'s `docs-site`),
   which symlinks `adaptive_lighting` -> `_site` so the site's

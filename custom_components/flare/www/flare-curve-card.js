@@ -4,8 +4,8 @@
  * Renders the day's brightness + color-temperature curve as an actual
  * rendered-color chart (Kelvin -> RGB). The curve itself is NOT
  * recomputed here: it's read straight off the combined sensor's
- * `points` attribute, produced by the adaptive_lighting_helpers
- * integration's curve.py (custom_components/adaptive_lighting_helpers/) -
+ * `points` attribute, produced by the flare
+ * integration's curve.py (custom_components/flare/) -
  * the same module the compute_curve service uses. That's the single
  * source of truth; this card just displays it. The "now" marker reads
  * the same sensor's phase/brightness/color_temp attributes directly -
@@ -25,9 +25,9 @@ const DEFAULT_ENTITIES = {
   // evening_latest/points - see sensor.py's _AdaptiveLightingSensor) -
   // see the fallback in `set hass()` below for custom configs still
   // pointing at separate sensors.
-  phase: 'sensor.default_adaptive_lighting',
-  brightness_now: 'sensor.default_adaptive_lighting',
-  kelvin_now: 'sensor.default_adaptive_lighting',
+  phase: 'sensor.default_flare',
+  brightness_now: 'sensor.default_flare',
+  kelvin_now: 'sensor.default_flare',
   sun: 'sun.sun',
 };
 
@@ -249,7 +249,7 @@ function sunTimeInWindow(isoString, dayStart, dayEnd) {
   return t;
 }
 
-class AdaptiveLightingCurveCard extends HTMLElement {
+class FlareCurveCard extends HTMLElement {
   static getStubConfig() {
     return { title: 'Adaptive Lighting' };
   }
@@ -263,7 +263,7 @@ class AdaptiveLightingCurveCard extends HTMLElement {
     // individual ids on top.
     const fromSensor = {};
     if (this._config.sensor) {
-      const base = `sensor.${this._config.sensor}_adaptive_lighting`;
+      const base = `sensor.${this._config.sensor}_flare`;
       fromSensor.phase = base;
       fromSensor.brightness_now = base;
       fromSensor.kelvin_now = base;
@@ -770,11 +770,11 @@ class AdaptiveLightingCurveCard extends HTMLElement {
   }
 }
 
-customElements.define('adaptive-lighting-curve-card', AdaptiveLightingCurveCard);
+customElements.define('flare-curve-card', FlareCurveCard);
 
 window.customCards = window.customCards || [];
 window.customCards.push({
-  type: 'adaptive-lighting-curve-card',
+  type: 'flare-curve-card',
   name: 'Adaptive Lighting Curve',
   description: 'Live brightness + rendered-color curve for the solar adaptive lighting schedule.',
 });

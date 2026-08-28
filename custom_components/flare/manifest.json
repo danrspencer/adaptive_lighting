@@ -1,6 +1,6 @@
 {
-  "domain": "adaptive_lighting_helpers",
-  "name": "Adaptive Lighting Helpers",
+  "domain": "flare",
+  "name": "FLARE",
   "codeowners": [
     "@danrspencer"
   ],

@@ -10,6 +10,6 @@ from pathlib import Path
 # stay what they've always been: fast, dependency-light tests of pure
 # logic, independent of HA's event loop and everything that comes with
 # it.
-INTEGRATION_DIR = Path(__file__).resolve().parent.parent / "custom_components" / "adaptive_lighting_helpers"
+INTEGRATION_DIR = Path(__file__).resolve().parent.parent / "custom_components" / "flare"
 if str(INTEGRATION_DIR) not in sys.path:
     sys.path.insert(0, str(INTEGRATION_DIR))

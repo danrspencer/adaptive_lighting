@@ -26,14 +26,14 @@ from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers import label_registry as lr
 
-from custom_components.adaptive_lighting_helpers.const import CONF_ENTRY_TYPE, ENTRY_TYPE_TRACKING
-from custom_components.adaptive_lighting_helpers import async_setup_entry
-from custom_components.adaptive_lighting_helpers.const import CONF_TWO_STEP_MODELS
-from custom_components.adaptive_lighting_helpers.repairs import async_create_fix_flow
-from custom_components.adaptive_lighting_helpers.two_step import TWO_STEP_LABEL_ID
-from custom_components.adaptive_lighting_helpers.two_step_check import ISSUE_ID
+from custom_components.flare.const import CONF_ENTRY_TYPE, ENTRY_TYPE_TRACKING
+from custom_components.flare import async_setup_entry
+from custom_components.flare.const import CONF_TWO_STEP_MODELS
+from custom_components.flare.repairs import async_create_fix_flow
+from custom_components.flare.two_step import TWO_STEP_LABEL_ID
+from custom_components.flare.two_step_check import ISSUE_ID
 
-DOMAIN = "adaptive_lighting_helpers"
+DOMAIN = "flare"
 
 TRADFRI_MODEL = "TRADFRI bulb GU10, color/white spectrum, 345 lm"
 

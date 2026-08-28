@@ -56,9 +56,9 @@ CURVE_JS = Path(__file__).resolve().parent.parent / "docs" / "assets" / "js" / "
 CARD_JS = (
     Path(__file__).resolve().parent.parent
     / "custom_components"
-    / "adaptive_lighting_helpers"
+    / "flare"
     / "www"
-    / "adaptive-lighting-curve-card.js"
+    / "flare-curve-card.js"
 )
 
 pytestmark = pytest.mark.skipif(shutil.which("node") is None, reason="node not installed")

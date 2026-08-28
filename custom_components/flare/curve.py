@@ -64,7 +64,7 @@ def _clamp(v: float, lo: float, hi: float) -> float:
 
 def kelvin_to_rgb(kelvin: float) -> tuple:
     """Tanner Helland's Kelvin -> RGB approximation - same algorithm as
-    www/adaptive-lighting-curve-card.js's kelvinToRgb(), so the dashboard
+    www/flare-curve-card.js's kelvinToRgb(), so the dashboard
     card and whatever RGB actually gets sent to a light agree exactly.
 
     Uses round-half-up (math.floor(x + 0.5)) rather than Python's

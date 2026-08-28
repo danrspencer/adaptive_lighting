@@ -1,5 +1,5 @@
-title: Adaptive Lighting
-description: Home Assistant lighting matched to the shape of your day — four named phases, override protection, and scene handoff.
+title: FLARE
+description: Flexible Lighting Automation & Reconciliation Engine — phase-based circadian lighting for Home Assistant, with scene reconciliation and override protection built in.
 url: https://danrspencer.github.io
 baseurl: /adaptive_lighting
 

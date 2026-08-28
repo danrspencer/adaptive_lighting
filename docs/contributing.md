@@ -27,7 +27,7 @@ code itself.
 ## Repository layout
 
 ```
-custom_components/adaptive_lighting_helpers/
+custom_components/flare/
     __init__.py    registers the four services against real HA state
     coordinator.py shared schedule computation behind the sensors/select
                    below - one instance per sensor added via the
@@ -57,7 +57,7 @@ custom_components/adaptive_lighting_helpers/
                    the integration's icon (256/512, alpha) - HA reads
                    this directly from the integration's own folder
                    (since HA 2026.3.0), no external submission needed
-    www/adaptive-lighting-curve-card.js
+    www/flare-curve-card.js
                    the day-phase/curve dashboard card
     Served and auto-loaded by the integration itself (see
     __init__.py's async_setup) - it ships and updates with the
@@ -78,15 +78,15 @@ brand/
                       the icon is the day's actual brightness/colour
                       curve as bars. Design/authoring tooling only - the
                       PNGs HA actually reads live at
-                      custom_components/adaptive_lighting_helpers/brand/
+                      custom_components/flare/brand/
                       (rendered from icon.svg, not scripted yet)
     icon.svg          the icon's source of truth, regenerate with
                       generate_icon.py after changing the curve defaults
 
-blueprints/automation/danspencer/adaptive_lighting.yaml
+blueprints/automation/danspencer/flare.yaml
     The automation blueprint: triggers, conditions, target resolution,
     and the action sequence (which service to call, with what target).
-    Deliberately named differently from any prior "Adaptive Lighting
+    Deliberately named differently from any prior "FLARE
     Unified" blueprint so the two can run side by side while rooms are
     migrated over individually, rather than one replacing the other
     in place.
@@ -102,7 +102,8 @@ tests/
     pytest suite for curve.py, grouping.py, and scenes.py.
 
 docs/
-    HELPERS.md     full service/sensor reference for the integration
+    advanced/       power-user reference: services, scene handoff,
+                   building without the blueprint
     BLUEPRINT.md   full feature/input reference for the blueprint
 ```
 
@@ -116,7 +117,7 @@ at all.
 
 The [curve playground](../playground.html) on this site renders the real card against synthetic data, with no
 Home Assistant instance involved — the page loads
-`custom_components/adaptive_lighting_helpers/www/adaptive-lighting-curve-card.js` itself and feeds it the state
+`custom_components/flare/www/flare-curve-card.js` itself and feeds it the state
 shape a live Home Assistant would. Build the site locally (below) to exercise a change to the card.
 
 This replaced a standalone `dashboard/preview.html` harness and its synthetic-data generator, which did the same
@@ -152,7 +153,7 @@ Two things about it are less obvious than they look:
   paths — which need no baseurl to be correct.
 
 - **The playground runs the real dashboard card.** `docs/playground.html` loads the actual
-  `adaptive-lighting-curve-card.js`, copied in by the workflow rather than committed twice. The schedule maths
+  `flare-curve-card.js`, copied in by the workflow rather than committed twice. The schedule maths
   behind the sliders is `docs/assets/js/curve.js`, a port of `curve.py`; `tests/test_curve_js_parity.py` runs
   both it and the card itself under node against a grid of inputs and fails if either drifts from `curve.py`.
 
@@ -207,7 +208,7 @@ checked twice: `tests/test_version.py` runs on every PR, and
 `.github/workflows/release.yml` re-checks at tag time and refuses to publish a
 mismatch.
 
-1. Bump `version` in `custom_components/adaptive_lighting_helpers/manifest.json`.
+1. Bump `version` in `custom_components/flare/manifest.json`.
    Breaking changes bump the **minor** while below 1.0.
 2. Add a `## [x.y.z] - YYYY-MM-DD` section to `CHANGELOG.md`, calling out anything
    breaking explicitly — this integration ships in two halves (integration and

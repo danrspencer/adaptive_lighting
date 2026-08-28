@@ -3,103 +3,76 @@ title: Home
 nav_order: 1
 ---
 
-# Adaptive Lighting
+# FLARE
 {: .no_toc }
 
-<details open markdown="block">
-  <summary>On this page</summary>
-  {: .text-delta }
-- TOC
-{:toc}
-</details>
+**F**lexible **L**ighting **A**utomation & **R**econciliation **E**ngine — phase-based
+circadian lighting for Home Assistant, with scene reconciliation and override protection
+built in.
+{: .fs-6 .fw-300 }
 
+[Quickstart (5 mins)]({{ site.baseurl }}/installation/){: .btn .btn-primary .mr-2 }
+[Curve playground]({{ site.baseurl }}/playground/){: .btn .mr-2 }
+[GitHub](https://github.com/danrspencer/adaptive_lighting){: .btn }
 
-Your lights, matched to the shape of your day — bright and cool to help you wake up, gradually warming
-through the afternoon, dimming to a relaxed glow as evening sets in, and low and warm once the house is
-asleep. Rooms turn their lights on and off as people come and go, manual changes are left alone until
-you're done with them, and anything a scene already has covered is left to the scene.
+---
 
-[Play with the curve]({{ '/playground.html' | relative_url }}){: .btn .btn-purple }
-[Install it]({{ '/installation.html' | relative_url }}){: .btn }
-[View on GitHub](https://github.com/danrspencer/adaptive_lighting){: .btn }
+## Four phases, not one curve
 
+Most adaptive-lighting tools map brightness and colour straight onto sun elevation. That
+sounds right and behaves oddly: the sun is the same height at 8am and 5pm, so your kitchen
+gets identical light for breakfast and for cooking dinner. In midwinter it never gets high
+enough for bright light at all.
 
-Two pieces, installed separately:
+FLARE divides the day into four named phases instead, each with its own targets:
 
-| Piece | What it is |
+| Phase | What it's for |
 |---|---|
-| **[Integration]({{ '/helpers/' | relative_url }})** | Where the work happens. The phase schedule, per-light grouping, override protection, and scene gap-filling, exposed as plain services any automation can call. |
-| **[Blueprint]({{ '/blueprint/' | relative_url }})** | A ready-made room automation built on those services — triggers, occupancy, target resolution, scene handoff. |
+| **Morning** | Bright and cold, deliberately. [Research](https://pubmed.ncbi.nlm.nih.gov/36058557/) found 1.5h of bright morning light for a week improved office workers' sleep efficiency and reduced morning sleepiness. |
+| **Day** | Bright, cooling gradually towards the afternoon. |
+| **Evening** | Dimming and warming, anchored to your actual sunset. |
+| **Night** | Warm and low, flat until morning. |
 
-The integration is the part that stands on its own: the services are documented and useful from any
-automation you write yourself, with no blueprint involved.
+Only the Evening boundary tracks the sun — clamped between an earliest and a latest time,
+so it moves with the season without drifting into the small hours. Morning, Day and Night
+are wall-clock times, because that's what your routine actually is.
 
-The blueprint is the opposite — it depends on the services entirely and does nothing without them. Think
-of it as a worked example rather than a separate product: it wires the services up the way most rooms
-want them, so you can get going without writing anything. And because it's a blueprint, it isn't a
-black box. Anyone can take it, change it, or rip it apart to build something quite different on the same
-services.
-
----
-
-## Why four phases, not a continuous curve
-
-Most "adaptive lighting" tools compute one continuous curve straight from the sun's position — brightness
-and colour temperature interpolated smoothly between sunrise and sunset, nothing else to it. That's a
-reasonable default, but it treats every part of your day the same way: just "more or less light," rather
-than light with a *purpose*.
-
-This project instead uses four named phases, each justified on its own terms rather than just given its
-own numbers on a curve.
-
-### Morning
-
-Exists to help you **wake up**, not to track sunrise. It starts at a fixed time before you'd normally be
-up, independent of the season — a sun-tracking curve would have it arrive at 5am in June and 8am in
-December, which isn't what a wake-up light is for.
-
-Bright, cool-white light in the morning has been linked to better alertness later in the day:
-[one study](https://pubmed.ncbi.nlm.nih.gov/36058557/) found office workers given 1.5 hours of bright
-morning light for a week had higher sleep efficiency and less morning sleepiness than under regular
-office lighting.
-
-### Day
-
-The long middle stretch, gradually warming as it runs toward evening so the eventual transition doesn't
-feel abrupt.
-
-### Evening
-
-When relaxed, warm lighting takes over — and the one phase that *does* track the sun, so your indoor
-lighting shifts in step with what's actually happening outside.
-
-It's clamped between an earliest and a latest bound, though, so a 4pm winter sunset doesn't dump you into
-"relaxed evening" mode the moment you walk in from work, and a 10pm midsummer sunset doesn't mean evening
-never really arrives. [The playground]({{ '/playground.html' | relative_url }}) has presets for both ends
-of that, if you want to see the clamp work.
-
-### Night
-
-Not tied to any solar event at all — it's just what the house should look like once everyone's asleep:
-dim and warm, the lighting you want on at 3am without waking yourself up further.
+{: .tip }
+> [Play with the curve]({{ site.baseurl }}/playground/) — every boundary and value is a slider,
+> and the chart is the same code the dashboard card runs.
 
 ---
 
-## What else it does
+## Two ways in
 
-Beyond the schedule, the parts that turn a curve into something you can actually live with:
+### Standard setup — plug and play
+{: .no_toc }
 
-- **Override protection.** Change a light by hand and the automation backs off it rather than fighting
-  you, until the room empties or the light goes off. It re-checks live state on every tick rather than
-  remembering that an override happened once.
-- **Occupancy.** Rooms light up when someone arrives and turn off once they've gone, with a wait time
-  sized for the fact that most motion sensors report "clear" the moment you sit still.
-- **Scene handoff.** A scene can take a room over completely, or cover just some of its lights and let
-  the schedule fill in the rest.
-- **Self-healing.** Bulbs that don't reach what they were told — or that drop off the network and come
-  back — get corrected on the next tick rather than sitting wrong until someone notices.
-- **Two-step transitions.** Some bulbs can't change brightness and colour in one command. Those get
-  detected and driven in two steps, automatically.
+Install via HACS, add the integration, import the blueprint, point it at a room. Everything
+below is handled for you: reachability, colour-temperature tolerances, bulbs that can't take
+brightness and colour in one command, occupancy timing, and leaving a light alone once
+somebody else has taken it.
 
-Full detail in the [integration reference]({{ '/helpers/' | relative_url }}) and the
-[blueprint reference]({{ '/blueprint/' | relative_url }}).
+[Start here →]({{ site.baseurl }}/installation/){: .btn .btn-outline }
+
+### Power users & builders
+{: .no_toc }
+
+The blueprint is a worked example, not the product. Every piece of it is a plain Home
+Assistant action you can call yourself from YAML, scripts, Node-RED or AppDaemon — and the
+override-protection machinery is available standalone, whether or not you use the rest.
+
+[Go deeper →]({{ site.baseurl }}/advanced/){: .btn .btn-outline }
+
+---
+
+## What "reconciliation" means
+
+FLARE expects to share a room. A scene can take some lights, someone can grab a switch, and
+another automation can write the same bulb — none of that is treated as a fault:
+
+- **Override protection** notices when a light no longer matches what FLARE last asked for,
+  and stops driving it until it's released.
+- **Scene handoff** lets a scene own part of a room while FLARE keeps the rest on the curve.
+- **Tracking scopes** are named, configurable devices — one per room, typically — so you can
+  see at a glance which lights FLARE is currently driving and which have been taken.
