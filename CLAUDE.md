@@ -65,12 +65,18 @@ project exists, why the day is divided into four named phases
 (Morning/Day/Evening/Night) rather than a single continuous
 sun-elevation curve the way most adaptive-lighting tools work - plus
 links onward. Everything else lives in `docs/` and is published to
-<https://danrspencer.github.io/flare/>: `installation.md`,
-the `playground.html` interactive curve, `helpers.md` (full service and
-entity reference), `blueprint.md` (full per-feature/input breakdown),
-Contributing lives at the repo root as `CONTRIBUTING.md` (repo layout,
-tests, how to build the site) - it is for people working on the code,
-who are already on GitHub, so it is not a site page.
+<https://danrspencer.github.io/flare/>: `installation.md` (quickstart),
+the `playground.html` interactive curve, `dashboard.html` (a Lovelace
+dashboard-section generator - draggable numeric-input sliders, not
+read-only gauges), `blueprint.md` (full per-feature/input breakdown),
+and a `docs/advanced/` "Power users" section (`has_children: true`):
+`reference.md` (the full service/entity reference - this is what
+`helpers.md` was renamed to when the docs site was restructured, see
+below), `scenes.md` (scene handoff/reconciliation), and
+`custom-automations.md` (building without the blueprint). Contributing
+lives at the repo root as `CONTRIBUTING.md` (repo layout, tests, how to
+build the site) - it is for people working on the code, who are already
+on GitHub, so it is not a site page.
 
 These pages are **site pages, not files meant to be read on GitHub** -
 that distinction is load-bearing. An earlier arrangement kept
@@ -408,9 +414,9 @@ in `docs/helpers.md` and `services.yaml` - not repeated here.
   of which layer reads the attributes, and voluptuous's own required-
   field validation gives the same hard failure the internal read was
   added for.
-- `check_control` / `record_write` / `clear_claims` - override
+- `claims_check` / `claims_record` / `claims_clear` - override
   protection exposed standalone, for callers that want it without any
-  curve/brightness logic. `clear_claims` is the manual escape hatch
+  curve/brightness logic. `claims_clear` is the manual escape hatch
   for a light stuck `overridden`.
 
 `rgb_color` on both `apply_lighting` and `compute_lighting_groups`
@@ -427,7 +433,7 @@ model, and why two rather than one, lives in `write_tracking.py`'s module
 docstring; the decision table lives in `override_protection.classify()`;
 the user-facing contract lives in `docs/helpers.md`. Three consumers
 share that one table - `grouping.py`'s `externally_set()`, `sensor.py`'s
-diagnostic status, and `check_control` - deliberately, because they
+diagnostic status, and `claims_check` - deliberately, because they
 previously drifted.
 
 Facts worth knowing before touching it, each verified against HA core
@@ -453,32 +459,42 @@ rather than assumed:
   light's claims belong to whatever scope the caller names, so any
   caller naming that scope writes through it.
 - **Scope is caller-supplied, not resolved.** Every tracking service
-  (`apply_lighting`, `compute_lighting_groups`, `check_control`,
-  `record_write`, `clear_claims`) takes `tracking_device_id` - a real HA
+  (`apply_lighting`, `compute_lighting_groups`, `claims_check`,
+  `claims_record`, `claims_clear`) takes `tracking_device_id` - a real HA
   device, one per state device (`StateInstance.device_info`).
   `ClaimRegistry.resolve_scope_device()` turns that into a subentry_id.
   **Optional only on `apply_lighting`/`compute_lighting_groups`** -
   both do something useful (dispatch/plan lights) with no scope at
   all, so omitting it means "write, but track nothing" (no claim,
-  nothing excluded as externally-set). **Required on `check_control`,
-  `record_write`, `clear_claims`** - each exists only to read or write
+  nothing excluded as externally-set). **Required on `claims_check`,
+  `claims_record`, `claims_clear`** - each exists only to read or write
   tracking claims, so a call with nothing to name has nothing useful
   to do; the schema rejects a missing/null value outright (`vol.Required`,
   not `vol.Any(None, ...)`) rather than always silently answering
   "untracked" or recording nothing. A device_id that *is* given but
   isn't one of this entry's own state devices raises
   `ServiceValidationError` on any of the five, rather than behaving
-  like it was omitted. The old implicit resolver,
-  `scope_for()` (entity → device → area, searched across every
-  configured state device), still exists but is internal-only now -
-  used solely by the three call sites with no caller to ask at all:
-  `async_start_listening`'s state-changed listener, `_release_if_dark`,
-  and `async_prune_stale`. The blueprint resolves `tracking_device_id`
-  itself from `room_target` (its own `tracking_scope_device_id`
-  variable) - area named directly wins outright, entities/a device with
-  no area fall back to the first resolved light's own area - so this is
-  invisible to a room automation; it only surfaces when calling the
-  services directly.
+  like it was omitted. **The old implicit resolver, `scope_for()`
+  (entity → device → area, searched across every configured state
+  device), has been removed entirely.** It was kept alive as an
+  internal-only fallback for the state-changed listener and staleness
+  pruning (the two call sites with no caller to ask), but tracing both
+  showed it never actually had an effect: each only reaches a
+  target-based lookup for an entity with no existing claim anywhere,
+  and each immediately discards that result unless the entity is
+  *already* claimed - which, if true, `_store_for()`'s direct
+  claims-dict scan always finds first, without ever reaching
+  `scope_for()`. Confirmed live: a user pointed out that a state
+  device's setup form asking for a target implied claim ownership it
+  didn't actually have. A state device's `target` now does exactly one
+  thing - seeds `_assign_scope_area`'s best-effort, blank-only Area
+  placement for the device's own registry entry (sensor.py) - and plays
+  no part in which lights get tracked. The blueprint resolves
+  `tracking_device_id` itself from `room_target` (its own
+  `tracking_scope_device_id` variable) - area named directly wins
+  outright, entities/a device with no area fall back to the first
+  resolved light's own area - so this is invisible to a room
+  automation; it only surfaces when calling the services directly.
 - **Being switched off is an override.** `classify()` does *not*
   short-circuit on `not is_on`; an off light is judged against its
   claims like any other. A turn-off records `{"state": "off"}` as its
@@ -488,10 +504,10 @@ rather than assumed:
   whole reason the recording exists, so don't drop it as redundant.
 - **The blueprint's own turn-offs are bare `light.turn_off` calls**,
   not `apply_lighting`, so they record nothing on their own - each is
-  followed by an explicit `flare.record_write` step with the same
+  followed by an explicit `flare.claims_record` step with the same
   `{"state": "off"}` target, guarded by
-  `tracking_scope_device_id is not none` since `record_write` now
-  requires a scope - the same guard covers the `clear_claims` scene-
+  `tracking_scope_device_id is not none` since `claims_record` now
+  requires a scope - the same guard covers the `claims_clear` scene-
   handoff step. Without the record step every light in the room reads
   as externally switched off every time the room empties, which also
   fires `flare_light_overridden` for each of them; without the guard, a
@@ -509,7 +525,7 @@ rather than assumed:
 nothing ever records a fresher `latest` for it - and on a ramping curve
 its recorded target only gets staler, so the value-rescue can't recover
 it either. The scope-goes-dark release now clears this automatically
-whenever the room empties, which covers the ordinary case; `clear_claims`
+whenever the room empties, which covers the ordinary case; `claims_clear`
 (and the Clear button) remains the escape hatch for a room that never
 fully goes dark. The underlying rot is unchanged: an excluded entity
 never gets a refreshed claim.

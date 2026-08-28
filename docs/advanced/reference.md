@@ -56,7 +56,7 @@ automation — and picks it up again when released.
 **You say which scope a call belongs to.** A state device is a named tracking scope you configure
 (Settings → Devices & Services → **FLARE Tracking** → Add state device), pointed at an area, some
 devices, or specific lights — each one is a real HA device. Pass its `tracking_device_id` on any of
-`apply_lighting`, `compute_lighting_groups`, `check_control`, `record_write` or `clear_claims`:
+`apply_lighting`, `compute_lighting_groups`, `claims_check`, `claims_record` or `claims_clear`:
 
 ```yaml
 action: flare.apply_lighting
@@ -73,7 +73,7 @@ something useful (dispatch or plan lights) with no scope at all. **Omitting it w
 tracks nothing** — no claim is recorded, and nothing is excluded as already externally-set. Tracking
 is opt-in per call, not something the integration goes looking for on your behalf.
 
-**It's required on `check_control`, `record_write` and `clear_claims`** — each of those exists only
+**It's required on `claims_check`, `claims_record` and `claims_clear`** — each of those exists only
 to read or write tracking claims, so a call with nothing to name has nothing useful to do; the schema
 rejects it outright rather than always silently answering "untracked" or recording nothing.
 
@@ -215,7 +215,7 @@ whole afternoon while its brightness eases over the last hour.
 ### Inspecting tracked state
 
 `sensor.<name>_flare_tracking`'s `claims` attribute holds the raw `observed`/`latest` records per light.
-`check_control` turns those into a `status` plus a `matched_via` — `"latest-context"`, `"latest-value"`,
+`claims_check` turns those into a `status` plus a `matched_via` — `"latest-context"`, `"latest-value"`,
 `"observed-context"` or `"observed-value"` — telling you *how* a light was matched, not just that it was.
 
 | status | meaning |

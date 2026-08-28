@@ -547,15 +547,15 @@ compute_scene_coverage:
         entity:
           multiple: true
 
-check_control:
-  name: Check control
+claims_check:
+  name: Check claims
   description: >-
     For each entity, reports whether adaptive lighting is currently in
     control of it, and whether a write should be blocked - the exact
     override-protection mechanism apply_lighting/compute_lighting_groups
     use internally, exposed standalone so any automation can ask "should
     I write this" without any of this integration's brightness/curve
-    logic at all. Read-only - call record_write afterwards if you do
+    logic at all. Read-only - call claims_record afterwards if you do
     write the entity, so a later check recognises that write.
 
     Checks against tracking_device_id's own claims. This service exists
@@ -616,11 +616,11 @@ check_control:
           min: 0
           max: 100
 
-record_write:
-  name: Record write
+claims_record:
+  name: Record claims
   description: >-
     Records that this call's own context just wrote entities - call it
-    immediately after actually issuing whatever write check_control said
+    immediately after actually issuing whatever write claims_check said
     was allowed, so a later check recognises that write rather than
     reading it as an external change. A thin wrapper around the same
     bookkeeping apply_lighting uses internally.
@@ -653,14 +653,14 @@ record_write:
         Map of entity_id to what that write actually asked for -
         {"brightness": ..., "color_temp_kelvin": ...} or {"brightness":
         ..., "rgb_color": [...]}. Optional, but needed for
-        check_control's delayed-echo rescue to work for these entities
+        claims_check's delayed-echo rescue to work for these entities
         later - without it, a context.id mismatch alone is always treated
         as external.
       example: '{"light.lamp": {"brightness": 200, "color_temp_kelvin": 3000}}'
       selector:
         object:
 
-clear_claims:
+claims_clear:
   name: Clear claims
   description: >-
     Discards entities' tracked observed/latest claims within

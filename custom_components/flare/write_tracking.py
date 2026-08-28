@@ -21,11 +21,20 @@ that pass the *same* scope for one light share its claims and
 co-operate rather than each reading the other as an intruder; two that
 pass different scopes are asking to be tracked apart, and are.
 
-`scope_for()` still exists, but only for the handful of call sites with
-no caller to ask - the event-driven state-change listener, the
-darkness release, and staleness pruning. It is not reachable from any
-service. grouping.py's externally_set() and override_protection.classify()
-own the comparison itself; this module only records.
+A state device's own `target` (coordinator.py's `StateInstance.target`)
+plays no part in any of this - it only seeds where the device's own
+entry lands in the Area registry (sensor.py's `_assign_scope_area`),
+purely cosmetic. An earlier design routed untracked writes through it
+via a `scope_for()` area/device/entity resolver, for the handful of
+call sites with no caller to ask (the state-change listener, staleness
+pruning). That resolver was removed once it turned out to be
+unreachable in practice: every one of those call sites already requires
+an entity to be claimed *somewhere* before it does anything, which the
+direct claims-dict scan below always finds first - so the target-based
+fallback's result was computed and then unconditionally discarded,
+never once read. grouping.py's externally_set() and
+override_protection.classify() own the comparison itself; this module
+only records.
 
 Deliberately not persisted. Claims live on each state device's tracking
 entity and die with a restart, which is correct rather than merely
@@ -109,12 +118,11 @@ from typing import Optional, Protocol
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import CALLBACK_TYPE, Event, EventStateChangedData, HomeAssistant, callback
 from homeassistant.exceptions import ServiceValidationError
-from homeassistant.helpers import device_registry as dr, entity_registry as er
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN, SUBENTRY_TYPE_STATE
-from .coordinator import StateInstance, state_instances
 from .override_protection import _context_matches, _ContextClaim, _WriteRecord
 
 # How long a tracked record is kept after it was last written or
@@ -146,14 +154,6 @@ PRUNE_CHECK_INTERVAL = timedelta(hours=1)
 # whenever any scope's claims change, so the per-scope count sensors
 # refresh immediately instead of polling.
 SIGNAL_WRITE_TRACKING_UPDATED = "flare_claims_updated"
-
-
-def _as_list(value) -> list[str]:
-    """A target selector key is a bare string when one thing is picked
-    and a list when several are - normalise before membership tests."""
-    if value is None:
-        return []
-    return [value] if isinstance(value, str) else list(value)
 
 
 class ClaimStore(Protocol):
@@ -190,41 +190,6 @@ class ClaimRegistry:
     def unregister(self, subentry_id: str) -> None:
         self._stores.pop(subentry_id, None)
 
-    def scope_for(self, entity_id: str) -> StateInstance | None:
-        """Which state device tracks this light - most specific match
-        wins, and nothing matches means nothing tracks it.
-
-        Internal only, used by _store_for's own search - never reachable
-        from a service. A caller states its scope; this is what the
-        three event-driven call sites fall back on when there is no
-        caller to state one at all.
-
-        Deterministic from configuration rather than from whoever wrote
-        last, which is what makes a light's claims live in exactly one
-        place no matter how many automations drive it. Two automations
-        on one room therefore share that room's claims and co-operate,
-        instead of each seeing the other as an intruder.
-
-        A light matching no state device is deliberately left untracked
-        - permanently manageable - rather than swept into a catch-all.
-        An absent scope is a visible signal that a light needs an area
-        or a target; a catch-all would silently absorb the mistake."""
-        entry = er.async_get(self._hass).async_get(entity_id)
-        device_id = entry.device_id if entry else None
-        area_id = entry.area_id if entry else None
-        if area_id is None and device_id:
-            device = dr.async_get(self._hass).async_get(device_id)
-            area_id = device.area_id if device else None
-
-        instances = state_instances(self._entry)  # already sorted by title
-        for key, value in (("entity_id", entity_id), ("device_id", device_id), ("area_id", area_id)):
-            if value is None:
-                continue
-            for instance in instances:
-                if value in _as_list(instance.target.get(key)):
-                    return instance
-        return None
-
     def resolve_scope_device(self, device_id: str | None) -> str | None:
         """Turns a service call's tracking_device_id into the subentry_id
         every read/write method below actually wants.
@@ -250,30 +215,25 @@ class ClaimRegistry:
 
     def title_for_scope(self, subentry_id: str | None) -> str | None:
         """The scope's display name, for echoing back in a service
-        response - check_control's own "scope" field, for example."""
+        response - claims_check's own "scope" field, for example."""
         if subentry_id is None:
             return None
         subentry = self._entry.subentries.get(subentry_id)
         return subentry.title if subentry is not None else None
 
     def _store_for(self, entity_id: str) -> ClaimStore | None:
-        """The live tracking entity holding this light's claims.
+        """The live tracking entity holding this light's claims, or None
+        if it isn't tracked anywhere.
 
-        None whenever the light resolves to no scope, *or* its scope's
-        entity hasn't been added yet - services are registered before
-        the platforms are forwarded (see __init__.py), so a write can
-        genuinely arrive first. Such a write is dropped: the light stays
-        untracked and therefore manageable, and the next tick records it
-        properly. Nothing is queued, because a lighting override that
-        goes unrecorded for one tick costs nothing."""
-        # An already-tracked light keeps its existing home even if the
-        # targets have since changed, so re-pointing a state device
-        # can't strand claims in a scope nothing reads any more.
+        A claim lives wherever it was most recently recorded (async_record's
+        caller-supplied subentry_id) - never resolved from the entity's own
+        area/device, so re-pointing a state device's target can't strand an
+        existing claim in a scope nothing reads any more, and an untracked
+        entity simply has no home to find here."""
         for store in self._stores.values():
             if entity_id in store.claims:
                 return store
-        instance = self.scope_for(entity_id)
-        return self._stores.get(instance.subentry_id) if instance else None
+        return None
 
     def _record(self, subentry_id: str | None, entity_id: str) -> _WriteRecord | None:
         """The one place decision-3's "no scope, no tracking" is
@@ -365,7 +325,7 @@ class ClaimRegistry:
         deliberately invoked, unlike every other path that removes a
         record (async_start_listening's drop-detection, which only ever
         fires on an *observed* unavailable transition). Backs the
-        clear_claims service - the escape hatch for a light that's landed
+        claims_clear service - the escape hatch for a light that's landed
         in "overridden" without ever actually going unavailable, and so
         has no other way back: build_groups() (grouping.py) never calls
         async_record for anything externally_set() already excludes, so

@@ -52,13 +52,13 @@ whichever scope you name.
 
 ### Using override protection standalone
 
-Override protection is also two standalone services — `check_control` (read-only) and
-`record_write` — usable on your own entities, with or without `apply_lighting`. Unlike
+Override protection is also two standalone services — `claims_check` (read-only) and
+`claims_record` — usable on your own entities, with or without `apply_lighting`. Unlike
 `apply_lighting`, both exist only to read or write tracking claims, so `tracking_device_id`
 is **required** on each — there's nothing useful either can do without one:
 
 ```yaml
-action: flare.check_control
+action: flare.claims_check
 data:
   entities: [light.kitchen_1]
   tracking_device_id: "{{ device_id('sensor.kitchen_flare_tracking') }}"
@@ -72,8 +72,8 @@ response_variable: control
 ```
 
 ```yaml
-# After actually issuing your own light.turn_on, so a later check_control call recognises it as yours:
-action: flare.record_write
+# After actually issuing your own light.turn_on, so a later claims_check call recognises it as yours:
+action: flare.claims_record
 data:
   entities: [light.kitchen_1]
   tracking_device_id: "{{ device_id('sensor.kitchen_flare_tracking') }}"
@@ -81,15 +81,15 @@ data:
     light.kitchen_1: { brightness: 200, color_temp_kelvin: 3000 }
 ```
 
-`check_control`'s `status` values are the same ones a state device's `claims` attribute
+`claims_check`'s `status` values are the same ones a state device's `claims` attribute
 shows, and `targets` is the same shape `apply_lighting` records on every write.
 
-`clear_claims` is the escape hatch for a light stuck on `overridden`. An excluded light
+`claims_clear` is the escape hatch for a light stuck on `overridden`. An excluded light
 never gets a fresh claim recorded, so on a ramping curve its stored target keeps drifting
 further from the current one and it cannot recover on its own:
 
 ```yaml
-action: flare.clear_claims
+action: flare.claims_clear
 data:
   entities: [light.kitchen_1]
   tracking_device_id: "{{ device_id('sensor.kitchen_flare_tracking') }}"
@@ -105,13 +105,13 @@ If you want to issue `light.turn_on` yourself — because you need an effect, a 
 FLARE doesn't handle, or a device outside the light domain — use the planner instead of
 the dispatcher:
 
-1. `flare.check_control` to ask which entities you should leave alone.
+1. `flare.claims_check` to ask which entities you should leave alone.
 2. Your own writes for the rest.
-3. `flare.record_write` immediately afterwards, so FLARE recognises your write next time
+3. `flare.claims_record` immediately afterwards, so FLARE recognises your write next time
    instead of reading it as an external change.
 
 {: .tip }
-> Pass `targets` to `record_write`. Without it a context mismatch is always treated as
+> Pass `targets` to `claims_record`. Without it a context mismatch is always treated as
 > external, so a bulb that confirms slowly gets misread as overridden.
 
 `flare.compute_lighting_groups` is the same planner `apply_lighting` uses internally,

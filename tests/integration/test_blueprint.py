@@ -121,20 +121,20 @@ def light_turn_off_calls(hass: HomeAssistant):
 
 
 @pytest.fixture(autouse=True)
-def clear_claims_calls(hass: HomeAssistant):
+def claims_clear_calls(hass: HomeAssistant):
     """Autouse because the blueprint releases handed-off lights on every
     tick that has any, in rooms these tests aren't otherwise asserting
     about - an unmocked service call would fail those runs outright."""
-    return async_mock_service(hass, "flare", "clear_claims")
+    return async_mock_service(hass, "flare", "claims_clear")
 
 
 @pytest.fixture(autouse=True)
-def record_write_calls(hass: HomeAssistant):
+def claims_record_calls(hass: HomeAssistant):
     """Autouse for the same reason, and for a sharper one: it follows
     every light.turn_off the blueprint issues, so leaving it unmocked
     aborts the run *after* the turn-off has already happened - which
     every assertion about turn-offs would still pass straight through."""
-    return async_mock_service(hass, "flare", "record_write")
+    return async_mock_service(hass, "flare", "claims_record")
 
 
 @pytest.fixture(autouse=True)
@@ -658,7 +658,7 @@ class TestOccupancyDrivenOnOff:
         calls = apply_lighting_calls
         assert calls and calls[-1].data["entities"] == ["light.a"]
 
-    async def test_the_turn_off_is_recorded_as_ours(self, hass, light_turn_off_calls, record_write_calls):
+    async def test_the_turn_off_is_recorded_as_ours(self, hass, light_turn_off_calls, claims_record_calls):
         """The blueprint turns lights off with a bare light.turn_off, so
         nothing records it. Without this the integration sees the light
         go off under a context it holds no claim for and classifies it
@@ -681,15 +681,15 @@ class TestOccupancyDrivenOnOff:
         await hass.async_block_till_done()
 
         assert light_turn_off_calls, "precondition: the room should have been turned off"
-        assert record_write_calls, "the turn-off must be recorded, or it reads as external"
-        data = record_write_calls[-1].data
+        assert claims_record_calls, "the turn-off must be recorded, or it reads as external"
+        data = claims_record_calls[-1].data
         assert data["entities"] == light_turn_off_calls[-1].data["entity_id"]
         assert all(t == {"state": "off"} for t in data["targets"].values()), data["targets"]
         assert set(data["targets"]) == set(data["entities"])
 
-    async def test_an_untracked_turn_off_is_not_recorded(self, hass, light_turn_off_calls, record_write_calls):
+    async def test_an_untracked_turn_off_is_not_recorded(self, hass, light_turn_off_calls, claims_record_calls):
         """No FLARE Tracking state device resolves for this room at all -
-        record_write now requires a scope, so the blueprint skips the call
+        claims_record now requires a scope, so the blueprint skips the call
         entirely rather than sending one it knows will fail. The turn-off
         itself still happens; only the recording is skipped."""
         _occupancy(hass, "binary_sensor.occ", "on")
@@ -705,7 +705,7 @@ class TestOccupancyDrivenOnOff:
         await hass.async_block_till_done()
 
         assert light_turn_off_calls, "the turn-off itself must still happen"
-        assert not record_write_calls, "no scope resolves, so nothing should be recorded"
+        assert not claims_record_calls, "no scope resolves, so nothing should be recorded"
 
     async def test_occupancy_cleared_turns_lights_off_after_the_wait(self, hass, light_turn_off_calls):
         _occupancy(hass, "binary_sensor.occ", "on")
@@ -1102,7 +1102,7 @@ class TestSceneHandoff:
         assert calls and calls[-1].data["entities"] == ["light.uncovered"]
 
     async def test_scene_covered_lights_are_released_from_override_protection(
-        self, hass, apply_lighting_calls, scene_turn_on_calls, clear_claims_calls
+        self, hass, apply_lighting_calls, scene_turn_on_calls, claims_clear_calls
     ):
         """A light handed to a scene isn't written by apply_lighting, so its
         override-protection claim would freeze at the last real write and be
@@ -1127,14 +1127,14 @@ class TestSceneHandoff:
         hass.states.async_set("sensor.test_adaptive", "Evening", {"brightness": 150, "color_temp": 3000})
         await hass.async_block_till_done()
 
-        assert clear_claims_calls
-        assert clear_claims_calls[-1].data["entities"] == ["light.covered"]
+        assert claims_clear_calls
+        assert claims_clear_calls[-1].data["entities"] == ["light.covered"]
         # The uncovered light is still adaptively managed, so it must NOT
         # be released.
         assert apply_lighting_calls[-1].data["entities"] == ["light.uncovered"]
 
     async def test_a_scene_reaching_outside_scope_releases_nothing(
-        self, hass, apply_lighting_calls, clear_claims_calls
+        self, hass, apply_lighting_calls, claims_clear_calls
     ):
         """scene_active gates the release. A scene that exists but covers
         something outside the room is treated as no scene at all - adaptive
@@ -1154,7 +1154,7 @@ class TestSceneHandoff:
         hass.states.async_set("sensor.test_adaptive", "Evening", {"brightness": 150, "color_temp": 3000})
         await hass.async_block_till_done()
 
-        assert clear_claims_calls == []
+        assert claims_clear_calls == []
         assert apply_lighting_calls[-1].data["entities"] == ["light.a"]
 
     async def test_scene_recheck_is_skipped_on_a_same_phase_attribute_only_tick(
@@ -1326,7 +1326,7 @@ class TestBrightnessScaling:
         assert "light.handed_off" not in turned_off
 
     async def test_a_null_multiplier_light_is_released_from_override_protection(
-        self, hass, apply_lighting_calls, clear_claims_calls
+        self, hass, apply_lighting_calls, claims_clear_calls
     ):
         """The other half of the handoff: a null multiplier means something
         else owns this light, so its claim is released too. Live, this was
@@ -1348,8 +1348,8 @@ class TestBrightnessScaling:
         async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=1))
         await hass.async_block_till_done()
 
-        assert clear_claims_calls
-        assert clear_claims_calls[-1].data["entities"] == ["light.handed_off"]
+        assert claims_clear_calls
+        assert claims_clear_calls[-1].data["entities"] == ["light.handed_off"]
 
     async def test_a_zero_multiplier_light_is_still_turned_off_when_occupancy_clears(
         self, hass, light_turn_off_calls

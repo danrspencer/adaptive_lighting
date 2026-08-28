@@ -754,13 +754,13 @@ action:
             # switching it off - which is exactly what it should read a
             # *hand* turn-off as. Skipped entirely with no resolvable
             # scope: recording accomplishes nothing when nothing is
-            # tracking these lights, and record_write now requires
+            # tracking these lights, and claims_record now requires
             # tracking_device_id rather than treating it as optional.
             if:
               - condition: template
                 value_template: "{{ tracking_scope_device_id is not none }}"
             then:
-              - action: flare.record_write
+              - action: flare.claims_record
                 data:
                   entities: "{{ reachable_entities }}"
                   tracking_device_id: "{{ tracking_scope_device_id }}"
@@ -841,7 +841,7 @@ action:
               - condition: template
                 value_template: "{{ tracking_scope_device_id is not none }}"
             then:
-              - action: flare.record_write
+              - action: flare.claims_record
                 data:
                   entities: "{{ entities_still_on }}"
                   tracking_device_id: "{{ tracking_scope_device_id }}"
@@ -866,7 +866,7 @@ action:
       # lights right now. Nothing is given up by it - they aren't being
       # written, so there is no protection to lose, and the next tick
       # that does manage them re-establishes a claim through the
-      # ordinary first-write path. clear_claims is a no-op for an
+      # ordinary first-write path. claims_clear is a no-op for an
       # entity with no record, so this costs nothing on the ticks where
       # it changes nothing - but it also now requires a scope, so the
       # condition guards on one resolving at all, not just on there
@@ -877,7 +877,7 @@ action:
             value_template: >-
               {{ handed_off_entities | length > 0 and tracking_scope_device_id is not none }}
         then:
-          - action: flare.clear_claims
+          - action: flare.claims_clear
             data:
               entities: "{{ handed_off_entities }}"
               tracking_device_id: "{{ tracking_scope_device_id }}"

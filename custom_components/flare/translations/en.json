@@ -41,7 +41,7 @@
       "step": {
         "user": {
           "title": "Add state device",
-          "description": "A state device tracks which of its lights adaptive lighting is currently driving, and which have been taken over by something else. Point it at an area, a device, or specific lights. A light matching no state device simply isn't tracked.",
+          "description": "A state device is a named tracking scope for override protection. Which lights it tracks is decided by whichever automation or service call passes its ID as tracking_device_id — not by anything set here. Optionally point it at an area, device, or lights just to place it under that area in Settings → Devices for tidiness.",
           "data": {
             "name": "Name",
             "target": "Lights, devices or areas"
@@ -53,7 +53,7 @@
             "name": "Name",
             "target": "Lights, devices or areas"
           },
-          "description": "A state device tracks which of its lights adaptive lighting is currently driving, and which have been taken over by something else. Point it at an area, a device, or specific lights. A light matching no state device simply isn't tracked."
+          "description": "A state device is a named tracking scope for override protection. Which lights it tracks is decided by whichever automation or service call passes its ID as tracking_device_id — not by anything set here. Optionally point it at an area, device, or lights just to place it under that area in Settings → Devices for tidiness."
         }
       },
       "error": {

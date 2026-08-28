@@ -2,10 +2,12 @@
 State devices - the user-configured tracking scopes that own the
 override-protection claims.
 
-These cover the two things the redesign turns on: that a light resolves
-to exactly one scope (deterministically, from configuration rather than
-from whoever wrote last), and that the scope's entities really are the
-storage rather than a view kept in step with something else.
+A light's scope is whatever tracking_device_id a caller names on it
+(apply_lighting/claims_record/etc), never resolved from the entity's own
+area or device - see write_tracking.py's module docstring. These cover
+that a light lives in exactly one scope no matter how many callers name
+it, and that the scope's entities really are the storage rather than a
+view kept in step with something else.
 """
 
 from datetime import timedelta
@@ -72,15 +74,13 @@ def _light(hass: HomeAssistant, entity_id: str, *, area_id=None, device_id=None,
     return created.entity_id
 
 
-async def _record(registry: ClaimRegistry, entity_id: str, context_id: str, target=None):
-    """Resolves the entity's scope the same way a real caller would -
-    look it up, then state it explicitly - rather than relying on the
-    integration to search for it. None (no matching scope at all) is
-    passed straight through; async_record treats that as a no-op, same
-    as any other caller passing no scope."""
-    instance = registry.scope_for(entity_id)
+async def _record(registry: ClaimRegistry, subentry_id: str | None, entity_id: str, context_id: str, target=None):
+    """Records a write the same way a real caller would - naming its
+    scope explicitly, never resolved from the entity's own area/device.
+    None (no scope at all) is passed straight through; async_record
+    treats that as a no-op, same as any other caller passing no scope."""
     await registry.async_record(
-        instance.subentry_id if instance else None,
+        subentry_id,
         [entity_id],
         {entity_id: f"before-{entity_id}"},
         context_id,
@@ -88,58 +88,28 @@ async def _record(registry: ClaimRegistry, entity_id: str, context_id: str, targ
     )
 
 
-# --- resolution -----------------------------------------------------------
+def _scope_id(entry, title: str) -> str:
+    """The subentry_id for a scope by its title - a stand-in for what a
+    real caller already knows (it configured this state device and kept
+    its device_id/tracking_device_id around), not a resolution
+    mechanism of its own."""
+    return next(i.subentry_id for i in state_instances(entry) if i.title == title)
 
 
-async def test_a_named_entity_beats_its_device_which_beats_its_area(hass: HomeAssistant):
-    """Most specific wins. The whole point of resolving from
-    configuration is that the answer doesn't depend on who wrote last, so
-    the order has to be a stated rule rather than an accident."""
-    area = ar.async_get(hass).async_get_or_create("Kitchen")
-    bulb_entry = MockConfigEntry(domain="test_bulbs")
-    bulb_entry.add_to_hass(hass)
-    device = dr.async_get(hass).async_get_or_create(
-        config_entry_id=bulb_entry.entry_id, identifiers={("test", "bulb")}, name="Bulb"
-    )
-    entry, registry, _ = await _setup(
-        hass,
-        _scope("By Area", {"area_id": [area.id]}),
-        _scope("By Device", {"device_id": [device.id]}),
-        _scope("By Entity", {"entity_id": ["light.a"]}),
-    )
-    _light(hass, "light.a", area_id=area.id, device_id=device.id)
-
-    assert registry.scope_for("light.a").title == "By Entity"
-
-    entry2, registry2, _ = await _setup(
-        hass, _scope("Area Only", {"area_id": [area.id]}), _scope("Device Only", {"device_id": [device.id]})
-    )
-    assert registry2.scope_for("light.a").title == "Device Only"
+# --- untracked-by-default --------------------------------------------------
 
 
-async def test_two_scopes_claiming_one_area_resolve_the_same_way_every_time(hass: HomeAssistant):
-    """Overlapping targets are user misconfiguration, but it must not be
-    a coin flip - state_instances sorts by title precisely so this is
-    stable across restarts rather than following dict order."""
-    area = ar.async_get(hass).async_get_or_create("Kitchen")
-    _entry, registry, _ = await _setup(
-        hass, _scope("Zulu", {"area_id": [area.id]}), _scope("Alpha", {"area_id": [area.id]})
-    )
-    _light(hass, "light.a", area_id=area.id)
-
-    assert registry.scope_for("light.a").title == "Alpha"
-
-
-async def test_a_light_matching_no_scope_is_not_tracked_and_stays_manageable(hass: HomeAssistant):
-    """Deliberately no catch-all. An absent scope is a visible signal
-    that a light needs an area or a target; a fallback bucket would
-    silently absorb the mistake."""
+async def test_a_light_with_no_scope_named_is_not_tracked_and_stays_manageable(hass: HomeAssistant):
+    """A state device's own target plays no part in which lights get
+    tracked - only a caller naming a scope's tracking_device_id does
+    (see write_tracking.py's module docstring). A light nobody has named
+    a scope for is simply untracked, not swept into whichever scope
+    happens to share its area."""
     area = ar.async_get(hass).async_get_or_create("Kitchen")
     _entry, registry, _ = await _setup(hass, _scope("Kitchen", {"area_id": [area.id]}))
     _light(hass, "light.elsewhere")
 
-    assert registry.scope_for("light.elsewhere") is None
-    await _record(registry, "light.elsewhere", "ctx-1", {"brightness": 200, "color_temp_kelvin": 3000})
+    await _record(registry, None, "light.elsewhere", "ctx-1", {"brightness": 200, "color_temp_kelvin": 3000})
     assert registry.all_records() == {}
     # Untracked means classify() has nothing to block on.
     assert registry.latest_context_id(None, "light.elsewhere") is None
@@ -159,7 +129,7 @@ async def test_a_write_before_the_scopes_entity_exists_is_dropped(hass: HomeAssi
     registry = ClaimRegistry(hass, entry)  # no entities registered yet
     _light(hass, "light.a", area_id=area.id)
 
-    await _record(registry, "light.a", "ctx-1", {"brightness": 200, "color_temp_kelvin": 3000})
+    await _record(registry, _scope_id(entry, "Kitchen"), "light.a", "ctx-1", {"brightness": 200, "color_temp_kelvin": 3000})
 
     assert registry.all_records() == {}
 
@@ -173,7 +143,7 @@ async def test_claims_live_on_the_tracking_entity_and_are_published_there(hass: 
     tracker = next(e for e in added if hasattr(e, "claims"))
     _light(hass, "light.a", area_id=area.id)
 
-    await _record(registry, "light.a", "ctx-1", {"brightness": 200, "color_temp_kelvin": 3000})
+    await _record(registry, _scope_id(_entry, "Kitchen"), "light.a", "ctx-1", {"brightness": 200, "color_temp_kelvin": 3000})
 
     # Not a copy kept in step - the registry mutated this very dict.
     assert "light.a" in tracker.claims
@@ -189,11 +159,12 @@ async def test_counters_split_one_scopes_lights_by_status(hass: HomeAssistant):
     controlled = next(e for e in added if e.entity_id.endswith("_flare_controlled"))
     overridden = next(e for e in added if e.entity_id.endswith("_flare_overridden"))
 
+    scope = _scope_id(_entry, "Kitchen")
     ours = Context()
     _light(hass, "light.mine", area_id=area.id)
     _light(hass, "light.taken", area_id=area.id)
-    await _record(registry, "light.mine", ours.id, {"brightness": 200, "color_temp_kelvin": 3000})
-    await _record(registry, "light.taken", "ctx-ours", {"brightness": 200, "color_temp_kelvin": 3000})
+    await _record(registry, scope, "light.mine", ours.id, {"brightness": 200, "color_temp_kelvin": 3000})
+    await _record(registry, scope, "light.taken", "ctx-ours", {"brightness": 200, "color_temp_kelvin": 3000})
     # Ours still matches its recorded target; the other was taken to
     # values matching neither claim.
     hass.states.async_set("light.mine", "on", {"brightness": 200, "color_temp_kelvin": 3000}, context=ours)
@@ -211,14 +182,14 @@ async def test_two_callers_writing_one_light_share_the_scopes_claims(hass: HomeA
     as an override."""
     area = ar.async_get(hass).async_get_or_create("Kitchen")
     _entry, registry, _ = await _setup(hass, _scope("Kitchen", {"area_id": [area.id]}))
+    scope = _scope_id(_entry, "Kitchen")
     _light(hass, "light.a", area_id=area.id)
 
-    await _record(registry, "light.a", "ctx-automation-one", {"brightness": 200, "color_temp_kelvin": 3000})
-    await _record(registry, "light.a", "ctx-automation-two", {"brightness": 120, "color_temp_kelvin": 2700})
+    await _record(registry, scope, "light.a", "ctx-automation-one", {"brightness": 200, "color_temp_kelvin": 3000})
+    await _record(registry, scope, "light.a", "ctx-automation-two", {"brightness": 120, "color_temp_kelvin": 2700})
 
     # One record, in one place, carrying the most recent write.
     assert list(registry.all_records()) == ["light.a"]
-    scope = registry.scope_for("light.a").subentry_id
     assert registry.latest_context_id(scope, "light.a") == "ctx-automation-two"
 
 
@@ -226,7 +197,7 @@ async def test_a_light_going_unavailable_is_cleared_from_its_scope(hass: HomeAss
     area = ar.async_get(hass).async_get_or_create("Kitchen")
     entry, registry, _ = await _setup(hass, _scope("Kitchen", {"area_id": [area.id]}))
     _light(hass, "light.a", area_id=area.id)
-    await _record(registry, "light.a", "ctx-1", {"brightness": 200, "color_temp_kelvin": 3000})
+    await _record(registry, _scope_id(entry, "Kitchen"), "light.a", "ctx-1", {"brightness": 200, "color_temp_kelvin": 3000})
     unsub = registry.async_start_listening(hass)
 
     hass.states.async_set("light.a", "unavailable", {})
@@ -242,10 +213,11 @@ async def test_a_scope_holds_its_claims_while_any_of_its_lights_is_still_on(hass
     would hand it straight back and relight it on the next tick."""
     area = ar.async_get(hass).async_get_or_create("Kitchen")
     _entry, registry, _ = await _setup(hass, _scope("Kitchen", {"area_id": [area.id]}))
+    scope = _scope_id(_entry, "Kitchen")
     _light(hass, "light.a", area_id=area.id)
     _light(hass, "light.b", area_id=area.id)
     for e in ("light.a", "light.b"):
-        await _record(registry, e, "ctx-ours", {"brightness": 200, "color_temp_kelvin": 3000})
+        await _record(registry, scope, e, "ctx-ours", {"brightness": 200, "color_temp_kelvin": 3000})
     unsub = registry.async_start_listening(hass)
 
     hass.states.async_set("light.a", "off", {})
@@ -260,10 +232,11 @@ async def test_a_scope_releases_once_none_of_its_lights_are_on(hass: HomeAssista
     using the room, so handing it back overrides nobody's choice."""
     area = ar.async_get(hass).async_get_or_create("Kitchen")
     _entry, registry, _ = await _setup(hass, _scope("Kitchen", {"area_id": [area.id]}))
+    scope = _scope_id(_entry, "Kitchen")
     _light(hass, "light.a", area_id=area.id)
     _light(hass, "light.b", area_id=area.id)
     for e in ("light.a", "light.b"):
-        await _record(registry, e, "ctx-ours", {"brightness": 200, "color_temp_kelvin": 3000})
+        await _record(registry, scope, e, "ctx-ours", {"brightness": 200, "color_temp_kelvin": 3000})
     unsub = registry.async_start_listening(hass)
 
     hass.states.async_set("light.a", "off", {})
@@ -288,10 +261,11 @@ async def test_an_unavailable_light_holding_a_claim_does_not_hold_a_scope_open(h
     only one in which this rule is reachable at all."""
     area = ar.async_get(hass).async_get_or_create("Kitchen")
     _entry, registry, _ = await _setup(hass, _scope("Kitchen", {"area_id": [area.id]}))
+    scope = _scope_id(_entry, "Kitchen")
     _light(hass, "light.a", area_id=area.id)
     _light(hass, "light.dead", area_id=area.id)
     for e in ("light.a", "light.dead"):
-        await _record(registry, e, "ctx-ours", {"brightness": 200, "color_temp_kelvin": 3000})
+        await _record(registry, scope, e, "ctx-ours", {"brightness": 200, "color_temp_kelvin": 3000})
 
     hass.states.async_set("light.dead", "unavailable", {})
     await hass.async_block_till_done()
@@ -314,8 +288,8 @@ async def test_scopes_release_independently(hass: HomeAssistant):
     )
     _light(hass, "light.k", area_id=kitchen.id)
     _light(hass, "light.h", area_id=hall.id)
-    for e in ("light.k", "light.h"):
-        await _record(registry, e, "ctx-ours", {"brightness": 200, "color_temp_kelvin": 3000})
+    await _record(registry, _scope_id(_entry, "Kitchen"), "light.k", "ctx-ours", {"brightness": 200, "color_temp_kelvin": 3000})
+    await _record(registry, _scope_id(_entry, "Hall"), "light.h", "ctx-ours", {"brightness": 200, "color_temp_kelvin": 3000})
     unsub = registry.async_start_listening(hass)
 
     hass.states.async_set("light.k", "off", {})
@@ -333,8 +307,8 @@ async def test_the_clear_button_clears_only_its_own_scope(hass: HomeAssistant):
     )
     _light(hass, "light.k", area_id=kitchen.id)
     _light(hass, "light.h", area_id=hall.id)
-    await _record(registry, "light.k", "ctx-k", {"brightness": 200, "color_temp_kelvin": 3000})
-    await _record(registry, "light.h", "ctx-h", {"brightness": 200, "color_temp_kelvin": 3000})
+    await _record(registry, _scope_id(_entry, "Kitchen"), "light.k", "ctx-k", {"brightness": 200, "color_temp_kelvin": 3000})
+    await _record(registry, _scope_id(_entry, "Hall"), "light.h", "ctx-h", {"brightness": 200, "color_temp_kelvin": 3000})
 
     kitchen_button = next(e for e in added if e.entity_id == "button.kitchen_flare_clear")
     assert kitchen_button.extra_state_attributes["tracked"] == 1
@@ -370,7 +344,7 @@ async def test_the_override_event_carries_the_scopes_device_id(hass: HomeAssista
     hass.bus.async_listen("flare_light_overridden", events.append)
 
     _light(hass, "light.a", area_id=area.id)
-    await _record(registry, "light.a", "ctx-ours", {"brightness": 200, "color_temp_kelvin": 3000})
+    await _record(registry, _scope_id(entry, "Kitchen"), "light.a", "ctx-ours", {"brightness": 200, "color_temp_kelvin": 3000})
     tracker._refresh_statuses()  # seeds without announcing
     assert events == []
 
@@ -396,7 +370,7 @@ async def test_the_event_omits_device_id_when_there_is_no_device(hass: HomeAssis
     hass.bus.async_listen("flare_light_overridden", events.append)
 
     _light(hass, "light.a", area_id=area.id)
-    await _record(registry, "light.a", "ctx-ours", {"brightness": 200, "color_temp_kelvin": 3000})
+    await _record(registry, _scope_id(_entry, "Kitchen"), "light.a", "ctx-ours", {"brightness": 200, "color_temp_kelvin": 3000})
     tracker._refresh_statuses()
     hass.states.async_set("light.a", "on", {"brightness": 12, "color_temp_kelvin": 6500}, context=Context())
     tracker._refresh_statuses()
@@ -649,7 +623,7 @@ async def test_counters_refresh_when_a_lights_live_state_changes(hass: HomeAssis
     overridden = next(e for e in added if e.entity_id.endswith("_flare_overridden"))
 
     _light(hass, "light.a", area_id=area.id)
-    await _record(registry, "light.a", "ctx-ours", {"brightness": 200, "color_temp_kelvin": 3000})
+    await _record(registry, _scope_id(_entry, "Kitchen"), "light.a", "ctx-ours", {"brightness": 200, "color_temp_kelvin": 3000})
     hass.states.async_set("light.a", "on", {"brightness": 12, "color_temp_kelvin": 6500}, context=Context())
     assert overridden.native_value == 1
 

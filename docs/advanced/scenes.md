@@ -26,7 +26,7 @@ picks the light up again afterwards.
 ## How a handoff works
 
 When the blueprint hands a room to a scene it activates the scene, then calls
-`flare.clear_claims` for the lights that scene covers. The clear matters: without it FLARE
+`flare.claims_clear` for the lights that scene covers. The clear matters: without it FLARE
 would keep its old claim, see the scene's values, and classify them as an override.
 
 Lights the scene doesn't cover keep getting the adaptive values, so a scene naming half a
