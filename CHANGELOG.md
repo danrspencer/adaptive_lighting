@@ -7,6 +7,25 @@ The version in `custom_components/flare/manifest.json` is what
 HACS shows as installed, so it and the release tag are checked against each other in
 CI — see `.github/workflows/release.yml`.
 
+## [0.5.0] - 2026-08-28
+
+### Changed
+
+- Adding FLARE now creates both entries in one pass. It was two trips
+  through Add Integration, once per entry; two entries is a grouping
+  decision and never implied two trips to get there. The flow asks the
+  one thing there is to ask - which rooms to track - and raises the
+  other entry itself. Either half is still creatable on its own, so
+  deleting one and adding it back works.
+- The documentation site uses the FLARE icon: favicon, sidebar, and
+  link previews. The README leads with it too, which is the one surface
+  HACS renders for us.
+
+### Fixed
+
+- The repository had no description, which is exactly what HACS shows
+  under a store listing's name. Set, along with topics.
+
 ## [0.4.2] - 2026-08-28
 
 ### Changed
