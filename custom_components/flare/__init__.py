@@ -171,38 +171,35 @@ APPLY_LIGHTING_SCHEMA = vol.Schema(
     }
 )
 
+# These three exist for no reason other than to read or write tracking
+# claims - unlike apply_lighting/compute_lighting_groups, which still do
+# something useful (dispatch/plan lights) with no scope at all, there is
+# no meaningful reason to call any of these three without one. Required,
+# not vol.Any(None, ...): a caller with nothing to name shouldn't be
+# calling these services in the first place, and a schema-level failure
+# is a much louder signal than the previous "always empty, silently" was.
 CHECK_CONTROL_SCHEMA = vol.Schema(
     {
         vol.Required("entities"): [cv.entity_id],
+        vol.Required("scope_device_id"): cv.string,
         vol.Optional("brightness_tolerance", default=2): vol.Coerce(int),
         vol.Optional("color_temp_tolerance", default=10): vol.Coerce(int),
         vol.Optional("rgb_color_tolerance", default=10): vol.Coerce(int),
-        # None (the default) means "answer against no claims at all" -
-        # every entity reads back as untracked/off, since there is no
-        # scope to check them against. vol.Any(None, ...), same
-        # reasoning as rgb_color above.
-        vol.Optional("scope_device_id"): vol.Any(None, cv.string),
     }
 )
 
 RECORD_WRITE_SCHEMA = vol.Schema(
     {
         vol.Required("entities"): [cv.entity_id],
+        vol.Required("scope_device_id"): cv.string,
         vol.Optional("targets", default=dict): dict,
-        # None (the default) is a no-op: there is no scope to record
-        # into, so nothing is tracked. vol.Any(None, ...), same
-        # reasoning as rgb_color above.
-        vol.Optional("scope_device_id"): vol.Any(None, cv.string),
     }
 )
 
 CLEAR_CLAIMS_SCHEMA = vol.Schema(
     {
         vol.Required("entities"): [cv.entity_id],
-        # None (the default) is a no-op: there is no scope to clear
-        # entities out of. vol.Any(None, ...), same reasoning as
-        # rgb_color above.
-        vol.Optional("scope_device_id"): vol.Any(None, cv.string),
+        vol.Required("scope_device_id"): cv.string,
     }
 )
 
@@ -714,23 +711,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         informative.
 
         Returns: {"results": {entity_id: {"blocked": bool, "status":
-        str, "matched_via": str|None, "scope": str|None}, ...}}.
+        str, "matched_via": str|None, "scope": str}, ...}}.
         "status" is one of "off", "untracked", "controlled",
         "overridden"; "matched_via" is "latest-context",
         "latest-value", "observed-context" or "observed-value" for a
         "controlled" status and null otherwise; "scope" echoes back
-        scope_device_id's own title, or null when none was given. See
-        override_protection.classify() and services.yaml.
+        scope_device_id's own title. See override_protection.classify()
+        and services.yaml.
 
-        scope_device_id (optional): which FLARE tracking scope to check
-        against. Omitting it answers against no claims at all - every
-        entity reads back "off"/"untracked" as appropriate, since there
-        is nothing to compare it to.
+        scope_device_id (required): which FLARE tracking scope to check
+        against - this service exists only to answer questions about
+        tracking, so unlike apply_lighting there's nothing useful to do
+        without one.
         """
         brightness_tolerance = call.data["brightness_tolerance"]
         color_temp_tolerance = call.data["color_temp_tolerance"]
         rgb_color_tolerance = call.data["rgb_color_tolerance"]
-        scope = write_tracker.resolve_scope_device(call.data.get("scope_device_id"))
+        scope = write_tracker.resolve_scope_device(call.data["scope_device_id"])
         scope_title = write_tracker.title_for_scope(scope)
         results: dict[str, Any] = {}
         for entity_id in call.data["entities"]:
@@ -790,22 +787,24 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         it.
 
         Returns: {"recorded": [...]} - the entity_ids that were actually
-        recorded, which is **not** necessarily everything passed in: with
-        no scope_device_id nothing is recorded at all. Reporting the
+        recorded, which is **not** necessarily everything passed in: the
+        scope's tracking entity might not be up yet (see
+        write_tracker.async_record's own docstring). Reporting the
         request back verbatim would tell a caller their write was
         tracked when nothing had happened.
 
-        scope_device_id (optional): which FLARE tracking scope to record
-        into. Omitting it is a no-op - there is nowhere to record into.
+        scope_device_id (required): which FLARE tracking scope to record
+        into - this service exists only to write tracking claims, so
+        unlike apply_lighting there's nothing useful to do without one.
         """
         entities = call.data["entities"]
         targets = call.data.get("targets", {})
-        scope = write_tracker.resolve_scope_device(call.data.get("scope_device_id"))
+        scope = write_tracker.resolve_scope_device(call.data["scope_device_id"])
         live_context_before_write = {
             e: (state.context.id if (state := hass.states.get(e)) is not None else None) for e in entities
         }
         await write_tracker.async_record(scope, entities, live_context_before_write, call.context.id, targets=targets)
-        tracked = write_tracker.records_for_scope(scope) if scope is not None else {}
+        tracked = write_tracker.records_for_scope(scope)
         return {"recorded": [e for e in entities if e in tracked]}
 
     async def clear_claims(call: ServiceCall) -> ServiceResponse:
@@ -822,12 +821,13 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
         Returns: {"cleared": [...]} - the entity_ids passed through.
 
-        scope_device_id (optional): which FLARE tracking scope to clear
-        entities out of. Omitting it is a no-op - there is nothing to
-        clear.
+        scope_device_id (required): which FLARE tracking scope to clear
+        entities out of - this service exists only to discard tracking
+        claims, so unlike apply_lighting there's nothing useful to do
+        without one.
         """
         entities = call.data["entities"]
-        scope = write_tracker.resolve_scope_device(call.data.get("scope_device_id"))
+        scope = write_tracker.resolve_scope_device(call.data["scope_device_id"])
         await write_tracker.async_clear(scope, entities)
         return {"cleared": entities}
 

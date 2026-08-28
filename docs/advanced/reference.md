@@ -68,10 +68,17 @@ data:
   scope_device_id: "{{ device_id('sensor.kitchen_flare_tracking') }}"
 ```
 
-**Omitting `scope_device_id` writes the light but tracks nothing** — no claim is recorded, and nothing is
-excluded as already externally-set. Tracking is opt-in per call, not something the integration goes looking
-for on your behalf. A `scope_device_id` that *is* given but isn't one of your tracking scopes raises rather
-than silently behaving like it was omitted — a typo'd or stale id is a mistake worth knowing about.
+**`scope_device_id` is optional on `apply_lighting` and `compute_lighting_groups`** — both do
+something useful (dispatch or plan lights) with no scope at all. **Omitting it writes the light but
+tracks nothing** — no claim is recorded, and nothing is excluded as already externally-set. Tracking
+is opt-in per call, not something the integration goes looking for on your behalf.
+
+**It's required on `check_control`, `record_write` and `clear_claims`** — each of those exists only
+to read or write tracking claims, so a call with nothing to name has nothing useful to do; the schema
+rejects it outright rather than always silently answering "untracked" or recording nothing.
+
+A `scope_device_id` that *is* given but isn't one of your tracking scopes raises rather than silently
+behaving like it was omitted — a typo'd or stale id is a mistake worth knowing about.
 
 Every entity passed in one call goes into the *same* scope — there's no per-entity resolution any more, so a
 call spanning several rooms needs one call per room's own scope.

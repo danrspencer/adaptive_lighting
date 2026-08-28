@@ -454,13 +454,21 @@ rather than assumed:
   caller naming that scope writes through it.
 - **Scope is caller-supplied, not resolved.** Every tracking service
   (`apply_lighting`, `compute_lighting_groups`, `check_control`,
-  `record_write`, `clear_claims`) takes an optional `scope_device_id` -
-  a real HA device, one per state device (`StateInstance.device_info`).
-  `ClaimRegistry.resolve_scope_device()` turns that into a subentry_id;
-  omitting it means "write, but track nothing" (no claim, nothing
-  excluded as externally-set), and a device_id that isn't one of this
-  entry's own state devices raises `ServiceValidationError` rather than
-  behaving like it was omitted. The old implicit resolver,
+  `record_write`, `clear_claims`) takes `scope_device_id` - a real HA
+  device, one per state device (`StateInstance.device_info`).
+  `ClaimRegistry.resolve_scope_device()` turns that into a subentry_id.
+  **Optional only on `apply_lighting`/`compute_lighting_groups`** -
+  both do something useful (dispatch/plan lights) with no scope at
+  all, so omitting it means "write, but track nothing" (no claim,
+  nothing excluded as externally-set). **Required on `check_control`,
+  `record_write`, `clear_claims`** - each exists only to read or write
+  tracking claims, so a call with nothing to name has nothing useful
+  to do; the schema rejects a missing/null value outright (`vol.Required`,
+  not `vol.Any(None, ...)`) rather than always silently answering
+  "untracked" or recording nothing. A device_id that *is* given but
+  isn't one of this entry's own state devices raises
+  `ServiceValidationError` on any of the five, rather than behaving
+  like it was omitted. The old implicit resolver,
   `scope_for()` (entity → device → area, searched across every
   configured state device), still exists but is internal-only now -
   used solely by the three call sites with no caller to ask at all:
@@ -481,9 +489,14 @@ rather than assumed:
 - **The blueprint's own turn-offs are bare `light.turn_off` calls**,
   not `apply_lighting`, so they record nothing on their own - each is
   followed by an explicit `flare.record_write` step with the same
-  `{"state": "off"}` target. Without it every light in the room reads
+  `{"state": "off"}` target, guarded by
+  `tracking_scope_device_id is not none` since `record_write` now
+  requires a scope - the same guard covers the `clear_claims` scene-
+  handoff step. Without the record step every light in the room reads
   as externally switched off every time the room empties, which also
-  fires `flare_light_overridden` for each of them.
+  fires `flare_light_overridden` for each of them; without the guard, a
+  room with no resolvable scope would fail the tick outright instead of
+  turning off untracked.
 - **A scope releases every claim once none of its lights report `on`**
   (`ClaimRegistry._release_if_dark`). Anything not `on` counts as dark,
   unavailable included - requiring an explicit `off` would let one
