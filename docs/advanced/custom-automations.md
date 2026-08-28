@@ -53,8 +53,9 @@ whichever scope you name.
 ### Using override protection standalone
 
 Override protection is also two standalone services — `check_control` (read-only) and
-`record_write` — usable on your own entities, with or without `apply_lighting`. Both take
-the same `scope_device_id`:
+`record_write` — usable on your own entities, with or without `apply_lighting`. Unlike
+`apply_lighting`, both exist only to read or write tracking claims, so `scope_device_id`
+is **required** on each — there's nothing useful either can do without one:
 
 ```yaml
 action: flare.check_control

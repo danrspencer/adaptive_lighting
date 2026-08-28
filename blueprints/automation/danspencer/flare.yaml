@@ -752,19 +752,27 @@ action:
             # Without this the integration sees a light go off under a
             # context it has no claim for and reads it as someone else
             # switching it off - which is exactly what it should read a
-            # *hand* turn-off as. dict(a, **b) rather than
-            # dict.fromkeys: the same construct used for the brightness
-            # multipliers below, and known to work in HA's Jinja.
-            action: flare.record_write
-            data:
-              entities: "{{ reachable_entities }}"
-              scope_device_id: "{{ tracking_scope_device_id }}"
-              targets: >-
-                {% set ns = namespace(t={}) %}
-                {% for e in reachable_entities %}
-                  {% set ns.t = dict(ns.t, **{e: {'state': 'off'}}) %}
-                {% endfor %}
-                {{ ns.t }}
+            # *hand* turn-off as. Skipped entirely with no resolvable
+            # scope: recording accomplishes nothing when nothing is
+            # tracking these lights, and record_write now requires
+            # scope_device_id rather than treating it as optional.
+            if:
+              - condition: template
+                value_template: "{{ tracking_scope_device_id is not none }}"
+            then:
+              - action: flare.record_write
+                data:
+                  entities: "{{ reachable_entities }}"
+                  scope_device_id: "{{ tracking_scope_device_id }}"
+                  # dict(a, **b) rather than dict.fromkeys: the same
+                  # construct used for the brightness multipliers below,
+                  # and known to work in HA's Jinja.
+                  targets: >-
+                    {% set ns = namespace(t={}) %}
+                    {% for e in reachable_entities %}
+                      {% set ns.t = dict(ns.t, **{e: {'state': 'off'}}) %}
+                    {% endfor %}
+                    {{ ns.t }}
       # Self-healing: on an adaptive_tick, if the room is unoccupied but
       # something is still on (an earlier turn-off didn't land), retry
       # just that. These conditions - not trigger.id alone - decide
@@ -826,19 +834,23 @@ action:
             # Without this the integration sees a light go off under a
             # context it has no claim for and reads it as someone else
             # switching it off - which is exactly what it should read a
-            # *hand* turn-off as. dict(a, **b) rather than
-            # dict.fromkeys: the same construct used for the brightness
-            # multipliers below, and known to work in HA's Jinja.
-            action: flare.record_write
-            data:
-              entities: "{{ entities_still_on }}"
-              scope_device_id: "{{ tracking_scope_device_id }}"
-              targets: >-
-                {% set ns = namespace(t={}) %}
-                {% for e in entities_still_on %}
-                  {% set ns.t = dict(ns.t, **{e: {'state': 'off'}}) %}
-                {% endfor %}
-                {{ ns.t }}
+            # *hand* turn-off as. Skipped entirely with no resolvable
+            # scope - see the motion_off branch's own copy of this step
+            # above for why.
+            if:
+              - condition: template
+                value_template: "{{ tracking_scope_device_id is not none }}"
+            then:
+              - action: flare.record_write
+                data:
+                  entities: "{{ entities_still_on }}"
+                  scope_device_id: "{{ tracking_scope_device_id }}"
+                  targets: >-
+                    {% set ns = namespace(t={}) %}
+                    {% for e in entities_still_on %}
+                      {% set ns.t = dict(ns.t, **{e: {'state': 'off'}}) %}
+                    {% endfor %}
+                    {{ ns.t }}
     default:
       - if:
           - condition: template
@@ -856,11 +868,14 @@ action:
       # that does manage them re-establishes a claim through the
       # ordinary first-write path. clear_claims is a no-op for an
       # entity with no record, so this costs nothing on the ticks where
-      # it changes nothing.
+      # it changes nothing - but it also now requires a scope, so the
+      # condition guards on one resolving at all, not just on there
+      # being entities to name.
       - alias: "Release lights handed off to a scene or another owner"
         if:
           - condition: template
-            value_template: "{{ handed_off_entities | length > 0 }}"
+            value_template: >-
+              {{ handed_off_entities | length > 0 and tracking_scope_device_id is not none }}
         then:
           - action: flare.clear_claims
             data:

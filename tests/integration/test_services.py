@@ -452,8 +452,7 @@ async def test_check_control_echoes_back_whatever_scope_it_was_given(setup_integ
     """`scope` is no longer resolved per entity - it simply echoes the
     caller's own scope_device_id back as a title, for every entity in the
     call, regardless of whether that light is anywhere near the scope's
-    own target. Omitting scope_device_id checks against no claims at all,
-    and the response says so."""
+    own target."""
     hass = setup_integration
     _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=100, color_temp_kelvin=3000)
     # Not in the Test Scope's area at all - the point is that passing the
@@ -465,23 +464,25 @@ async def test_check_control_echoes_back_whatever_scope_it_was_given(setup_integ
     assert results["light.a"]["scope"] == "Test Scope"
     assert results["light.elsewhere"]["scope"] == "Test Scope"
 
-    results = await _check(hass, ["light.a"], scope_device_id=None)
-    assert results["light.a"] == {"blocked": False, "status": "untracked", "matched_via": None, "scope": None}
 
-
-async def test_record_write_with_no_scope_records_nothing(setup_integration: HomeAssistant):
-    """Decision: a service call with no scope still writes the light (if
-    it writes at all), but tracks nothing - no claim, nothing excluded as
-    already externally-set. Omitting scope_device_id is that "don't
-    track this" signal, not a request to go find out where the light
-    belongs."""
+async def test_check_control_requires_a_scope(setup_integration: HomeAssistant):
+    """This service exists only to answer questions about tracking - with
+    nothing to check against, it's not a call worth making, so the schema
+    says so up front rather than always answering "untracked"."""
     hass = setup_integration
     _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=100, color_temp_kelvin=3000)
+    with pytest.raises(vol.Invalid):
+        await _check(hass, ["light.a"], scope_device_id=None)
 
-    result = await _record_write(hass, ["light.a"], scope_device_id=None)
 
-    assert result["recorded"] == []
-    assert _registry(hass).all_records() == {}
+async def test_record_write_requires_a_scope(setup_integration: HomeAssistant):
+    """This service exists only to write tracking claims - with nowhere
+    to record into, there's nothing for it to do, so the schema says so
+    up front rather than always silently recording nothing."""
+    hass = setup_integration
+    _set_light(hass, "light.a", "on", supported_color_modes=["color_temp"], brightness=100, color_temp_kelvin=3000)
+    with pytest.raises(vol.Invalid):
+        await _record_write(hass, ["light.a"], scope_device_id=None)
 
 
 async def test_record_write_records_everything_passed_once_a_scope_is_given(setup_integration: HomeAssistant):
@@ -631,14 +632,15 @@ async def test_clear_claims_frees_a_light_stuck_overridden(setup_integration: Ho
     assert results["light.a"] == {"blocked": False, "status": "untracked", "matched_via": None, "scope": "Test Scope"}
 
 
-async def test_clear_claims_is_a_noop_with_no_scope(setup_integration: HomeAssistant):
-    """No scope means nothing to clear from - a caller-error-free no-op,
-    same as any other omitted-scope call."""
+async def test_clear_claims_requires_a_scope(setup_integration: HomeAssistant):
+    """This service exists only to discard tracking claims - with
+    nowhere to clear from, there's nothing for it to do, so the schema
+    says so up front rather than always silently clearing nothing."""
     hass = setup_integration
-    result = await hass.services.async_call(
-        DOMAIN, "clear_claims", {"entities": ["light.never_tracked"]}, blocking=True, return_response=True
-    )
-    assert result == {"cleared": ["light.never_tracked"]}
+    with pytest.raises(vol.Invalid):
+        await hass.services.async_call(
+            DOMAIN, "clear_claims", {"entities": ["light.never_tracked"]}, blocking=True, return_response=True
+        )
 
 
 async def test_clear_claims_is_a_noop_for_an_untracked_entity_within_a_real_scope(setup_integration: HomeAssistant):

@@ -664,6 +664,10 @@ class TestOccupancyDrivenOnOff:
         go off under a context it holds no claim for and classifies it
         as somebody else switching it off - every light in the room,
         every time the room empties."""
+        kitchen = ar.async_get(hass).async_get_or_create("Kitchen")
+        _register_tracking_scope(hass, kitchen.id, "kitchen")
+        er.async_get(hass).async_get_or_create("light", "test", "light_a", suggested_object_id="a")
+        er.async_get(hass).async_update_entity("light.a", area_id=kitchen.id)
         _occupancy(hass, "binary_sensor.occ", "on")
         _light(hass, "light.a", "on")
         await hass.async_block_till_done()
@@ -682,6 +686,26 @@ class TestOccupancyDrivenOnOff:
         assert data["entities"] == light_turn_off_calls[-1].data["entity_id"]
         assert all(t == {"state": "off"} for t in data["targets"].values()), data["targets"]
         assert set(data["targets"]) == set(data["entities"])
+
+    async def test_an_untracked_turn_off_is_not_recorded(self, hass, light_turn_off_calls, record_write_calls):
+        """No FLARE Tracking state device resolves for this room at all -
+        record_write now requires a scope, so the blueprint skips the call
+        entirely rather than sending one it knows will fail. The turn-off
+        itself still happens; only the recording is skipped."""
+        _occupancy(hass, "binary_sensor.occ", "on")
+        _light(hass, "light.a", "on")
+        await hass.async_block_till_done()
+        await _setup_room_automation(
+            hass, room_target={"entity_id": ["light.a", "binary_sensor.occ"]}, no_motion_wait=0
+        )
+
+        _occupancy(hass, "binary_sensor.occ", "off")
+        await hass.async_block_till_done()
+        async_fire_time_changed(hass, dt_util.utcnow() + timedelta(seconds=1))
+        await hass.async_block_till_done()
+
+        assert light_turn_off_calls, "the turn-off itself must still happen"
+        assert not record_write_calls, "no scope resolves, so nothing should be recorded"
 
     async def test_occupancy_cleared_turns_lights_off_after_the_wait(self, hass, light_turn_off_calls):
         _occupancy(hass, "binary_sensor.occ", "on")
@@ -1086,6 +1110,10 @@ class TestSceneHandoff:
         by hand. Live, this had 8 kitchen lights flagged red for hours while
         the automation was working perfectly. Releasing them says the truthful
         thing: nothing is managing this light right now."""
+        kitchen = ar.async_get(hass).async_get_or_create("Kitchen")
+        _register_tracking_scope(hass, kitchen.id, "kitchen")
+        er.async_get(hass).async_get_or_create("light", "test", "light_covered", suggested_object_id="covered")
+        er.async_get(hass).async_update_entity("light.covered", area_id=kitchen.id)
         _light(hass, "light.covered", "on")
         _light(hass, "light.uncovered", "on")
         hass.states.async_set("scene.evening_scene", "2024-01-01T00:00:00+00:00", {"entity_id": ["light.covered"]})
@@ -1304,6 +1332,10 @@ class TestBrightnessScaling:
         else owns this light, so its claim is released too. Live, this was
         light.kitchen_strip_back sitting on a 145-minute-old claim, flagged
         overridden, while its own gradient automation drove it perfectly."""
+        kitchen = ar.async_get(hass).async_get_or_create("Kitchen")
+        _register_tracking_scope(hass, kitchen.id, "kitchen")
+        er.async_get(hass).async_get_or_create("light", "test", "light_a", suggested_object_id="a")
+        er.async_get(hass).async_update_entity("light.a", area_id=kitchen.id)
         _light(hass, "light.a", "on")
         _light(hass, "light.handed_off", "on")
         await hass.async_block_till_done()

@@ -555,10 +555,11 @@ check_control:
     logic at all. Read-only - call record_write afterwards if you do
     write the entity, so a later check recognises that write.
 
-    Checks against scope_device_id's own claims; leaving it unset checks
-    against no claims at all, so every entity comes back as though
-    nothing is tracking it. The response's "scope" field simply echoes
-    scope_device_id's own title back.
+    Checks against scope_device_id's own claims. This service exists
+    only to answer questions about tracking, so unlike apply_lighting
+    there's nothing useful to do without one - it's required. The
+    response's "scope" field simply echoes scope_device_id's own title
+    back.
   fields:
     entities:
       name: Entities
@@ -571,8 +572,8 @@ check_control:
       name: Tracking scope
       description: >-
         The FLARE state device (Settings -> Devices & Services -> FLARE
-        Tracking) to check these entities' claims against. Leave unset
-        to check against no claims at all.
+        Tracking) to check these entities' claims against.
+      required: true
       selector:
         device:
           filter:
@@ -621,8 +622,9 @@ record_write:
     reading it as an external change. A thin wrapper around the same
     bookkeeping apply_lighting uses internally.
 
-    Returns the entities actually recorded, which need not be everything
-    passed in: with no scope_device_id, nothing is recorded at all.
+    This service exists only to write tracking claims, so unlike
+    apply_lighting there's nothing useful to do without a scope - it's
+    required.
   fields:
     entities:
       name: Entities
@@ -635,8 +637,8 @@ record_write:
       name: Tracking scope
       description: >-
         The FLARE state device (Settings -> Devices & Services -> FLARE
-        Tracking) to record this write into. Leave unset and the call is
-        a no-op - there is nowhere to record into.
+        Tracking) to record this write into.
+      required: true
       selector:
         device:
           filter:
@@ -667,6 +669,10 @@ clear_claims:
     a fresh one - see the integration reference's "Override protection"
     section). The next write to a cleared entity, from anyone, is
     treated exactly like a brand-new entity's first write.
+
+    This service exists only to discard tracking claims, so unlike
+    apply_lighting there's nothing useful to do without a scope - it's
+    required.
   fields:
     entities:
       name: Entities
@@ -679,8 +685,8 @@ clear_claims:
       name: Tracking scope
       description: >-
         The FLARE state device (Settings -> Devices & Services -> FLARE
-        Tracking) to clear these entities' claims from. Leave unset and
-        the call is a no-op - there is nothing to clear.
+        Tracking) to clear these entities' claims from.
+      required: true
       selector:
         device:
           filter:
