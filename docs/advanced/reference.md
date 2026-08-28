@@ -55,7 +55,7 @@ automation — and picks it up again when released.
 
 **You say which scope a call belongs to.** A state device is a named tracking scope you configure
 (Settings → Devices & Services → **FLARE Tracking** → Add state device), pointed at an area, some
-devices, or specific lights — each one is a real HA device. Pass its `scope_device_id` on any of
+devices, or specific lights — each one is a real HA device. Pass its `tracking_device_id` on any of
 `apply_lighting`, `compute_lighting_groups`, `check_control`, `record_write` or `clear_claims`:
 
 ```yaml
@@ -65,10 +65,10 @@ data:
   brightness: 200
   color_temp_kelvin: 3200
   transition: 2
-  scope_device_id: "{{ device_id('sensor.kitchen_flare_tracking') }}"
+  tracking_device_id: "{{ device_id('sensor.kitchen_flare_tracking') }}"
 ```
 
-**`scope_device_id` is optional on `apply_lighting` and `compute_lighting_groups`** — both do
+**`tracking_device_id` is optional on `apply_lighting` and `compute_lighting_groups`** — both do
 something useful (dispatch or plan lights) with no scope at all. **Omitting it writes the light but
 tracks nothing** — no claim is recorded, and nothing is excluded as already externally-set. Tracking
 is opt-in per call, not something the integration goes looking for on your behalf.
@@ -77,7 +77,7 @@ is opt-in per call, not something the integration goes looking for on your behal
 to read or write tracking claims, so a call with nothing to name has nothing useful to do; the schema
 rejects it outright rather than always silently answering "untracked" or recording nothing.
 
-A `scope_device_id` that *is* given but isn't one of your tracking scopes raises rather than silently
+A `tracking_device_id` that *is* given but isn't one of your tracking scopes raises rather than silently
 behaving like it was omitted — a typo'd or stale id is a mistake worth knowing about.
 
 Every entity passed in one call goes into the *same* scope — there's no per-entity resolution any more, so a
@@ -87,10 +87,10 @@ Because scope is something you state rather than something resolved from configu
 same scope share its claims and co-operate.** Name different scopes to track two automations apart.
 
 `force: true` writes through regardless of who holds a light. The write is still recorded against
-`scope_device_id`, so protection works again on the next non-forced call naming that same scope.
+`tracking_device_id`, so protection works again on the next non-forced call naming that same scope.
 
 The blueprint resolves this for you from `room_target` — see [One target, two jobs](../../blueprint/#one-target-two-jobs)
-— so you only need to pass `scope_device_id` by hand when calling these services directly.
+— so you only need to pass `tracking_device_id` by hand when calling these services directly.
 
 #### The two claims
 

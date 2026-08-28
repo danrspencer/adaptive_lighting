@@ -14,7 +14,7 @@ whatever it doesn't cover" is a reusable pattern on its own.
 """
 
 from dataclasses import dataclass, field
-from typing import Callable, Optional
+from typing import Callable
 
 
 @dataclass
@@ -32,7 +32,7 @@ class SceneCoverage:
 
 
 def compute_scene_coverage(
-    scene_entity_id: Optional[str],
+    scene_entity_id: str,
     scope_entities: list,
     target_entities: list,
     lookup: SceneLookup,
@@ -42,9 +42,10 @@ def compute_scene_coverage(
     sibling entities on the same devices) - a scene reaching outside
     that scope, or one that doesn't exist (a typo, a renamed scene), is
     treated the same as no scene at all: nothing is covered, your
-    default applies to every target entity, same as if scene_entity_id
-    had been left blank."""
-    if not scene_entity_id or not lookup.exists(scene_entity_id):
+    default applies to every target entity. Call this only when you
+    have a candidate scene - with none, you already know the answer
+    (everything's uncovered) without asking."""
+    if not lookup.exists(scene_entity_id):
         return SceneCoverage(
             scene_active=False,
             scene_valid=False,

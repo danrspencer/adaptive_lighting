@@ -871,7 +871,7 @@ class TestOverrideDetection:
         await hass.async_block_till_done()
 
         calls = apply_lighting_calls
-        assert calls and calls[-1].data["scope_device_id"] is None
+        assert calls and calls[-1].data["tracking_device_id"] is None
         assert calls[-1].data["force"] is False
 
     async def test_apply_lighting_resolves_scope_from_a_declared_area(self, hass, apply_lighting_calls):
@@ -891,7 +891,7 @@ class TestOverrideDetection:
         async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=1))
         await hass.async_block_till_done()
 
-        assert apply_lighting_calls[-1].data["scope_device_id"] == device_id
+        assert apply_lighting_calls[-1].data["tracking_device_id"] == device_id
 
     async def test_apply_lighting_falls_back_to_an_entity_only_targets_own_area(self, hass, apply_lighting_calls):
         """Room Target naming entities directly, with no area of its
@@ -911,7 +911,7 @@ class TestOverrideDetection:
         async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=1))
         await hass.async_block_till_done()
 
-        assert apply_lighting_calls[-1].data["scope_device_id"] == device_id
+        assert apply_lighting_calls[-1].data["tracking_device_id"] == device_id
 
     async def test_the_fallback_uses_the_first_lights_area_when_they_disagree(self, hass, apply_lighting_calls):
         """Two lights named directly, in two different areas each with
@@ -936,7 +936,7 @@ class TestOverrideDetection:
         async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=1))
         await hass.async_block_till_done()
 
-        assert apply_lighting_calls[-1].data["scope_device_id"] == kitchen_device
+        assert apply_lighting_calls[-1].data["tracking_device_id"] == kitchen_device
 
 
 class TestRecoveredTrigger:

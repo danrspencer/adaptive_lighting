@@ -40,6 +40,10 @@ anything else) to whatever's left. A scene only counts if it exists and everythi
 `scope_entities`; a scene reaching outside that scope, or one that doesn't exist, is treated the same as no scene
 at all. Nothing here is specific to adaptive lighting, or even to lighting.
 
+`scene_entity_id` is required - if you don't have a candidate scene this tick, skip calling the service
+entirely rather than passing nothing. You already know the answer without asking: every target entity is
+uncovered.
+
 ```yaml
 action: flare.compute_scene_coverage
 data:
