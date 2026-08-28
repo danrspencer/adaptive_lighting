@@ -208,13 +208,17 @@ def test_evening_kelvin_fade_never_extrapolates_past_night_kelvin():
     alongside the real current time, so "Evening" can legitimately be asked
     for at an instant past NIGHT. Unclamped, the fade's interpolation factor
     goes negative there and extrapolates straight through night_kelvin, the
-    floor it's supposed to bottom out at."""
+    floor it used to bottom out at - now it holds Evening's own kelvin
+    instead of even that floor, see _value_at's own docstring for why
+    (confirmed live as a real bug: bottoming out at the *next* phase's
+    value is exactly as wrong as unbounded extrapolation for a manual
+    override, just less dramatically so)."""
     # One hour past Night: t would be -1.0 unclamped -> 2700 + 500*-1 = 2200K.
-    assert _kel("Evening", NIGHT + 3600) == 2700
+    assert _kel("Evening", NIGHT + 3600) == 3200
     # Just before midnight (two hours past Night): t would be ~-1.98 -> ~1708K.
-    assert _kel("Evening", NIGHT + 7199) == 2700
-    # And with a custom range, it still bottoms out at that range's own floor.
-    assert _kel("Evening", NIGHT + 3600, evening_kelvin=4000, night_kelvin=2200) == 2200
+    assert _kel("Evening", NIGHT + 7199) == 3200
+    # And with a custom range, it holds that range's own evening value.
+    assert _kel("Evening", NIGHT + 3600, evening_kelvin=4000, night_kelvin=2200) == 4000
 
 
 def test_evening_kelvin_fade_is_unchanged_inside_its_real_window():
@@ -421,12 +425,34 @@ def test_the_defaults_reproduce_evenings_hour_long_fade():
     assert _kel("Evening", NIGHT) == 2700
 
 
-def test_a_phase_asked_for_outside_its_own_span_never_extrapolates():
+def test_a_phase_asked_for_outside_its_own_span_holds_its_own_value():
     """day_phase is a parameter, not derived from now_ts - the
     coordinator passes a manually-overridden phase alongside the real
     clock, so a phase can legitimately be asked for at an instant past
-    its own end. Unclamped the ramp runs straight through the target."""
-    assert _kel("Evening", NIGHT + 3600) == 2700
-    assert _kel("Evening", NIGHT + 7199) == 2700
-    assert _bri("Evening", NIGHT + 7199) == 80
-    assert _kel("Evening", NIGHT + 3600, evening_kelvin=4000, night_kelvin=2200) == 2200
+    its own end (the phase-override select forced to "Evening" while
+    it's actually the middle of the night, say). It must show Evening's
+    own configured value, not the value the old clamp-to-1 behaviour
+    settled on instead (Night's, i.e. values[_NEXT_PHASE["Evening"]]) -
+    confirmed live as a real bug via the phase-override select: forcing
+    "Night" during actual evening real time showed Morning's brightness/
+    colour instead of Night's own. See _value_at's own docstring."""
+    assert _kel("Evening", NIGHT + 3600) == 3200
+    assert _kel("Evening", NIGHT + 7199) == 3200
+    assert _bri("Evening", NIGHT + 7199) == 180
+    assert _kel("Evening", NIGHT + 3600, evening_kelvin=4000, night_kelvin=2200) == 4000
+
+
+def test_every_overridden_phase_holds_its_own_value_at_a_real_time_outside_its_span():
+    """The exact live incident _value_at's fix addresses, for every
+    phase, not just Evening: with real time genuinely within Evening's
+    own span, overriding to any OTHER phase must show that phase's own
+    configured look, not whatever the old clamp-to-1 ramp settled toward
+    (values[_NEXT_PHASE[<forced phase>]]) - confirmed live via the
+    phase-override select. A single-phase test can't catch this: it
+    needs a real now_ts genuinely outside the *forced* phase's own span,
+    for more than one forced phase, to prove the fix generalises rather
+    than happening to work for whichever phase the other test covers."""
+    now_ts = EVENING + 3600  # comfortably inside Evening's own real span
+    assert _bri("Morning", now_ts) == 255 and _kel("Morning", now_ts) == 6667
+    assert _bri("Day", now_ts) == 255 and _kel("Day", now_ts) == 6667
+    assert _bri("Night", now_ts) == 80 and _kel("Night", now_ts) == 2700

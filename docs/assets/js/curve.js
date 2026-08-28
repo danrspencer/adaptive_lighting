@@ -128,10 +128,12 @@ function valueAt(dayPhase, nowTs, b, values, durationMinutes) {
   const duration = Math.min(Math.max(durationMinutes, 0) * 60, Math.max(spanEnd - spanStart, 0));
   if (duration <= 0) return own;
   const rampStart = spanEnd - duration;
-  if (nowTs <= rampStart) return own;
-  // Clamped because dayPhase is a parameter, not derived from nowTs - a
-  // manual phase override can ask for a phase outside its own span, and
-  // unclamped this extrapolates straight past the target.
+  // Strictly past spanEnd, not merely reaching it - nowTs === spanEnd
+  // exactly still ramps all the way to t=1 (the boundary itself, where
+  // the value is meant to arrive at the next phase's exactly as it
+  // begins). Only reachable via a manual override, see curve.py's
+  // _value_at for the live incident this fixes.
+  if (nowTs <= rampStart || nowTs > spanEnd) return own;
   const t = clamp((nowTs - rampStart) / duration, 0, 1);
   return own + (values[NEXT_PHASE[dayPhase]] - own) * t;
 }

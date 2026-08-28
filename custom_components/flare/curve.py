@@ -262,14 +262,35 @@ def _value_at(
     now_ts. coordinator.py passes a manually-overridden phase alongside
     the real clock, so a phase can legitimately be asked for at an
     instant outside its own span. Unclamped, the ramp would extrapolate
-    straight past the target and keep going."""
+    straight past the target and keep going.
+
+    Past the phase's own span entirely - strictly past `span_end`, not
+    merely reaching it - this returns `own` outright, rather than the
+    fully-ramped next-phase value the clamp above would otherwise settle
+    on. `now_ts == span_end` exactly still ramps all the way to t=1
+    (the next phase's value): that instant is the boundary itself, where
+    "the value arrives at the next phase's exactly as that phase begins"
+    (see above) is meant to hold regardless of which phase asked for it.
+    Confirmed live as a real bug: overriding the phase-override select to
+    "Night" during actual evening real time - hours past Night's own
+    span, not merely at its edge - showed Morning's brightness/colour
+    (255/7000K) instead of Night's own (80/2700K), because the
+    interpolation factor clamped to 1 - which is
+    `values[_NEXT_PHASE["Night"]]`, Morning's value, not Night's own.
+    This can only change behaviour for an overridden phase: phase_at()'s
+    own natural output never lets now_ts get past a phase's own span_end
+    for that same phase - the instant it does, phase_at() has already
+    returned the *next* phase instead - so the full-day curve-preview
+    computation (coordinator.py's _compute_curve_points, which always
+    derives day_phase fresh via phase_at(t, ...) for that same t) is
+    unaffected."""
     own = values[day_phase]
     span_start, span_end = _phase_span(day_phase, now_ts, boundaries)
     duration = min(max(duration_minutes, 0) * 60, max(span_end - span_start, 0))
     if duration <= 0:
         return own
     ramp_start = span_end - duration
-    if now_ts <= ramp_start:
+    if now_ts <= ramp_start or now_ts > span_end:
         return own
     t = _clamp((now_ts - ramp_start) / duration, 0, 1)
     return own + (values[_NEXT_PHASE[day_phase]] - own) * t
