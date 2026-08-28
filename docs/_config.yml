@@ -1,7 +1,7 @@
 title: FLARE
 description: Flexible Lighting Automation & Reconciliation Engine — phase-based circadian lighting for Home Assistant, with scene reconciliation and override protection built in.
 url: https://danrspencer.github.io
-baseurl: /adaptive_lighting
+baseurl: /flare
 
 theme: just-the-docs
 
@@ -17,7 +17,7 @@ defaults:
       layout: default
 
 aux_links:
-  'GitHub': https://github.com/danrspencer/adaptive_lighting
+  'GitHub': https://github.com/danrspencer/flare
 aux_links_new_tab: true
 
 # Page indexes list sections and sub-sections but stop there. kramdown

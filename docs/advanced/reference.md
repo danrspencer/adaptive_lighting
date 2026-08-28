@@ -365,7 +365,7 @@ Point the blueprint's FLARE Sensor input (or your own template reading the same 
 integration's page; there's no reconfigure form since there's nothing left to reconfigure that way - edit the
 `time.*`/`number.*`/`switch.*` entities directly, or rename the device, instead.
 
-For a dashboard, [dashboard/adaptive-lighting-section.yaml](https://github.com/danrspencer/adaptive_lighting/blob/main/dashboard/adaptive-lighting-section.yaml) is a
+For a dashboard, [dashboard/adaptive-lighting-section.yaml](https://github.com/danrspencer/flare/blob/main/dashboard/adaptive-lighting-section.yaml) is a
 copy-paste section with the curve graph, the phase override and sticky-override switch, and all thirteen
 schedule/curve entities laid out as tiles - or skip the dashboard entirely and use the sensor's own device page
 (Settings → Devices → the sensor's device), which already shows the same entities grouped for free, since

@@ -126,7 +126,7 @@ job less well.
 ## The documentation site
 
 Everything except `README.md` lives here, published at
-<https://danrspencer.github.io/adaptive_lighting/> from `docs/` and built with Jekyll and the `just-the-docs`
+<https://danrspencer.github.io/flare/> from `docs/` and built with Jekyll and the `just-the-docs`
 theme by `.github/workflows/docs.yml`. Pull requests build the site but don't publish it; only a push to `main`
 deploys.
 
