@@ -7,6 +7,27 @@ The version in `custom_components/flare/manifest.json` is what
 HACS shows as installed, so it and the release tag are checked against each other in
 CI — see `.github/workflows/release.yml`.
 
+## [0.7.0] - 2026-08-28
+
+### Changed
+
+- **Override-protection services now take an explicit `scope_device_id`**
+  instead of resolving which state device owns a light by searching every
+  configured one. Pass the tracking scope's own device (a picker in
+  Developer Tools -> Actions) on `apply_lighting`, `compute_lighting_groups`,
+  `check_control`, `record_write` or `clear_claims`. **Omitting it now
+  writes the light but tracks nothing** - no claim is recorded, and
+  nothing is excluded as already externally-set - where it previously
+  searched by entity, device and area to find a scope automatically.
+  A `scope_device_id` naming something other than one of your own
+  tracking scopes raises rather than being silently ignored.
+- The blueprint resolves this for you from Room Target - no new input,
+  and no behaviour change for rooms whose Room Target already names an
+  area. Re-import the blueprint alongside this release; without it,
+  every automation still calling the old-shaped services stops tracking
+  its lights (they still get driven correctly, just without override
+  protection) until it's updated.
+
 ## [0.6.0] - 2026-08-28
 
 ### Changed
