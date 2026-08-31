@@ -585,19 +585,30 @@ variables:
       this guard fixes was about, unavoidable without a real sensor.
     #}
     {{ resolved_entities | map('states') | select('eq', 'on') | list | count > 0 }}
-  # Only three things may turn an off light on: motion detecting someone,
-  # a deliberate manual run, or the room already being in active use
-  # (at least one of its lights already on). Everything else reaching
-  # default: below - adaptive, extra, recovered - may only update lights
-  # that are already on. condition: doesn't gate any of this on occupancy
-  # (see its own comment); this is the only place that decides it, and it
-  # applies uniformly to every trigger, recovered included.
+  # THE gate for switching a light on. Only three things may: motion
+  # detecting someone, a deliberate manual run, or the room already being
+  # in active use (at least one of its lights already on). condition:
+  # doesn't gate any of this on occupancy (see its own comment); this is
+  # the only place that decides it, and it applies uniformly to every
+  # trigger, recovered included.
   #
   # Load-bearing: grouping.py treats an off light as "not yet at target"
   # and so would include it for turning on - correct for motion_on, wrong
-  # for everything else. Without this, a light off at bedtime came back on
-  # from a network blip. The `occupied` branch is room-level, not
+  # for everything else. Without this rule, a light off at bedtime came
+  # back on from a network blip. The `occupied` branch is room-level, not
   # per-light, so one lamp off in an in-use room still gets topped up.
+  #
+  # STRUCTURAL INVARIANT - keep this true. Exactly two things in this
+  # blueprint can switch a light on: scene.turn_on and
+  # flare.apply_lighting. Both sit inside the single `if allow_turn_on`
+  # block in default: below, and nothing else in action: writes an "on"
+  # state (the other calls are two light.turn_off and three claims_*
+  # bookkeeping steps). Anything added later that can switch a light on
+  # belongs inside that same block. This used to be enforced two
+  # different ways - apply_lighting by filtering its own entity list
+  # here in variables:, the scene not at all - and the scene path
+  # bypassing it is exactly how a phase change came to light an empty
+  # Dining Room at 23:00, which self-heal then undid 9 seconds later.
   allow_turn_on: >
     {{ manual_run
        or (trigger is defined and trigger.id is defined and trigger.id == 'motion_on')
@@ -692,17 +703,23 @@ variables:
          or trigger.from_state.state != trigger.to_state.state }}
     {% endif %}
   # Lights the adaptive brightness/colour logic below should manage -
-  # everything except what the active scene already covers, further
-  # narrowed to already-on lights only when allow_turn_on is false (see
-  # its own comment above) so a non-motion/non-manual tick can update
-  # brightness/colour on lights that are on but can never switch one on.
+  # everything except what an active scene already covers.
+  #
+  # No allow_turn_on filtering here any more: the apply_lighting step is
+  # inside default:'s single `if allow_turn_on` block, so this list is
+  # only ever used when switching a light on is already permitted. The
+  # filter this used to carry (`reject('is_state', 'off')` when
+  # allow_turn_on was false) was redundant rather than load-bearing, and
+  # it is worth recording why so nobody re-adds it: `occupied` - "at
+  # least one light in the room is on" - is itself one of the three ways
+  # allow_turn_on becomes true, so allow_turn_on being false means
+  # nothing in the room is on. Rejecting 'off' from a set containing no
+  # 'on' entities could only ever return unavailable/unknown ones, which
+  # grouping.py drops as unreachable. It answered a room-level
+  # permission question per-entity, which is precisely how the scene
+  # path came to miss the rule entirely.
   adaptive_target_entities: >
-    {% set scoped = resolved_entities | reject('in', scene_covered_entities) | list if scene_active else resolved_entities %}
-    {% if allow_turn_on %}
-      {{ scoped }}
-    {% else %}
-      {{ scoped | reject('is_state', 'off') | list }}
-    {% endif %}
+    {{ resolved_entities | reject('in', scene_covered_entities) | list if scene_active else resolved_entities }}
 action:
   # Spreads a phase change or the periodic tick's writes across a random
   # window, so rooms sharing one sensor don't all command in the same
@@ -852,16 +869,80 @@ action:
                     {% endfor %}
                     {{ ns.t }}
     default:
-      - if:
+      # Everything that can switch a light ON lives under this one gate -
+      # see allow_turn_on's own comment in variables: for the invariant
+      # and for the live incident that produced this shape. Exactly two
+      # things can, and both are here: the scene, and apply_lighting.
+      #
+      # The two are gated the same way but for different reasons.
+      # apply_lighting takes an entity list, so it *could* self-filter -
+      # but scene.turn_on is all-or-nothing over the scene's own entity
+      # set and cannot be filtered per-light at all, so for scenes the
+      # gate has to decide whether the step runs. Putting both under the
+      # same gate is what stops the rule being expressed two different
+      # ways, which is how the scene path came to miss it.
+      - alias: "Only motion, a manual run, or a room already in use may switch a light on"
+        if:
           - condition: template
-            value_template: "{{ scene_active and scene_recheck_due }}"
+            value_template: "{{ allow_turn_on }}"
         then:
-          - alias: "Activate matching scene"
-            action: scene.turn_on
-            target:
-              entity_id: "{{ desired_scene }}"
-            data:
-              transition: "{{ script_transition }}"
+          - if:
+              - condition: template
+                value_template: "{{ scene_active and scene_recheck_due }}"
+            then:
+              - alias: "Activate matching scene"
+                action: scene.turn_on
+                target:
+                  entity_id: "{{ desired_scene }}"
+                data:
+                  transition: "{{ script_transition }}"
+          # Reachability, multiplier bucketing, tolerance checks, override
+          # protection, two-step/combined routing and RGB-vs-colour-temp
+          # dispatch all live in the FLARE integration
+          # (standalone HACS add-on, not specific to this blueprint).
+          #
+          # Guarded because brightness/color_temp_kelvin are plain state_attr()
+          # reads: an unavailable sensor, or one pointed at a renamed/deleted
+          # entity, renders them null, and apply_lighting requires both - so
+          # the action would fail validation on every tick, indefinitely.
+          # Guards this one step rather than condition:, which would gate the
+          # whole tick - motion_off and self-heal turn lights *off* and need
+          # nothing from the sensor. Skipping is right: with no target there
+          # is nothing to apply, and a default would drive lights to a made-up
+          # value.
+          - alias: "Apply adaptive lighting, unless the sensor has no target to apply"
+            if:
+              - condition: template
+                value_template: "{{ brightness is not none and color_temp_kelvin is not none }}"
+            then:
+              - alias: "Apply adaptive lighting (FLARE)"
+                action: flare.apply_lighting
+                data:
+                  entities: "{{ adaptive_target_entities }}"
+                  brightness_multipliers: "{{ brightness_multipliers }}"
+                  brightness: "{{ brightness }}"
+                  color_temp_kelvin: "{{ color_temp_kelvin }}"
+                  rgb_color: "{{ rgb_color }}"
+                  transition: "{{ script_transition }}"
+                  prefer_rgb_color: "{{ prefer_rgb_color }}"
+                  tracking_device_id: "{{ tracking_scope_device_id }}"
+                  # A manual run (someone hit "Run" on this automation, or
+                  # called automation.trigger directly) forces the whole tick
+                  # through regardless of override protection.
+                  force: "{{ manual_run }}"
+      # Bookkeeping only - changes no light, so it stays outside the gate
+      # above and runs on every tick reaching default:. In a dark room
+      # "nothing is managing these lights" is still the truthful thing to
+      # record.
+      #
+      # Ordered after the gate rather than between its two steps, which is
+      # behaviourally neutral: handed_off_entities (scene-covered plus
+      # hands-off) and adaptive_target_entities (which already excludes
+      # scene-covered whenever a scene is active) overlap only in the
+      # hands-off lights, and apply_lighting never records a claim for
+      # those - grouping.py drops them on their null/false multiplier
+      # before anything is written.
+      #
       # Releasing says the truthful thing: nothing is managing these
       # lights right now. Nothing is given up by it - they aren't being
       # written, so there is no protection to lose, and the next tick
@@ -881,37 +962,3 @@ action:
             data:
               entities: "{{ handed_off_entities }}"
               tracking_device_id: "{{ tracking_scope_device_id }}"
-      # Reachability, multiplier bucketing, tolerance checks, override
-      # protection, two-step/combined routing and RGB-vs-colour-temp
-      # dispatch all live in the FLARE integration
-      # (standalone HACS add-on, not specific to this blueprint).
-      #
-      # Guarded because brightness/color_temp_kelvin are plain state_attr()
-      # reads: an unavailable sensor, or one pointed at a renamed/deleted
-      # entity, renders them null, and apply_lighting requires both - so
-      # the action would fail validation on every tick, indefinitely.
-      # Guards this one step rather than condition:, which would gate the
-      # whole tick - motion_off and self-heal turn lights *off* and need
-      # nothing from the sensor. Skipping is right: with no target there
-      # is nothing to apply, and a default would drive lights to a made-up
-      # value.
-      - alias: "Apply adaptive lighting, unless the sensor has no target to apply"
-        if:
-          - condition: template
-            value_template: "{{ brightness is not none and color_temp_kelvin is not none }}"
-        then:
-        - alias: "Apply adaptive lighting (FLARE)"
-          action: flare.apply_lighting
-          data:
-            entities: "{{ adaptive_target_entities }}"
-            brightness_multipliers: "{{ brightness_multipliers }}"
-            brightness: "{{ brightness }}"
-            color_temp_kelvin: "{{ color_temp_kelvin }}"
-            rgb_color: "{{ rgb_color }}"
-            transition: "{{ script_transition }}"
-            prefer_rgb_color: "{{ prefer_rgb_color }}"
-            tracking_device_id: "{{ tracking_scope_device_id }}"
-            # A manual run (someone hit "Run" on this automation, or
-            # called automation.trigger directly) forces the whole tick
-            # through regardless of override protection.
-            force: "{{ manual_run }}"

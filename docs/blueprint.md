@@ -174,6 +174,11 @@ from either source - if every entity it touches is within the blueprint's own sc
 sibling entities on the same device, such as a light strip's effect selector); a scene reaching outside that
 scope, or one that doesn't exist (a typo, a renamed scene), is treated the same as returning nothing.
 
+**A scene is only activated when the room may switch lights on** - motion detected, a manual run, or the room
+already in use (at least one of its lights on). This is the same rule the adaptive curve follows, so a phase
+change on its own will never light an empty room: if nobody's there when Evening becomes Night, the room stays
+dark, and the scene is applied whenever someone next walks in.
+
 ## Per-light brightness scaling
 
 Two ways to scale brightness down, usable together:
