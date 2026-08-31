@@ -808,10 +808,16 @@ class TestOccupancyDrivenOnOff:
         await hass.async_block_till_done()
 
         # A real tick did fire (adaptive_tick) - this isn't passing
-        # vacuously on zero calls.
-        assert apply_lighting_calls
-        for call in apply_lighting_calls:
-            assert "light.a" not in call.data["entities"]
+        # vacuously. It used to prove that by asserting apply_lighting
+        # was called (with an empty entity list); it now isn't called at
+        # all, because both turn-on paths sit inside default:'s single
+        # `if allow_turn_on` block and a fully dark, unoccupied room
+        # fails that gate outright. That is strictly better - one fewer
+        # no-op service call per dark room per tick - but it means the
+        # run has to be evidenced by the automation itself rather than
+        # by a side effect it no longer produces.
+        assert hass.states.get("automation.room").attributes.get("last_triggered") is not None
+        assert apply_lighting_calls == []
 
 
 class TestAllowTurnOn:
@@ -819,6 +825,64 @@ class TestAllowTurnOn:
     only motion, a manual run, or the room already being occupied (any
     of its lights already on) may bring a light on. Everything else may
     only update lights that are already on."""
+
+    @pytest.mark.parametrize(
+        "trigger_name",
+        ["adaptive", "adaptive_tick", "extra", "recovered"],
+    )
+    async def test_no_trigger_reaching_default_can_light_a_dark_empty_room(
+        self, hass, apply_lighting_calls, scene_turn_on_calls, trigger_name
+    ):
+        """The structural invariant, swept across every trigger that
+        reaches default: - not any single one of them in particular.
+
+        This exists because the real bug was structural rather than a
+        one-line omission: two separate things in default: can switch a
+        light on (scene.turn_on and apply_lighting), they enforced
+        allow_turn_on two different ways, and the scene path simply
+        didn't. Testing the scene path alone would not have caught that
+        class of mistake, and would not catch a *third* path being added
+        later without the gate - which is the failure mode worth
+        defending against now that both live under one `if`.
+
+        A scene is configured for the phase throughout, so any trigger
+        that wrongly bypasses the gate has something to light up."""
+        _light(hass, "light.a", "off")
+        _occupancy(hass, "binary_sensor.occ", "off")
+        hass.states.async_set("scene.night_scene", "2024-01-01T00:00:00+00:00", {"entity_id": ["light.a"]})
+        hass.states.async_set("binary_sensor.extra_dep", "off", {})
+        # Start outside Night so the move into it is a genuine phase change.
+        hass.states.async_set("sensor.test_adaptive", "Evening", {"brightness": 150, "color_temp": 3000})
+        await hass.async_block_till_done()
+
+        await _setup_room_automation(
+            hass,
+            room_target={"entity_id": ["light.a", "binary_sensor.occ"]},
+            night_scene="scene.night_scene",
+            extra_triggers=["binary_sensor.extra_dep"],
+        )
+
+        if trigger_name == "adaptive":
+            hass.states.async_set("sensor.test_adaptive", "Night", {"brightness": 80, "color_temp": 2700})
+        elif trigger_name == "adaptive_tick":
+            async_fire_time_changed(hass, dt_util.utcnow() + timedelta(minutes=1))
+        elif trigger_name == "extra":
+            hass.states.async_set("binary_sensor.extra_dep", "on", {})
+        elif trigger_name == "recovered":
+            # unavailable -> a real state is what arms `recovered`; it
+            # comes back *off*, which must stay off (the Jacob's-room
+            # network-blip bug).
+            _light(hass, "light.a", "unavailable")
+            await hass.async_block_till_done()
+            _light(hass, "light.a", "off")
+        await hass.async_block_till_done()
+
+        assert hass.states.get("automation.room").attributes.get("last_triggered") is not None, (
+            f"precondition: the {trigger_name} trigger must actually have run the automation"
+        )
+        assert scene_turn_on_calls == [], f"{trigger_name} lit an empty room via a scene"
+        for call in apply_lighting_calls:
+            assert call.data["entities"] == [], f"{trigger_name} lit an empty room via apply_lighting"
 
     async def test_manual_run_forces_the_tick_and_turns_on_off_lights(self, hass, apply_lighting_calls):
         _light(hass, "light.a", "off")
@@ -1253,6 +1317,69 @@ class TestSceneHandoff:
         await hass.async_block_till_done()
 
         assert scene_turn_on_calls and scene_turn_on_calls[-1].data["entity_id"] == ["scene.day_scene"]
+
+    async def test_a_phase_change_does_not_light_an_empty_room(
+        self, hass, apply_lighting_calls, scene_turn_on_calls
+    ):
+        """The live incident this gate exists for. Scene activation used
+        to check only `scene_active and scene_recheck_due` - never
+        allow_turn_on - so a phase change lit an empty Dining Room's 14
+        fixtures at 23:00:54, and the next tick's self-heal turned them
+        all off again 9 seconds later, every single night.
+
+        A scene is all-or-nothing over its own entity set (unlike
+        apply_lighting, whose entity list can be filtered), so nothing
+        downstream could have salvaged this - the gate has to stop the
+        step running at all."""
+        _light(hass, "light.a", "off")
+        _occupancy(hass, "binary_sensor.occ", "off")
+        hass.states.async_set("scene.night_scene", "2024-01-01T00:00:00+00:00", {"entity_id": ["light.a"]})
+        # Start outside Night so the move into it below is a real phase
+        # change - the exact trigger that fired on the night in question.
+        hass.states.async_set("sensor.test_adaptive", "Evening", {"brightness": 150, "color_temp": 3000})
+        await hass.async_block_till_done()
+
+        await _setup_room_automation(
+            hass,
+            room_target={"entity_id": ["light.a", "binary_sensor.occ"]},
+            night_scene="scene.night_scene",
+        )
+
+        hass.states.async_set("sensor.test_adaptive", "Night", {"brightness": 80, "color_temp": 2700})
+        await hass.async_block_till_done()
+
+        assert hass.states.get("automation.room").attributes.get("last_triggered") is not None, (
+            "precondition: the phase change must actually have run the automation"
+        )
+        assert scene_turn_on_calls == [], "a phase change must not light an empty room"
+        for call in apply_lighting_calls:
+            assert call.data["entities"] == []
+
+    async def test_motion_into_a_dark_room_still_activates_the_scene(
+        self, hass, apply_lighting_calls, scene_turn_on_calls
+    ):
+        """The other side of the gate, and the reason it is
+        allow_turn_on rather than `occupied`. Motion is one of the three
+        things allowed to bring a room up, so walking into a dark room
+        must still hand it to the scene - gating on `occupied` alone
+        (any light already on) would pass every test above while
+        silently breaking motion-activated scenes outright."""
+        _light(hass, "light.a", "off")
+        _occupancy(hass, "binary_sensor.occ", "off")
+        hass.states.async_set("scene.night_scene", "2024-01-01T00:00:00+00:00", {"entity_id": ["light.a"]})
+        hass.states.async_set("sensor.test_adaptive", "Night", {"brightness": 80, "color_temp": 2700})
+        await hass.async_block_till_done()
+
+        await _setup_room_automation(
+            hass,
+            room_target={"entity_id": ["light.a", "binary_sensor.occ"]},
+            night_scene="scene.night_scene",
+        )
+
+        _occupancy(hass, "binary_sensor.occ", "on")
+        await hass.async_block_till_done()
+
+        assert scene_turn_on_calls and scene_turn_on_calls[-1].data["entity_id"] == ["scene.night_scene"]
 
 
 class TestBrightnessScaling:

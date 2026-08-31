@@ -714,6 +714,29 @@ manual run (`trigger` is defined, `trigger.id` isn't), so anyone wanting
 an event to light a room writes their own automation that calls it - no
 blueprint input needed.
 
+**It is a single structural gate, not a rule each path re-implements.**
+Exactly two things in the blueprint can switch a light on -
+`scene.turn_on` and `flare.apply_lighting` - and both sit inside one
+`if allow_turn_on` block in `default:`. Nothing else in `action:` ever
+writes an "on" state (the rest is two `light.turn_off` and three
+`claims_*` bookkeeping steps). Anything added later that can switch a
+light on belongs in that same block; `tests/integration/test_blueprint.py`'s
+`test_no_trigger_reaching_default_can_light_a_dark_empty_room` sweeps
+every trigger reaching `default:` to enforce it.
+
+This shape was arrived at the hard way. The rule used to be enforced two
+different ways - `apply_lighting` by filtering its own
+`adaptive_target_entities` list, and the scene not at all - so a phase
+change lit an empty Dining Room's 14 fixtures at 23:00 and self-heal
+undid it 9 seconds later, every night. **Do not re-add the per-entity
+filter** (`reject('is_state', 'off')` when `allow_turn_on` is false): it
+was redundant, not load-bearing. `occupied` ("a light is on") is itself
+one of the three ways `allow_turn_on` becomes true, so a false
+`allow_turn_on` already means nothing in the room is on - the filter
+could only ever return `unavailable`/`unknown` entities, which
+`grouping.py` drops as unreachable. Answering a room-level permission
+question per-entity is exactly what let the scene path miss it.
+
 **Self-heal** shares `adaptive_tick` rather than its own interval. Its
 eligibility checks sit in the `choose:` branch's own `conditions:`, so a
 tick that doesn't qualify falls through to `default:` and reapplies
